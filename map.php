@@ -43,6 +43,9 @@ require __DIR__ . '/app/views/_head.php';
       <div class="modal-content">
         <div class="modal-header">
           <h5 class="modal-title" id="tourViewerTitle">Тур</h5>
+          <button type="button" class="btn btn-sm btn-outline-secondary me-2" id="tourRotateBtn">
+            <i class="bi bi-arrow-clockwise"></i> Повернуть
+          </button>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body p-0">
@@ -202,6 +205,23 @@ loadTours();
 // --- Просмотрщик 3DGS (mkkellogg/GaussianSplats3D, библиотеки грузятся лениво по клику) ---
 let tourViewer = null;
 let pendingTourUrl = null;
+let currentTourUrl = null;
+let GaussianSplats3DModule = null;
+
+// Кватернионы [x,y,z,w] — перебираем поворотами по 90°/180° вокруг разных
+// осей, пока модель не встанет правильно (кнопка «Повернуть» в шапке модалки).
+const rotationPresets = [
+  [0, 0, 0, 1],                 // без поворота
+  [1, 0, 0, 0],                 // 180° X
+  [0, 0, 1, 0],                 // 180° Z
+  [0, 1, 0, 0],                 // 180° Y
+  [0.7071, 0, 0, 0.7071],       // 90° X
+  [-0.7071, 0, 0, 0.7071],      // -90° X
+  [0, 0, 0.7071, 0.7071],       // 90° Z
+  [0, 0, -0.7071, 0.7071],      // -90° Z
+];
+let rotationIndex = 1; // начинаем с 180° X — это чаще всего и нужно
+
 const tourModalEl = document.getElementById('tourViewerModal');
 const tourModal = new bootstrap.Modal(tourModalEl);
 
@@ -211,18 +231,21 @@ function openTour(name, url) {
   tourModal.show();
 }
 
-tourModalEl.addEventListener('shown.bs.modal', async () => {
-  if (!pendingTourUrl) return;
-  const url = pendingTourUrl;
-  pendingTourUrl = null;
-
+async function loadTourScene(url, rotation) {
   const container = document.getElementById('tourViewerContainer');
   container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100 text-secondary">Загрузка модели...</div>';
 
+  if (tourViewer) {
+    try { tourViewer.dispose(); } catch (e) { /* noop */ }
+    tourViewer = null;
+  }
+
   try {
-    const GaussianSplats3D = await import('@mkkellogg/gaussian-splats-3d');
+    if (!GaussianSplats3DModule) {
+      GaussianSplats3DModule = await import('@mkkellogg/gaussian-splats-3d');
+    }
     container.innerHTML = '';
-    tourViewer = new GaussianSplats3D.Viewer({
+    tourViewer = new GaussianSplats3DModule.Viewer({
       rootElement: container,
       cameraUp: [0, 1, 0],
       // На обычном shared-хостинге страница не отдаётся с заголовками
@@ -233,16 +256,25 @@ tourModalEl.addEventListener('shown.bs.modal', async () => {
     });
     await tourViewer.addSplatScene(url, {
       progressiveLoad: true,
-      // Модель из обучающего пайплайна 3DGS часто приходит в перевёрнутом
-      // виде относительно Y-up системы вьювера — поворачиваем сцену на 180°
-      // вокруг оси X (кватернион [x,y,z,w]). Если переворот не туда —
-      // попробуйте [0,0,1,0] (поворот вокруг Z) вместо [1,0,0,0].
-      rotation: [1, 0, 0, 0],
+      rotation: rotation,
     });
     tourViewer.start();
   } catch (e) {
     container.innerHTML = '<div class="alert alert-danger m-3">Не удалось загрузить просмотрщик: ' + escapeHtml(String(e)) + '</div>';
   }
+}
+
+tourModalEl.addEventListener('shown.bs.modal', () => {
+  if (!pendingTourUrl) return;
+  currentTourUrl = pendingTourUrl;
+  pendingTourUrl = null;
+  loadTourScene(currentTourUrl, rotationPresets[rotationIndex]);
+});
+
+document.getElementById('tourRotateBtn').addEventListener('click', () => {
+  if (!currentTourUrl) return;
+  rotationIndex = (rotationIndex + 1) % rotationPresets.length;
+  loadTourScene(currentTourUrl, rotationPresets[rotationIndex]);
 });
 
 tourModalEl.addEventListener('hidden.bs.modal', () => {
@@ -250,6 +282,7 @@ tourModalEl.addEventListener('hidden.bs.modal', () => {
     try { tourViewer.dispose(); } catch (e) { /* noop */ }
     tourViewer = null;
   }
+  currentTourUrl = null;
   document.getElementById('tourViewerContainer').innerHTML = '';
 });
 </script>
