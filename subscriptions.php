@@ -62,6 +62,28 @@ function subscription_status(array $subs): array
     return ['status' => $subs ? 'expired' : 'none', 'sub' => $subs[0] ?? null];
 }
 
+// Данные для модалки редактирования — по одному объекту на пользователя,
+// дальше всё подставляется в JS при клике на строку (без доп. запросов).
+$modalData = [];
+foreach ($users as $u) {
+    $info = subscription_status($subsByUser[$u['id']] ?? []);
+    $sub = $info['sub'];
+    $modalData[$u['id']] = [
+        'userName' => $u['user_name'],
+        'status' => $info['status'],
+        'activeSubId' => $info['status'] === 'active' ? (int)$sub['id'] : null,
+        'planName' => $sub['plan_name'] ?? '',
+        'endsAt' => $sub ? substr($sub['ends_at'], 0, 10) : '',
+        'history' => array_map(fn($h) => [
+            'planName' => $h['plan_name'] ?? '—',
+            'startsAt' => substr($h['starts_at'], 0, 10),
+            'endsAt' => substr($h['ends_at'], 0, 10),
+            'status' => $h['is_cancelled'] ? 'отозвана' : (strtotime($h['ends_at']) > time() ? 'активна' : 'истекла'),
+            'note' => $h['note'] ?? '',
+        ], $subsByUser[$u['id']] ?? []),
+    ];
+}
+
 $pageTitle = 'Подписки клиентов';
 $pageIcon = 'bi-credit-card';
 require __DIR__ . '/app/views/_head.php';
@@ -70,42 +92,10 @@ require __DIR__ . '/app/views/_head.php';
     <div class="alert alert-danger"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div class="card surface-card mb-4">
-    <div class="card-body">
-      <h2 class="h6 mb-3">Выдать / продлить подписку</h2>
-      <form method="post" action="/subscriptions.php" class="row g-3">
-        <input type="hidden" name="action" value="create">
-        <div class="col-md-4">
-          <label class="form-label small">Пользователь*</label>
-          <select name="user_id" class="form-select" required>
-            <option value="">— выберите —</option>
-            <?php foreach ($users as $u): ?>
-              <option value="<?= (int)$u['id'] ?>"><?= htmlspecialchars($u['user_name'], ENT_QUOTES, 'UTF-8') ?></option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small">Тариф (опционально)</label>
-          <input type="text" name="plan_name" class="form-control" placeholder="Базовый / RTK Pro...">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small">Действует до*</label>
-          <input type="date" name="ends_at" class="form-control" required>
-        </div>
-        <div class="col-md-2 d-flex align-items-end">
-          <button type="submit" class="btn btn-primary w-100">Сохранить</button>
-        </div>
-        <div class="col-md-8">
-          <label class="form-label small">Комментарий (опционально)</label>
-          <input type="text" name="note" class="form-control">
-        </div>
-      </form>
-    </div>
-  </div>
-
   <div class="card surface-card mb-3">
-    <div class="card-body py-2">
+    <div class="card-body py-2 d-flex justify-content-between align-items-center">
       <input type="text" id="subsSearch" class="form-control form-control-sm" style="max-width: 280px" placeholder="Поиск по логину...">
+      <div class="text-secondary small">Кликните по строке, чтобы изменить подписку</div>
     </div>
   </div>
 
@@ -113,16 +103,12 @@ require __DIR__ . '/app/views/_head.php';
     <div class="table-responsive">
       <table class="table table-clean align-middle mb-0" id="subsTable">
         <thead>
-          <tr><th>Пользователь</th><th>Email</th><th>mdb-доступ</th><th>Подписка</th><th>Тариф</th><th>До</th><th></th></tr>
+          <tr><th>Пользователь</th><th>Email</th><th>mdb-доступ</th><th>Подписка</th><th>Тариф</th><th>До</th></tr>
         </thead>
         <tbody>
         <?php foreach ($users as $u): ?>
-          <?php
-          $info = subscription_status($subsByUser[$u['id']] ?? []);
-          $sub = $info['sub'];
-          $history = $subsByUser[$u['id']] ?? [];
-          ?>
-          <tr>
+          <?php $info = $modalData[$u['id']]; ?>
+          <tr class="subs-row" role="button" data-user-id="<?= (int)$u['id'] ?>" style="cursor: pointer">
             <td><?= htmlspecialchars($u['user_name'], ENT_QUOTES, 'UTF-8') ?></td>
             <td><?= htmlspecialchars($u['email'] ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
             <td><?= $u['is_active'] ? '<span class="badge text-bg-success">активен</span>' : '<span class="badge text-bg-secondary">неактивен</span>' ?></td>
@@ -135,57 +121,117 @@ require __DIR__ . '/app/views/_head.php';
                 <span class="status-pill status-unknown">нет</span>
               <?php endif; ?>
             </td>
-            <td><?= htmlspecialchars($sub['plan_name'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
-            <td><?= $sub ? htmlspecialchars(substr($sub['ends_at'], 0, 10), ENT_QUOTES, 'UTF-8') : '—' ?></td>
-            <td class="text-end">
-              <?php if ($info['status'] === 'active'): ?>
-              <form method="post" action="/subscriptions.php" class="d-inline" onsubmit="return confirm('Отозвать подписку?');">
-                <input type="hidden" name="action" value="cancel">
-                <input type="hidden" name="id" value="<?= (int)$sub['id'] ?>">
-                <button type="submit" class="btn btn-sm btn-outline-danger">Отозвать</button>
-              </form>
-              <?php endif; ?>
-              <?php if (count($history) > 1): ?>
-              <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#hist<?= (int)$u['id'] ?>">
-                История
-              </button>
-              <?php endif; ?>
-            </td>
+            <td><?= htmlspecialchars($info['planName'] ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
+            <td><?= htmlspecialchars($info['endsAt'] ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
           </tr>
-          <?php if (count($history) > 1): ?>
-          <tr class="collapse" id="hist<?= (int)$u['id'] ?>">
-            <td colspan="7" class="bg-body-tertiary">
-              <table class="table table-sm mb-0">
-                <thead><tr><th>Тариф</th><th>С</th><th>До</th><th>Статус</th><th>Комментарий</th></tr></thead>
-                <tbody>
-                <?php foreach ($history as $h): ?>
-                  <tr>
-                    <td><?= htmlspecialchars($h['plan_name'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
-                    <td><?= htmlspecialchars(substr($h['starts_at'], 0, 10), ENT_QUOTES, 'UTF-8') ?></td>
-                    <td><?= htmlspecialchars(substr($h['ends_at'], 0, 10), ENT_QUOTES, 'UTF-8') ?></td>
-                    <td><?= $h['is_cancelled'] ? 'отозвана' : (strtotime($h['ends_at']) > time() ? 'активна' : 'истекла') ?></td>
-                    <td><?= htmlspecialchars($h['note'] ?? '', ENT_QUOTES, 'UTF-8') ?></td>
-                  </tr>
-                <?php endforeach; ?>
-                </tbody>
-              </table>
-            </td>
-          </tr>
-          <?php endif; ?>
         <?php endforeach; ?>
         <?php if (!$users): ?>
-          <tr><td colspan="7" class="text-muted">Нет пользователей</td></tr>
+          <tr><td colspan="6" class="text-muted">Нет пользователей</td></tr>
         <?php endif; ?>
         </tbody>
       </table>
     </div>
   </div>
+
+  <div class="modal fade" id="subModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form method="post" action="/subscriptions.php">
+          <input type="hidden" name="action" value="create">
+          <input type="hidden" name="user_id" id="modalUserId">
+          <div class="modal-header">
+            <h5 class="modal-title">Подписка: <span id="modalUserName"></span></h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label small">Тариф</label>
+              <input type="text" name="plan_name" id="modalPlanName" class="form-control" placeholder="Базовый / RTK Pro...">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">Действует до*</label>
+              <input type="date" name="ends_at" id="modalEndsAt" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">Комментарий</label>
+              <input type="text" name="note" id="modalNote" class="form-control">
+            </div>
+            <div id="modalHistoryWrap" class="d-none">
+              <h6 class="h6 small text-secondary mb-2">История подписок</h6>
+              <div class="table-responsive">
+                <table class="table table-sm">
+                  <thead><tr><th>Тариф</th><th>С</th><th>До</th><th>Статус</th><th>Коммент.</th></tr></thead>
+                  <tbody id="modalHistoryBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="modalCancelSub" class="btn btn-outline-danger me-auto d-none">Отозвать текущую</button>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Закрыть</button>
+            <button type="submit" class="btn btn-primary">Сохранить / продлить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <form method="post" action="/subscriptions.php" id="cancelForm" class="d-none">
+    <input type="hidden" name="action" value="cancel">
+    <input type="hidden" name="id" id="cancelSubId">
+  </form>
 <?php
-$extraScripts = <<<'HTML'
+$modalDataJson = json_encode($modalData, JSON_UNESCAPED_UNICODE);
+$extraScripts = <<<HTML
 <script>
+const subsData = {$modalDataJson};
+const subModalEl = document.getElementById('subModal');
+const subModal = new bootstrap.Modal(subModalEl);
+
+document.querySelectorAll('.subs-row').forEach(row => {
+  row.addEventListener('click', () => {
+    const data = subsData[row.dataset.userId];
+    if (!data) return;
+
+    document.getElementById('modalUserId').value = row.dataset.userId;
+    document.getElementById('modalUserName').textContent = data.userName;
+    document.getElementById('modalPlanName').value = data.planName || '';
+    document.getElementById('modalEndsAt').value = data.endsAt || '';
+    document.getElementById('modalNote').value = '';
+
+    const cancelBtn = document.getElementById('modalCancelSub');
+    if (data.activeSubId) {
+      cancelBtn.classList.remove('d-none');
+      cancelBtn.onclick = () => {
+        if (!confirm('Отозвать текущую подписку?')) return;
+        document.getElementById('cancelSubId').value = data.activeSubId;
+        document.getElementById('cancelForm').submit();
+      };
+    } else {
+      cancelBtn.classList.add('d-none');
+    }
+
+    const historyWrap = document.getElementById('modalHistoryWrap');
+    const historyBody = document.getElementById('modalHistoryBody');
+    historyBody.innerHTML = '';
+    if (data.history && data.history.length) {
+      historyWrap.classList.remove('d-none');
+      for (const h of data.history) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>\${h.planName}</td><td>\${h.startsAt}</td><td>\${h.endsAt}</td><td>\${h.status}</td><td>\${h.note}</td>`;
+        historyBody.appendChild(tr);
+      }
+    } else {
+      historyWrap.classList.add('d-none');
+    }
+
+    subModal.show();
+  });
+});
+
 document.getElementById('subsSearch').addEventListener('input', function () {
   const q = this.value.trim().toLowerCase();
-  for (const row of document.querySelectorAll('#subsTable > tbody > tr:not(.collapse)')) {
+  for (const row of document.querySelectorAll('#subsTable tbody tr')) {
     row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
   }
 });
