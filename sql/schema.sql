@@ -31,6 +31,21 @@ CREATE TABLE IF NOT EXISTS users_sync (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- Суперпользователи приложения (управление станциями, не связаны с mdb).
+-- Пароли хранятся как bcrypt-хэши (password_hash), создаются через
+-- bin/create_admin.php — никогда не заполняйте password_hash вручную.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS admins (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  login         VARCHAR(64) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  full_name     VARCHAR(128) NULL,
+  is_active     TINYINT(1) NOT NULL DEFAULT 1,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_admin_login (login)
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
 -- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
 -- через страницу администрирования. В mdb такого справочника нет.
 -- ---------------------------------------------------------------------------

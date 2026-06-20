@@ -39,6 +39,30 @@ function attempt_login(string $userName, string $password): bool
     session_regenerate_id(true);
     $_SESSION['user_id']   = (int)$user['id'];
     $_SESSION['user_name'] = $user['user_name'];
+    unset($_SESSION['admin_id'], $_SESSION['admin_login']);
+    return true;
+}
+
+/**
+ * Вход суперпользователя (таблица admins, bcrypt-пароль). Отдельная сессия
+ * от обычных пользователей mdb — суперпользователь получает доступ
+ * к управлению станциями (require_admin()).
+ */
+function attempt_admin_login(string $login, string $password): bool
+{
+    $stmt = db()->prepare('SELECT * FROM admins WHERE login = :l AND is_active = 1 LIMIT 1');
+    $stmt->execute(['l' => $login]);
+    $admin = $stmt->fetch();
+
+    if (!$admin || !password_verify($password, $admin['password_hash'])) {
+        return false;
+    }
+
+    start_session();
+    session_regenerate_id(true);
+    $_SESSION['admin_id']    = (int)$admin['id'];
+    $_SESSION['admin_login'] = $admin['login'];
+    unset($_SESSION['user_id'], $_SESSION['user_name']);
     return true;
 }
 
@@ -54,15 +78,38 @@ function current_user(): ?array
     ];
 }
 
+function current_admin(): ?array
+{
+    start_session();
+    if (empty($_SESSION['admin_id'])) {
+        return null;
+    }
+    return [
+        'id'    => $_SESSION['admin_id'],
+        'login' => $_SESSION['admin_login'],
+    ];
+}
+
 /** Подключать на каждой защищённой странице первой строкой после require. */
 function require_login(): array
 {
-    $user = current_user();
+    $user = current_user() ?? current_admin();
     if ($user === null) {
         header('Location: /login.php');
         exit;
     }
     return $user;
+}
+
+/** Подключать на страницах управления станциями — только суперпользователь. */
+function require_admin(): array
+{
+    $admin = current_admin();
+    if ($admin === null) {
+        header('Location: /admin_login.php');
+        exit;
+    }
+    return $admin;
 }
 
 function logout(): void

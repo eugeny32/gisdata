@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/app/lib/auth.php';
-$user = require_login();
+$admin = require_admin();
 
 $pdo = db();
 $error = null;
