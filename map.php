@@ -233,12 +233,12 @@ function openTour(name, url) {
 
 async function loadTourScene(url, rotation) {
   const container = document.getElementById('tourViewerContainer');
-  container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100 text-secondary">Загрузка модели...</div>';
 
   if (tourViewer) {
     try { tourViewer.dispose(); } catch (e) { /* noop */ }
     tourViewer = null;
   }
+  container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100 text-secondary">Загрузка модели...</div>';
 
   try {
     if (!GaussianSplats3DModule) {
