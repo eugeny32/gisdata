@@ -43,12 +43,12 @@ require __DIR__ . '/app/views/_head.php';
       <div class="modal-content">
         <div class="modal-header">
           <h5 class="modal-title" id="tourViewerTitle">Тур</h5>
-          <button type="button" class="btn btn-sm btn-outline-secondary me-2" id="tourRotateBtn">
-            <i class="bi bi-arrow-clockwise"></i> Повернуть
-          </button>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
-        <div class="modal-body p-0">
+        <div class="modal-body p-0 position-relative">
+          <button type="button" class="btn btn-sm btn-outline-secondary position-absolute bottom-0 end-0 m-3" id="tourRotateBtn" style="z-index: 1100">
+            <i class="bi bi-arrow-clockwise"></i> Повернуть
+          </button>
           <div id="tourViewerContainer" style="width: 100%; height: 100%;"></div>
         </div>
       </div>
@@ -211,13 +211,13 @@ let GaussianSplats3DModule = null;
 // Кватернионы [x,y,z,w] — перебираем поворотами по 90°/180° вокруг разных
 // осей, пока модель не встанет правильно (кнопка «Повернуть» в шапке модалки).
 const rotationPresets = [
-  [0, 0, 0.7071, 0.7071],       // 90° Z — подобрано опытным путём, подходит для текущих моделей
+  [-0.7071, 0, 0, 0.7071],      // -90° X — подобрано опытным путём, подходит для текущих моделей
   [0, 0, 0, 1],                 // без поворота
   [1, 0, 0, 0],                 // 180° X
   [0, 0, 1, 0],                 // 180° Z
   [0, 1, 0, 0],                 // 180° Y
   [0.7071, 0, 0, 0.7071],       // 90° X
-  [-0.7071, 0, 0, 0.7071],      // -90° X
+  [0, 0, 0.7071, 0.7071],       // 90° Z
   [0, 0, -0.7071, 0.7071],      // -90° Z
 ];
 let rotationIndex = 0; // дефолт — рабочий вариант, кнопка «Повернуть» — если у конкретной модели потребуется другой
@@ -244,15 +244,30 @@ async function loadTourScene(url, rotation) {
       await oldViewer.dispose();
     } catch (e) { /* noop — гонка при очистке не критична */ }
   }
-  container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100 text-secondary">Загрузка модели...</div>';
+  container.innerHTML = '';
+  container.style.position = 'relative';
+
+  // Канвас вьювера и оверлей "Загрузка..." — отдельные слои. Оверлей лежит
+  // сверху (z-index) и убирается только после полной загрузки модели, чтобы
+  // не было видно построчного/постепенного проявления сплатов.
+  const canvasHost = document.createElement('div');
+  canvasHost.style.width = '100%';
+  canvasHost.style.height = '100%';
+  container.appendChild(canvasHost);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center text-secondary';
+  overlay.style.zIndex = '1050';
+  overlay.style.background = 'var(--bs-body-bg)';
+  overlay.textContent = 'Загрузка модели...';
+  container.appendChild(overlay);
 
   try {
     if (!GaussianSplats3DModule) {
       GaussianSplats3DModule = await import('@mkkellogg/gaussian-splats-3d');
     }
-    container.innerHTML = '';
     tourViewer = new GaussianSplats3DModule.Viewer({
-      rootElement: container,
+      rootElement: canvasHost,
       cameraUp: [0, 1, 0],
       // На обычном shared-хостинге страница не отдаётся с заголовками
       // Cross-Origin-Opener-Policy/Cross-Origin-Embedder-Policy (это сломало
@@ -260,12 +275,16 @@ async function loadTourScene(url, rotation) {
       // недоступен — отключаем его использование в воркере сортировки.
       sharedMemoryForWorkers: false,
     });
+    // progressiveLoad: false — ждём, пока модель загрузится полностью, и
+    // только потом показываем её целиком (без видимого построчного проявления).
     await tourViewer.addSplatScene(url, {
-      progressiveLoad: true,
+      progressiveLoad: false,
       rotation: rotation,
     });
     tourViewer.start();
+    overlay.remove();
   } catch (e) {
+    overlay.remove();
     container.innerHTML = '<div class="alert alert-danger m-3">Не удалось загрузить просмотрщик: ' + escapeHtml(String(e)) + '</div>';
   }
 }
