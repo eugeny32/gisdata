@@ -14,7 +14,8 @@ $rows = db()->query(
 foreach ($rows as &$row) {
     $row['lat'] = (float)$row['lat'];
     $row['lon'] = (float)$row['lon'];
-    $row['file_url'] = '/uploads/tours/' . rawurlencode($row['file_path']);
+    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $row['file_path'])));
+    $row['file_url'] = '/uploads/tours/' . $encodedPath;
     unset($row['file_path']);
 }
 
