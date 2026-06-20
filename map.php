@@ -225,6 +225,11 @@ tourModalEl.addEventListener('shown.bs.modal', async () => {
     tourViewer = new GaussianSplats3D.Viewer({
       rootElement: container,
       cameraUp: [0, 1, 0],
+      // На обычном shared-хостинге страница не отдаётся с заголовками
+      // Cross-Origin-Opener-Policy/Cross-Origin-Embedder-Policy (это сломало
+      // бы загрузку тайлов карты и CDN-скриптов), поэтому SharedArrayBuffer
+      // недоступен — отключаем его использование в воркере сортировки.
+      sharedMemoryForWorkers: false,
     });
     await tourViewer.addSplatScene(url, { progressiveLoad: true });
     tourViewer.start();
