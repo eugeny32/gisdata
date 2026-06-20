@@ -100,6 +100,25 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- 3DGS-туры (виртуальные туры Gaussian Splatting) — метки на карте, отдельные
+-- от станций. Файлы моделей лежат в uploads/tours/ (см. tours.php), здесь
+-- только метаданные и путь к файлу.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tours (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  name          VARCHAR(128) NOT NULL,
+  description   VARCHAR(500) NULL,
+  lat           DECIMAL(10,7) NOT NULL,
+  lon           DECIMAL(10,7) NOT NULL,
+  file_path     VARCHAR(255) NOT NULL,   -- относительный путь внутри uploads/tours/
+  file_format   ENUM('ply','splat','ksplat') NOT NULL DEFAULT 'ksplat',
+  is_enabled    TINYINT(1) NOT NULL DEFAULT 1,
+  created_by    INT NULL,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_tour_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
 -- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
 -- через страницу администрирования. В mdb такого справочника нет.
 -- ---------------------------------------------------------------------------

@@ -1,2 +1,6 @@
 .env
 app/config.local.php
+uploads/*
+!uploads/tours/
+uploads/tours/*
+!uploads/tours/.gitkeep

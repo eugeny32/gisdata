@@ -33,13 +33,36 @@ require __DIR__ . '/app/views/_head.php';
       <span class="status-pill status-online">online</span>
       <span class="status-pill status-offline">offline</span>
       <span class="status-pill status-unknown">unknown</span>
+      <span class="legend-note d-inline-flex align-items-center gap-1"><i class="bi bi-camera-reels-fill" style="color:#8e44ad"></i>3D-тур</span>
       <span class="legend-note" id="lastUpdate"></span>
+    </div>
+  </div>
+
+  <div class="modal fade" id="tourViewerModal" tabindex="-1">
+    <div class="modal-dialog modal-fullscreen">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="tourViewerTitle">Тур</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-0">
+          <div id="tourViewerContainer" style="width: 100%; height: 100%;"></div>
+        </div>
+      </div>
     </div>
   </div>
 <?php
 $extraScripts = <<<'HTML'
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.6/build/gaussian-splats-3d.module.js"
+  }
+}
+</script>
 <script>
 const map = L.map('map').setView([55.75, 37.6], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -137,6 +160,86 @@ document.getElementById('stationCodeFilter').addEventListener('change', applyFil
 
 refresh();
 setInterval(refresh, 15000);
+
+// --- Слой 3DGS-туров (отдельный от станций, метки не меняются в реальном времени) ---
+function tourMarkerIcon() {
+  return L.divIcon({
+    className: 'station-marker',
+    html: '<span style="background:#8e44ad"></span>',
+    iconSize: [16, 16],
+  });
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s ?? '';
+  return div.innerHTML;
+}
+
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/'/g, '&#39;');
+}
+
+async function loadTours() {
+  let data;
+  try {
+    const res = await fetch('/api/tours.php');
+    data = await res.json();
+  } catch (e) {
+    return;
+  }
+  for (const t of data.tours) {
+    const popup = `<b>${escapeHtml(t.name)}</b>` +
+      (t.description ? `<br>${escapeHtml(t.description)}` : '') +
+      `<br><button type="button" class="btn btn-sm btn-outline-primary mt-2" ` +
+      `onclick="openTour('${escapeAttr(t.name)}', '${escapeAttr(t.file_url)}')">` +
+      `<i class="bi bi-camera-reels"></i> Открыть тур</button>`;
+    L.marker([t.lat, t.lon], { icon: tourMarkerIcon() }).addTo(map).bindPopup(popup);
+  }
+}
+loadTours();
+
+// --- Просмотрщик 3DGS (mkkellogg/GaussianSplats3D, библиотеки грузятся лениво по клику) ---
+let tourViewer = null;
+let pendingTourUrl = null;
+const tourModalEl = document.getElementById('tourViewerModal');
+const tourModal = new bootstrap.Modal(tourModalEl);
+
+function openTour(name, url) {
+  document.getElementById('tourViewerTitle').textContent = name;
+  pendingTourUrl = url;
+  tourModal.show();
+}
+
+tourModalEl.addEventListener('shown.bs.modal', async () => {
+  if (!pendingTourUrl) return;
+  const url = pendingTourUrl;
+  pendingTourUrl = null;
+
+  const container = document.getElementById('tourViewerContainer');
+  container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100 text-secondary">Загрузка модели...</div>';
+
+  try {
+    const GaussianSplats3D = await import('@mkkellogg/gaussian-splats-3d');
+    container.innerHTML = '';
+    tourViewer = new GaussianSplats3D.Viewer({
+      rootElement: container,
+      cameraUp: [0, 1, 0],
+    });
+    await tourViewer.addSplatScene(url, { progressiveLoad: true });
+    tourViewer.start();
+  } catch (e) {
+    container.innerHTML = '<div class="alert alert-danger m-3">Не удалось загрузить просмотрщик: ' + escapeHtml(String(e)) + '</div>';
+  }
+});
+
+tourModalEl.addEventListener('hidden.bs.modal', () => {
+  if (tourViewer) {
+    try { tourViewer.dispose(); } catch (e) { /* noop */ }
+    tourViewer = null;
+  }
+  document.getElementById('tourViewerContainer').innerHTML = '';
+});
 </script>
 HTML;
 require __DIR__ . '/app/views/_foot.php';
