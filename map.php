@@ -211,16 +211,16 @@ let GaussianSplats3DModule = null;
 // Кватернионы [x,y,z,w] — перебираем поворотами по 90°/180° вокруг разных
 // осей, пока модель не встанет правильно (кнопка «Повернуть» в шапке модалки).
 const rotationPresets = [
+  [0, 0, 0.7071, 0.7071],       // 90° Z — подобрано опытным путём, подходит для текущих моделей
   [0, 0, 0, 1],                 // без поворота
   [1, 0, 0, 0],                 // 180° X
   [0, 0, 1, 0],                 // 180° Z
   [0, 1, 0, 0],                 // 180° Y
   [0.7071, 0, 0, 0.7071],       // 90° X
   [-0.7071, 0, 0, 0.7071],      // -90° X
-  [0, 0, 0.7071, 0.7071],       // 90° Z
   [0, 0, -0.7071, 0.7071],      // -90° Z
 ];
-let rotationIndex = 1; // начинаем с 180° X — это чаще всего и нужно
+let rotationIndex = 0; // дефолт — рабочий вариант, кнопка «Повернуть» — если у конкретной модели потребуется другой
 
 const tourModalEl = document.getElementById('tourViewerModal');
 const tourModal = new bootstrap.Modal(tourModalEl);
@@ -235,8 +235,14 @@ async function loadTourScene(url, rotation) {
   const container = document.getElementById('tourViewerContainer');
 
   if (tourViewer) {
-    try { tourViewer.dispose(); } catch (e) { /* noop */ }
+    const oldViewer = tourViewer;
     tourViewer = null;
+    try {
+      // dispose() асинхронный и сам чистит DOM внутри container — нужно
+      // дождаться его завершения, иначе наш innerHTML ниже подменит узлы
+      // раньше, и внутренняя очистка вьювера упадёт на removeChild.
+      await oldViewer.dispose();
+    } catch (e) { /* noop — гонка при очистке не критична */ }
   }
   container.innerHTML = '<div class="d-flex align-items-center justify-content-center h-100 text-secondary">Загрузка модели...</div>';
 
@@ -277,12 +283,13 @@ document.getElementById('tourRotateBtn').addEventListener('click', () => {
   loadTourScene(currentTourUrl, rotationPresets[rotationIndex]);
 });
 
-tourModalEl.addEventListener('hidden.bs.modal', () => {
-  if (tourViewer) {
-    try { tourViewer.dispose(); } catch (e) { /* noop */ }
-    tourViewer = null;
-  }
+tourModalEl.addEventListener('hidden.bs.modal', async () => {
   currentTourUrl = null;
+  if (tourViewer) {
+    const oldViewer = tourViewer;
+    tourViewer = null;
+    try { await oldViewer.dispose(); } catch (e) { /* noop */ }
+  }
   document.getElementById('tourViewerContainer').innerHTML = '';
 });
 </script>
