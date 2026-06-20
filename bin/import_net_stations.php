@@ -18,10 +18,12 @@ declare(strict_types=1);
  */
 
 require __DIR__ . '/../app/lib/db.php';
+require __DIR__ . '/../app/lib/cli.php';
+require_cli_or_token();
 
 function log_line(string $msg): void
 {
-    fwrite(STDOUT, '[' . date('Y-m-d H:i:s') . '] ' . $msg . PHP_EOL);
+    cli_out('[' . date('Y-m-d H:i:s') . '] ' . $msg);
 }
 
 /**
@@ -47,16 +49,16 @@ function ecef_to_lat_lon(float $x, float $y, float $z): array
     return [rad2deg($lat), rad2deg($lon)];
 }
 
-$mdbPath = $argv[1] ?? null;
+$mdbPath = cli_arg(1, 'mdb_path');
 if (!$mdbPath) {
-    fwrite(STDERR, "Использование: php bin\\import_net_stations.php \"C:\\path\\to\\E_Net20220422.mdb\"\n");
+    cli_err('Использование: php bin\\import_net_stations.php "C:\\path\\to\\E_Net20220422.mdb" (или ?mdb_path=... через браузер)');
     exit(1);
 }
 
 $cfg = app_config();
 $cfg['mdb']['path'] = $mdbPath; // импорт может идти из файла, отличного от config.php
 if (!extension_loaded('pdo_odbc')) {
-    fwrite(STDERR, "Расширение PHP pdo_odbc не подключено (php.ini: extension=pdo_odbc)\n");
+    cli_err('Расширение PHP pdo_odbc не подключено (php.ini: extension=pdo_odbc)');
     exit(1);
 }
 $dsn = sprintf('odbc:Driver={%s};Dbq=%s;Uid=Admin;Pwd=;', $cfg['mdb']['driver'], $mdbPath);

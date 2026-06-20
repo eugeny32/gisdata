@@ -4,7 +4,8 @@
 
 ## Структура
 
-- `app/config.php` — настройки (MySQL, путь к mdb, путь к RINEX, параметры опроса NTRIP). Локальные переопределения — в `app/config.local.php` (в git не коммитить).
+- `.env` — настройки базы данных и пути к mdb (см. `.env.example`; `.env` в git не коммитится).
+- `app/config.php` — настройки приложения (RINEX, параметры опроса NTRIP, сессия); MySQL/mdb подтягиваются из `.env` через `app/lib/env.php`. Локальные переопределения — в `app/config.local.php` (в git не коммитить).
 - `app/lib/db.php` — подключения к MySQL (`db()`) и к исходной Access-базе (`mdb()`).
 - `app/lib/auth.php` — сессии и проверка логина по таблице `users_sync`.
 - `sql/schema.sql` — схема MySQL: `users_sync`, `stations`, `station_status`, `station_log`.
@@ -34,23 +35,47 @@ php bin\import_net_stations.php "C:\path\to\E_Net20220422.mdb"
 ## Установка на XAMPP
 
 1. Создать БД: `mysql -u root < sql\schema.sql`
-2. Скопировать `app/config.php` в `app/config.local.php` и указать реальные данные MySQL.
+2. Скопировать `.env.example` в `.env` и указать реальные данные MySQL (`MYSQL_HOST`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`) и путь к mdb (`MDB_PATH`).
 3. Включить в `php.ini` расширение `pdo_odbc` (нужно для синхронизации с mdb). Разрядность PHP должна совпадать с разрядностью установленного Microsoft Access Database Engine (Access Database Engine Redistributable).
 4. Положить проект в `htdocs\gisdata` (или настроить VirtualHost на корень репозитория).
 5. Выполнить разово: `php bin\sync_mdb_users.php` — проверить, что пользователи подгрузились.
 6. Настроить в Планировщике заданий Windows два задания:
    - `php bin\sync_mdb_users.php` — каждые 5–15 минут;
    - `php bin\poll_stations.php` — каждую 1 минуту.
+
+   Если на хостинге нет CLI и cron дёргает URL (как на shared-хостинге типа
+   ispmanager/cPanel), задайте `CRON_TOKEN` в `.env` и вызывайте:
+   `https://ваш-домен/bin/poll_stations.php?token=<CRON_TOKEN>` — без CLI
+   и без верного токена скрипты отвечают 403 (защита от посторонних запросов).
 7. Открыть `http://localhost/gisdata/login.php`, войти под одним из пользователей mdb, добавить станции на странице «Станции».
 
 ## Суперпользователь (управление станциями)
 
 Управление станциями (`stations.php`) доступно только суперпользователям —
-отдельная таблица `admins` с bcrypt-паролями, не связанная с mdb. Создание:
+отдельная таблица `admins`, не связанная с mdb. Пароль хранится как
+SHA2-256 (hex), что позволяет создать запись либо через CLI:
 
 ```
 php bin\create_admin.php admin "СтрогийПароль123" "Имя Фамилия"
 ```
+
+либо одним SQL-запросом без PHP (например, через phpMyAdmin на хостинге):
+
+```sql
+INSERT INTO admins (login, password_hash, full_name, is_active)
+VALUES ('admin', SHA2('СтрогийПароль123', 256), NULL, 1)
+ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), is_active = 1;
+```
+
+либо через браузер, если на хостинге нет ни SSH, ни phpMyAdmin под рукой —
+сначала задайте `SETUP_TOKEN` в `.env` (любая длинная случайная строка), затем откройте:
+
+```
+https://ваш-домен/bin/create_admin.php?token=<SETUP_TOKEN>&login=admin&password=СтрогийПароль123
+```
+
+Без верного `token` скрипт отвечает 403. После создания администратора
+стоит удалить `bin/create_admin.php` с сервера или сменить `SETUP_TOKEN`.
 
 Повторный запуск с тем же логином обновит пароль (смена пароля). Вход — на
 `/admin_login.php`, отдельно от обычного входа пользователей mdb (`/login.php`).

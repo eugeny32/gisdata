@@ -44,9 +44,15 @@ function attempt_login(string $userName, string $password): bool
 }
 
 /**
- * Вход суперпользователя (таблица admins, bcrypt-пароль). Отдельная сессия
- * от обычных пользователей mdb — суперпользователь получает доступ
- * к управлению станциями (require_admin()).
+ * Вход суперпользователя (таблица admins). Отдельная сессия от обычных
+ * пользователей mdb — суперпользователь получает доступ к управлению
+ * станциями (require_admin()).
+ *
+ * password_hash хранится как SHA2-256 (hex), а не bcrypt — специально,
+ * чтобы запись можно было создать одним SQL-запросом через phpMyAdmin/mysql
+ * (MySQL умеет SHA2() из коробки, а bcrypt требует PHP). Это слабее bcrypt
+ * (нет соли, нет cost-фактора), но соответствует общему уровню защиты
+ * остальной системы (mdb-пароли вообще хранятся в открытом виде).
  */
 function attempt_admin_login(string $login, string $password): bool
 {
@@ -54,7 +60,7 @@ function attempt_admin_login(string $login, string $password): bool
     $stmt->execute(['l' => $login]);
     $admin = $stmt->fetch();
 
-    if (!$admin || !password_verify($password, $admin['password_hash'])) {
+    if (!$admin || !hash_equals($admin['password_hash'], hash('sha256', $password))) {
         return false;
     }
 

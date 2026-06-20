@@ -13,10 +13,12 @@ declare(strict_types=1);
  */
 
 require __DIR__ . '/../app/lib/db.php';
+require __DIR__ . '/../app/lib/cli.php';
+require_cli_or_token();
 
 function log_line(string $msg): void
 {
-    fwrite(STDOUT, '[' . date('Y-m-d H:i:s') . '] ' . $msg . PHP_EOL);
+    cli_out('[' . date('Y-m-d H:i:s') . '] ' . $msg);
 }
 
 function check_ntrip_station(array $station, array $ntripCfg): array

@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/env.php';
+load_env();
+
 function app_config(): array
 {
     static $config = null;

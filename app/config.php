@@ -1,22 +1,27 @@
 <?php
-// Конфигурация приложения. Скопируйте в config.local.php и поправьте под сервер,
-// либо задайте переменные окружения — config.local.php имеет приоритет.
+// Конфигурация приложения. Настройки базы данных и пути к mdb берутся из
+// .env (см. .env.example) — скопируйте .env.example в .env и заполните под
+// сервер. Остальные параметры (RINEX, NTRIP, сессия) можно менять прямо тут
+// либо переопределять через config.local.php.
+
+require_once __DIR__ . '/lib/env.php';
+load_env();
 
 return [
     'mysql' => [
-        'host'     => '127.0.0.1',
-        'port'     => 3306,
-        'dbname'   => 'gisdata',
-        'user'     => 'root',
-        'password' => '',
-        'charset'  => 'utf8mb4',
+        'host'     => env('MYSQL_HOST', '127.0.0.1'),
+        'port'     => (int)env('MYSQL_PORT', 3306),
+        'dbname'   => env('MYSQL_DATABASE', 'gisdata'),
+        'user'     => env('MYSQL_USER', 'root'),
+        'password' => env('MYSQL_PASSWORD', ''),
+        'charset'  => env('MYSQL_CHARSET', 'utf8mb4'),
     ],
 
     // Путь не меняем — путь к исходной базе South Net Reference Station
     'mdb' => [
-        'path'   => 'C:\\Program Files (x86)\\South Net Reference Station\\SBR\\E_SERVER64_230822\\E_Ser190905.mdb',
+        'path'   => env('MDB_PATH', 'C:\\Program Files (x86)\\South Net Reference Station\\SBR\\E_SERVER64_230822\\E_Ser190905.mdb'),
         // ODBC-драйвер должен совпадать по разрядности с PHP (см. README в /app)
-        'driver' => 'Microsoft Access Driver (*.mdb, *.accdb)',
+        'driver' => env('MDB_DRIVER', 'Microsoft Access Driver (*.mdb, *.accdb)'),
     ],
 
     // Путь не меняем — каталог RINEX-файлов на сервере

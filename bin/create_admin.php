@@ -4,31 +4,46 @@ declare(strict_types=1);
 /**
  * Создание (или смена пароля) суперпользователя приложения — отдельная
  * учётная запись для управления станциями, не связанная с пользователями
- * из mdb. Пароль хранится как bcrypt-хэш (password_hash), не как открытый
- * текст, в отличие от users_sync (там пароль — как в legacy mdb).
+ * из mdb. Пароль хранится как SHA2-256 (см. app/lib/auth.php) — тот же
+ * формат, что и при создании записи прямо через SQL без PHP CLI.
  *
- * Запуск:
+ * Запуск из CLI:
  *   php bin\create_admin.php <login> <password> ["Полное имя"]
+ *
+ * Запуск через браузер (если на хостинге нет CLI-доступа), один раз:
+ *   https://ваш-домен/bin/create_admin.php?token=<SETUP_TOKEN из .env>&login=admin&password=...
+ * После использования рекомендуется удалить этот файл с сервера или сменить
+ * SETUP_TOKEN, так как сам файл лежит в публичной директории.
  *
  * Если логин уже существует — пароль (и имя, если передано) будут обновлены.
  */
 
 require __DIR__ . '/../app/lib/db.php';
+require __DIR__ . '/../app/lib/cli.php';
 
-$login = $argv[1] ?? null;
-$password = $argv[2] ?? null;
-$fullName = $argv[3] ?? null;
+if (php_sapi_name() !== 'cli') {
+    $expected = env('SETUP_TOKEN', '');
+    $given = $_GET['token'] ?? $_POST['token'] ?? '';
+    if ($expected === '' || !hash_equals($expected, (string)$given)) {
+        http_response_code(403);
+        exit('403 Forbidden: укажите ?token=<SETUP_TOKEN из .env>');
+    }
+}
+
+$login = cli_arg(1, 'login');
+$password = cli_arg(2, 'password');
+$fullName = cli_arg(3, 'full_name');
 
 if (!$login || !$password) {
-    fwrite(STDERR, "Использование: php bin\\create_admin.php <login> <password> [\"Полное имя\"]\n");
+    cli_err('Использование: php bin\\create_admin.php <login> <password> ["Полное имя"] (или ?login=&password=&full_name= через браузер)');
     exit(1);
 }
 if (strlen($password) < 8) {
-    fwrite(STDERR, "Пароль должен быть не короче 8 символов\n");
+    cli_err('Пароль должен быть не короче 8 символов');
     exit(1);
 }
 
-$hash = password_hash($password, PASSWORD_BCRYPT);
+$hash = hash('sha256', $password);
 
 $pdo = db();
 $stmt = $pdo->prepare(
@@ -45,4 +60,4 @@ $stmt->execute([
     'full_name' => $fullName,
 ]);
 
-fwrite(STDOUT, "Суперпользователь '$login' создан/обновлён.\n");
+cli_out("Суперпользователь '$login' создан/обновлён.");
