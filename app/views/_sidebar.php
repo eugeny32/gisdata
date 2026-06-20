@@ -23,6 +23,9 @@ function nav_active(string $page, string $current): string
     <a class="sidebar-link<?= nav_active('stations.php', $__current) ?>" href="/stations.php">
       <i class="bi bi-hdd-network"></i><span>Станции</span>
     </a>
+    <a class="sidebar-link<?= nav_active('subscriptions.php', $__current) ?>" href="/subscriptions.php">
+      <i class="bi bi-credit-card"></i><span>Подписки</span>
+    </a>
     <div class="sidebar-group-label">Сотрудники</div>
     <a class="sidebar-link sidebar-sublink<?= nav_active('employee_invites.php', $__current) ?>" href="/employee_invites.php">
       <i class="bi bi-envelope-paper"></i><span>Приглашения</span>

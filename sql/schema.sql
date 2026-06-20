@@ -51,10 +51,15 @@ CREATE TABLE IF NOT EXISTS admins (
 -- просмотр (карта, RINEX). Существующие записи admins (созданные до этого
 -- изменения через bin/create_admin.php) получают role='admin' по умолчанию,
 -- права не теряются.
+--
+-- ВНИМАНИЕ: эти три ALTER не идемпотентны (старые MySQL/MariaDB не понимают
+-- ADD COLUMN IF NOT EXISTS) — выполните их ОДИН РАЗ. При повторном запуске
+-- получите ошибку "Duplicate column name", это нормально и означает, что
+-- колонки уже добавлены — просто пропустите эти 3 строки и продолжайте дальше.
 -- ---------------------------------------------------------------------------
-ALTER TABLE admins ADD COLUMN IF NOT EXISTS role ENUM('admin','viewer') NOT NULL DEFAULT 'admin';
-ALTER TABLE admins ADD COLUMN IF NOT EXISTS email VARCHAR(128) NULL;
-ALTER TABLE admins ADD COLUMN IF NOT EXISTS phone VARCHAR(64) NULL;
+ALTER TABLE admins ADD COLUMN role ENUM('admin','viewer') NOT NULL DEFAULT 'admin';
+ALTER TABLE admins ADD COLUMN email VARCHAR(128) NULL;
+ALTER TABLE admins ADD COLUMN phone VARCHAR(64) NULL;
 
 CREATE TABLE IF NOT EXISTS admin_invites (
   id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -68,6 +73,30 @@ CREATE TABLE IF NOT EXISTS admin_invites (
   used_at     DATETIME NULL,
   UNIQUE KEY uq_invite_token (token),
   CONSTRAINT fk_invite_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
+-- Подписки клиентов RTK (страница "Подписки" в кабинете, доступна только
+-- role='admin'). Полностью отдельно от users_sync.user_time (то приходит из
+-- mdb и перезатирается при каждом запуске bin/sync_mdb_users.php) — статус
+-- подписки считается только по датам/is_cancelled в этой таблице,
+-- синхронизация с mdb её не трогает. У одного пользователя может быть
+-- несколько записей (история продлений) — действующая подписка — самая
+-- свежая по ends_at, у которой is_cancelled = 0 и ends_at > NOW().
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT NOT NULL,
+  plan_name     VARCHAR(64) NULL,
+  starts_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ends_at       DATETIME NOT NULL,
+  is_cancelled  TINYINT(1) NOT NULL DEFAULT 0,
+  note          VARCHAR(255) NULL,
+  created_by    INT NULL,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_sub_user (user_id, ends_at),
+  CONSTRAINT fk_sub_user FOREIGN KEY (user_id) REFERENCES users_sync(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sub_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
