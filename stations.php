@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/app/lib/auth.php';
-$admin = require_admin();
+$admin = require_admin_role('admin');
 
 $pdo = db();
 $error = null;
@@ -77,69 +77,117 @@ $stations = $pdo->query(
      FROM stations s LEFT JOIN station_status st ON st.station_id = s.id
      ORDER BY s.name'
 )->fetchAll();
-?>
-<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <title>Базовые станции — администрирование</title>
-  <link rel="stylesheet" href="/assets/style.css">
-</head>
-<body>
-<?php include __DIR__ . '/app/views/_nav.php'; ?>
-<main class="container">
-  <h1>Базовые станции</h1>
 
+$pageTitle = 'Базовые станции';
+$pageIcon = 'bi-hdd-network';
+require __DIR__ . '/app/views/_head.php';
+?>
   <?php if ($error): ?>
-    <div class="error"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <div class="alert alert-danger"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <h2><?= $edit ? 'Изменить станцию' : 'Добавить станцию' ?></h2>
-  <form method="post" action="/stations.php" class="station-form">
-    <input type="hidden" name="action" value="save">
-    <input type="hidden" name="id" value="<?= (int)($edit['id'] ?? 0) ?>">
+  <div class="card surface-card mb-4">
+    <div class="card-body">
+      <h2 class="h6 mb-3"><?= $edit ? 'Изменить станцию' : 'Добавить станцию' ?></h2>
+      <form method="post" action="/stations.php" class="row g-3">
+        <input type="hidden" name="action" value="save">
+        <input type="hidden" name="id" value="<?= (int)($edit['id'] ?? 0) ?>">
 
-    <label>Название*<input type="text" name="name" required value="<?= htmlspecialchars($edit['name'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Хост (IP/домен)*<input type="text" name="host" required value="<?= htmlspecialchars($edit['host'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Порт*<input type="number" name="port" required value="<?= htmlspecialchars((string)($edit['port'] ?? 2101), ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Mountpoint*<input type="text" name="mountpoint" required value="<?= htmlspecialchars($edit['mountpoint'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>NTRIP логин<input type="text" name="ntrip_user" value="<?= htmlspecialchars($edit['ntrip_user'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>NTRIP пароль<input type="password" name="ntrip_password" value="<?= htmlspecialchars($edit['ntrip_password'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Широта (lat)*<input type="text" name="lat" required value="<?= htmlspecialchars((string)($edit['lat'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Долгота (lon)*<input type="text" name="lon" required value="<?= htmlspecialchars((string)($edit['lon'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Подпапка RINEX (внутри E:\Ftp\RINEX\RINEX\2026)<input type="text" name="rinex_path" value="<?= htmlspecialchars($edit['rinex_path'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label>Комментарий<input type="text" name="comment" value="<?= htmlspecialchars($edit['comment'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></label>
-    <label class="checkbox"><input type="checkbox" name="is_enabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>> Включена (опрашивать статус)</label>
+        <div class="col-md-6">
+          <label class="form-label small">Название*</label>
+          <input type="text" name="name" class="form-control" required value="<?= htmlspecialchars($edit['name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Хост (IP/домен)*</label>
+          <input type="text" name="host" class="form-control" required value="<?= htmlspecialchars($edit['host'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Порт*</label>
+          <input type="number" name="port" class="form-control" required value="<?= htmlspecialchars((string)($edit['port'] ?? 2101), ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Mountpoint*</label>
+          <input type="text" name="mountpoint" class="form-control" required value="<?= htmlspecialchars($edit['mountpoint'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">NTRIP логин</label>
+          <input type="text" name="ntrip_user" class="form-control" value="<?= htmlspecialchars($edit['ntrip_user'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">NTRIP пароль</label>
+          <input type="password" name="ntrip_password" class="form-control" value="<?= htmlspecialchars($edit['ntrip_password'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Широта (lat)*</label>
+          <input type="text" name="lat" class="form-control" required value="<?= htmlspecialchars((string)($edit['lat'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Долгота (lon)*</label>
+          <input type="text" name="lon" class="form-control" required value="<?= htmlspecialchars((string)($edit['lon'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Подпапка RINEX (внутри E:\Ftp\RINEX\RINEX\2026)</label>
+          <input type="text" name="rinex_path" class="form-control" value="<?= htmlspecialchars($edit['rinex_path'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Комментарий</label>
+          <input type="text" name="comment" class="form-control" value="<?= htmlspecialchars($edit['comment'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+        </div>
+        <div class="col-12 form-check">
+          <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>>
+          <label class="form-check-label" for="isEnabled">Включена (опрашивать статус)</label>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          <button type="submit" class="btn btn-primary"><?= $edit ? 'Сохранить' : 'Добавить' ?></button>
+          <?php if ($edit): ?><a href="/stations.php" class="btn btn-outline-secondary">Отмена</a><?php endif; ?>
+        </div>
+      </form>
+    </div>
+  </div>
 
-    <button type="submit"><?= $edit ? 'Сохранить' : 'Добавить' ?></button>
-    <?php if ($edit): ?><a href="/stations.php">Отмена</a><?php endif; ?>
-  </form>
-
-  <h2>Список станций</h2>
-  <table class="stations-table">
-    <thead>
-      <tr><th>Название</th><th>Хост:порт</th><th>Mount</th><th>Статус</th><th>Последняя проверка</th><th></th></tr>
-    </thead>
-    <tbody>
-    <?php foreach ($stations as $s): ?>
-      <tr>
-        <td><?= htmlspecialchars($s['name'], ENT_QUOTES, 'UTF-8') ?></td>
-        <td><?= htmlspecialchars($s['host'] . ':' . $s['port'], ENT_QUOTES, 'UTF-8') ?></td>
-        <td><?= htmlspecialchars($s['mountpoint'], ENT_QUOTES, 'UTF-8') ?></td>
-        <td><span class="status-pill status-<?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?></span></td>
-        <td><?= htmlspecialchars($s['last_check_at'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
-        <td>
-          <a href="/stations.php?edit=<?= (int)$s['id'] ?>">изменить</a>
-          <form method="post" action="/stations.php" style="display:inline" onsubmit="return confirm('Удалить станцию?');">
-            <input type="hidden" name="action" value="delete">
-            <input type="hidden" name="id" value="<?= (int)$s['id'] ?>">
-            <button type="submit" class="link-btn">удалить</button>
-          </form>
-        </td>
-      </tr>
-    <?php endforeach; ?>
-    </tbody>
-  </table>
-</main>
-</body>
-</html>
+  <div class="card surface-card">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 mb-0">Список станций</h2>
+        <input type="text" id="stationsSearch" class="form-control form-control-sm" style="max-width: 260px" placeholder="Поиск по названию/хосту...">
+      </div>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle" id="stationsTable">
+          <thead>
+            <tr><th>Название</th><th>Хост:порт</th><th>Mount</th><th>Статус</th><th>Последняя проверка</th><th></th></tr>
+          </thead>
+          <tbody>
+          <?php foreach ($stations as $s): ?>
+            <tr>
+              <td><?= htmlspecialchars($s['name'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($s['host'] . ':' . $s['port'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><?= htmlspecialchars($s['mountpoint'], ENT_QUOTES, 'UTF-8') ?></td>
+              <td><span class="status-pill status-<?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?></span></td>
+              <td><?= htmlspecialchars($s['last_check_at'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+              <td class="text-end">
+                <a href="/stations.php?edit=<?= (int)$s['id'] ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+                <form method="post" action="/stations.php" class="d-inline" onsubmit="return confirm('Удалить станцию?');">
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="id" value="<?= (int)$s['id'] ?>">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+<?php
+$extraScripts = <<<'HTML'
+<script>
+document.getElementById('stationsSearch').addEventListener('input', function () {
+  const q = this.value.trim().toLowerCase();
+  for (const row of document.querySelectorAll('#stationsTable tbody tr')) {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  }
+});
+</script>
+HTML;
+require __DIR__ . '/app/views/_foot.php';

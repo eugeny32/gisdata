@@ -46,6 +46,31 @@ CREATE TABLE IF NOT EXISTS admins (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- Роли сотрудников и приглашения (страницы "Сотрудники" в кабинете).
+-- role='admin' — полный доступ (станции, сотрудники), role='viewer' — только
+-- просмотр (карта, RINEX). Существующие записи admins (созданные до этого
+-- изменения через bin/create_admin.php) получают role='admin' по умолчанию,
+-- права не теряются.
+-- ---------------------------------------------------------------------------
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS role ENUM('admin','viewer') NOT NULL DEFAULT 'admin';
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS email VARCHAR(128) NULL;
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS phone VARCHAR(64) NULL;
+
+CREATE TABLE IF NOT EXISTS admin_invites (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  token       VARCHAR(64) NOT NULL,
+  role        ENUM('admin','viewer') NOT NULL DEFAULT 'viewer',
+  email       VARCHAR(128) NULL,
+  full_name   VARCHAR(128) NULL,
+  created_by  INT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at  DATETIME NOT NULL,
+  used_at     DATETIME NULL,
+  UNIQUE KEY uq_invite_token (token),
+  CONSTRAINT fk_invite_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
 -- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
 -- через страницу администрирования. В mdb такого справочника нет.
 -- ---------------------------------------------------------------------------

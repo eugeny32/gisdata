@@ -68,8 +68,24 @@ function attempt_admin_login(string $login, string $password): bool
     session_regenerate_id(true);
     $_SESSION['admin_id']    = (int)$admin['id'];
     $_SESSION['admin_login'] = $admin['login'];
+    $_SESSION['admin_role']  = $admin['role'];
     unset($_SESSION['user_id'], $_SESSION['user_name']);
     return true;
+}
+
+/**
+ * Запись сессии сотрудника после принятия приглашения (admin_invites) —
+ * без проверки пароля, т.к. логин/пароль только что были заданы самим
+ * пользователем при заполнении формы invite_accept.php.
+ */
+function login_admin_session(int $id, string $login, string $role): void
+{
+    start_session();
+    session_regenerate_id(true);
+    $_SESSION['admin_id']    = $id;
+    $_SESSION['admin_login'] = $login;
+    $_SESSION['admin_role']  = $role;
+    unset($_SESSION['user_id'], $_SESSION['user_name']);
 }
 
 function current_user(): ?array
@@ -93,6 +109,7 @@ function current_admin(): ?array
     return [
         'id'    => $_SESSION['admin_id'],
         'login' => $_SESSION['admin_login'],
+        'role'  => $_SESSION['admin_role'] ?? 'admin',
     ];
 }
 
@@ -107,13 +124,24 @@ function require_login(): array
     return $user;
 }
 
-/** Подключать на страницах управления станциями — только суперпользователь. */
+/** Подключать на страницах кабинета сотрудников — любая роль (admin/viewer). */
 function require_admin(): array
 {
     $admin = current_admin();
     if ($admin === null) {
         header('Location: /admin_login.php');
         exit;
+    }
+    return $admin;
+}
+
+/** Подключать на страницах, требующих конкретную роль (станции, сотрудники — role='admin'). */
+function require_admin_role(string $role): array
+{
+    $admin = require_admin();
+    if ($admin['role'] !== $role) {
+        http_response_code(403);
+        exit('403 Forbidden: недостаточно прав');
     }
     return $admin;
 }

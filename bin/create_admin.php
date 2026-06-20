@@ -8,7 +8,9 @@ declare(strict_types=1);
  * формат, что и при создании записи прямо через SQL без PHP CLI.
  *
  * Запуск из CLI:
- *   php bin\create_admin.php <login> <password> ["Полное имя"]
+ *   php bin\create_admin.php <login> <password> ["Полное имя"] [role]
+ *
+ * role — 'admin' (по умолчанию, полный доступ) или 'viewer' (только просмотр).
  *
  * Запуск через браузер (если на хостинге нет CLI-доступа), один раз:
  *   https://ваш-домен/bin/create_admin.php?token=<SETUP_TOKEN из .env>&login=admin&password=...
@@ -33,9 +35,10 @@ if (php_sapi_name() !== 'cli') {
 $login = cli_arg(1, 'login');
 $password = cli_arg(2, 'password');
 $fullName = cli_arg(3, 'full_name');
+$role = cli_arg(4, 'role') === 'viewer' ? 'viewer' : 'admin';
 
 if (!$login || !$password) {
-    cli_err('Использование: php bin\\create_admin.php <login> <password> ["Полное имя"] (или ?login=&password=&full_name= через браузер)');
+    cli_err('Использование: php bin\\create_admin.php <login> <password> ["Полное имя"] [role] (или ?login=&password=&full_name=&role= через браузер)');
     exit(1);
 }
 if (strlen($password) < 8) {
@@ -47,17 +50,19 @@ $hash = hash('sha256', $password);
 
 $pdo = db();
 $stmt = $pdo->prepare(
-    'INSERT INTO admins (login, password_hash, full_name, is_active)
-     VALUES (:login, :hash, :full_name, 1)
+    'INSERT INTO admins (login, password_hash, full_name, role, is_active)
+     VALUES (:login, :hash, :full_name, :role, 1)
      ON DUPLICATE KEY UPDATE
         password_hash = VALUES(password_hash),
         full_name = COALESCE(VALUES(full_name), full_name),
+        role = VALUES(role),
         is_active = 1'
 );
 $stmt->execute([
     'login' => $login,
     'hash' => $hash,
     'full_name' => $fullName,
+    'role' => $role,
 ]);
 
 cli_out("Суперпользователь '$login' создан/обновлён.");

@@ -60,55 +60,59 @@ function rel_join(string $rel, string $name): string
 {
     return $rel === '' ? $name : $rel . '/' . $name;
 }
+
+$pageTitle = 'RINEX файлы';
+$pageIcon = 'bi-folder2-open';
+require __DIR__ . '/app/views/_head.php';
 ?>
-<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <title>RINEX файлы</title>
-  <link rel="stylesheet" href="/assets/style.css">
-</head>
-<body>
-<?php include __DIR__ . '/app/views/_nav.php'; ?>
-<main class="container">
-  <h1>RINEX файлы</h1>
-  <div class="breadcrumb">
-    <a href="/rinex.php">2026</a>
-    <?php
-    $parts = $relInput !== '' ? explode('/', $relInput) : [];
-    $acc = '';
-    foreach ($parts as $p) {
-      $acc = rel_join($acc, $p);
-      echo ' / <a href="/rinex.php?path=' . htmlspecialchars(rawurlencode($acc), ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($p, ENT_QUOTES, 'UTF-8') . '</a>';
-    }
-    ?>
-  </div>
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="/rinex.php">2026</a></li>
+      <?php
+      $parts = $relInput !== '' ? explode('/', $relInput) : [];
+      $acc = '';
+      $last = count($parts) - 1;
+      foreach ($parts as $i => $p) {
+        $acc = rel_join($acc, $p);
+        if ($i === $last) {
+          echo '<li class="breadcrumb-item active" aria-current="page">' . htmlspecialchars($p, ENT_QUOTES, 'UTF-8') . '</li>';
+        } else {
+          echo '<li class="breadcrumb-item"><a href="/rinex.php?path=' . htmlspecialchars(rawurlencode($acc), ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($p, ENT_QUOTES, 'UTF-8') . '</a></li>';
+        }
+      }
+      ?>
+    </ol>
+  </nav>
 
   <?php if ($error): ?>
-    <div class="error"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <div class="alert alert-danger"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
   <?php else: ?>
-    <table class="rinex-table">
-      <thead><tr><th>Имя</th><th>Размер</th><th>Изменён</th></tr></thead>
-      <tbody>
-      <?php foreach ($entries as $e): ?>
-        <tr>
-          <td>
-            <?php if ($e['is_dir']): ?>
-              📁 <a href="/rinex.php?path=<?= htmlspecialchars(rawurlencode(rel_join($relInput, $e['name'])), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($e['name'], ENT_QUOTES, 'UTF-8') ?></a>
-            <?php else: ?>
-              📄 <a href="/rinex_download.php?path=<?= htmlspecialchars(rawurlencode(rel_join($relInput, $e['name'])), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($e['name'], ENT_QUOTES, 'UTF-8') ?></a>
-            <?php endif; ?>
-          </td>
-          <td><?= human_size($e['size']) ?></td>
-          <td><?= htmlspecialchars($e['mtime'], ENT_QUOTES, 'UTF-8') ?></td>
-        </tr>
-      <?php endforeach; ?>
-      <?php if (!$entries): ?>
-        <tr><td colspan="3">Папка пуста</td></tr>
-      <?php endif; ?>
-      </tbody>
-    </table>
+    <div class="card surface-card">
+      <div class="table-responsive">
+        <table class="table table-clean mb-0">
+          <thead><tr><th>Имя</th><th>Размер</th><th>Изменён</th></tr></thead>
+          <tbody>
+          <?php foreach ($entries as $e): ?>
+            <tr>
+              <td>
+                <?php if ($e['is_dir']): ?>
+                  <i class="bi bi-folder-fill text-warning me-1"></i>
+                  <a href="/rinex.php?path=<?= htmlspecialchars(rawurlencode(rel_join($relInput, $e['name'])), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($e['name'], ENT_QUOTES, 'UTF-8') ?></a>
+                <?php else: ?>
+                  <i class="bi bi-file-earmark-text text-secondary me-1"></i>
+                  <a href="/rinex_download.php?path=<?= htmlspecialchars(rawurlencode(rel_join($relInput, $e['name'])), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($e['name'], ENT_QUOTES, 'UTF-8') ?></a>
+                <?php endif; ?>
+              </td>
+              <td><?= human_size($e['size']) ?></td>
+              <td><?= htmlspecialchars($e['mtime'], ENT_QUOTES, 'UTF-8') ?></td>
+            </tr>
+          <?php endforeach; ?>
+          <?php if (!$entries): ?>
+            <tr><td colspan="3" class="text-muted">Папка пуста</td></tr>
+          <?php endif; ?>
+          </tbody>
+        </table>
+      </div>
+    </div>
   <?php endif; ?>
-</main>
-</body>
-</html>
+<?php require __DIR__ . '/app/views/_foot.php'; ?>
