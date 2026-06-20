@@ -231,7 +231,14 @@ tourModalEl.addEventListener('shown.bs.modal', async () => {
       // недоступен — отключаем его использование в воркере сортировки.
       sharedMemoryForWorkers: false,
     });
-    await tourViewer.addSplatScene(url, { progressiveLoad: true });
+    await tourViewer.addSplatScene(url, {
+      progressiveLoad: true,
+      // Модель из обучающего пайплайна 3DGS часто приходит в перевёрнутом
+      // виде относительно Y-up системы вьювера — поворачиваем сцену на 180°
+      // вокруг оси X (кватернион [x,y,z,w]). Если переворот не туда —
+      // попробуйте [0,0,1,0] (поворот вокруг Z) вместо [1,0,0,0].
+      rotation: [1, 0, 0, 0],
+    });
     tourViewer.start();
   } catch (e) {
     container.innerHTML = '<div class="alert alert-danger m-3">Не удалось загрузить просмотрщик: ' + escapeHtml(String(e)) + '</div>';
