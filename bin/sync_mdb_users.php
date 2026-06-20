@@ -1,0 +1,83 @@
+<?php
+declare(strict_types=1);
+
+/**
+ * CLI-скрипт синхронизации пользователей из E_Ser190905.mdb (NRS_SER_UserDB)
+ * в таблицу MySQL users_sync. Запускать через Планировщик заданий Windows,
+ * например раз в 5-15 минут:
+ *   php C:\path\to\bin\sync_mdb_users.php
+ *
+ * mdb — это источник истины для логинов/паролей и срока доступа (USERTIME),
+ * страница входа в приложение проверяет уже синхронизированную таблицу MySQL,
+ * чтобы не открывать ODBC-соединение на каждый HTTP-запрос.
+ */
+
+require __DIR__ . '/../app/lib/db.php';
+
+function log_line(string $msg): void
+{
+    fwrite(STDOUT, '[' . date('Y-m-d H:i:s') . '] ' . $msg . PHP_EOL);
+}
+
+try {
+    $source = mdb();
+    $stmt = $source->query(
+        'SELECT ID, UserName, Glname, USERPASSWORD, PUSERTIME, USERTIME, ' .
+        'ScopeName, MountName, DeviceType, SN, EMAIL, Contact_person, Telephone ' .
+        'FROM NRS_SER_UserDB'
+    );
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    log_line('ОШИБКА чтения mdb: ' . $e->getMessage());
+    exit(1);
+}
+
+$pdo = db();
+$upsert = $pdo->prepare(
+    'INSERT INTO users_sync
+        (id, user_name, gl_name, user_password, user_time, puser_time,
+         scope_name, mount_name, device_type, sn, email, contact_person, telephone, is_active)
+     VALUES
+        (:id, :user_name, :gl_name, :user_password, :user_time, :puser_time,
+         :scope_name, :mount_name, :device_type, :sn, :email, :contact_person, :telephone, :is_active)
+     ON DUPLICATE KEY UPDATE
+        user_name = VALUES(user_name),
+        gl_name = VALUES(gl_name),
+        user_password = VALUES(user_password),
+        user_time = VALUES(user_time),
+        puser_time = VALUES(puser_time),
+        scope_name = VALUES(scope_name),
+        mount_name = VALUES(mount_name),
+        device_type = VALUES(device_type),
+        sn = VALUES(sn),
+        email = VALUES(email),
+        contact_person = VALUES(contact_person),
+        telephone = VALUES(telephone),
+        is_active = VALUES(is_active)'
+);
+
+$pdo->beginTransaction();
+$count = 0;
+foreach ($rows as $row) {
+    $userTime = (int)($row['USERTIME'] ?? 0);
+    $upsert->execute([
+        'id'             => (int)$row['ID'],
+        'user_name'      => (string)$row['UserName'],
+        'gl_name'        => $row['Glname'] ?? null,
+        'user_password'  => (string)$row['USERPASSWORD'],
+        'user_time'      => $userTime,
+        'puser_time'     => (int)($row['PUSERTIME'] ?? 0),
+        'scope_name'     => $row['ScopeName'] ?? null,
+        'mount_name'     => $row['MountName'] ?? null,
+        'device_type'    => $row['DeviceType'] ?? null,
+        'sn'             => $row['SN'] ?? null,
+        'email'          => $row['EMAIL'] ?? null,
+        'contact_person' => $row['Contact_person'] ?? null,
+        'telephone'      => $row['Telephone'] ?? null,
+        'is_active'      => $userTime > 0 ? 1 : 0,
+    ]);
+    $count++;
+}
+$pdo->commit();
+
+log_line("Синхронизировано пользователей: $count");

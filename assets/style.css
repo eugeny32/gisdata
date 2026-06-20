@@ -1,0 +1,41 @@
+* { box-sizing: border-box; }
+body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f4f5f7; color: #222; }
+.container { max-width: 1100px; margin: 0 auto; padding: 16px; }
+
+.topnav { display: flex; align-items: center; gap: 16px; background: #1f2933; padding: 10px 20px; }
+.topnav a { color: #fff; text-decoration: none; }
+.topnav a:hover { text-decoration: underline; }
+.topnav .spacer { flex: 1; }
+.topnav .user-name { color: #cbd2d9; }
+
+.login-page { display: flex; align-items: center; justify-content: center; height: 100vh; }
+.login-box { background: #fff; padding: 32px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,.1); width: 320px; display: flex; flex-direction: column; gap: 12px; }
+.login-box h1 { font-size: 18px; margin: 0 0 8px; }
+.login-box label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.login-box input, .station-form input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+.login-box button, .station-form button { padding: 10px; border: none; border-radius: 4px; background: #2f6fed; color: #fff; cursor: pointer; }
+
+.error { background: #fdecea; color: #b3261e; padding: 8px 12px; border-radius: 4px; margin-bottom: 8px; }
+
+.station-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 24px; }
+.station-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.station-form .checkbox { flex-direction: row; align-items: center; gap: 8px; }
+.station-form button { grid-column: 1; width: max-content; }
+
+.stations-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
+.stations-table th, .stations-table td { padding: 8px 12px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; }
+.link-btn { background: none; border: none; color: #b3261e; cursor: pointer; padding: 0; }
+
+.status-pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; color: #fff; }
+.status-online { background: #2ecc71; }
+.status-offline { background: #e74c3c; }
+.status-unknown { background: #95a5a6; }
+
+.map-page #map { height: 70vh; border-radius: 8px; }
+.legend { margin-top: 8px; display: flex; gap: 10px; align-items: center; }
+.legend-note { margin-left: auto; color: #666; font-size: 13px; }
+.station-marker span { display: block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0,0,0,.5); }
+
+.rinex-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; }
+.rinex-table th, .rinex-table td { padding: 6px 12px; border-bottom: 1px solid #eee; font-size: 13px; text-align: left; }
+.breadcrumb { margin-bottom: 12px; font-size: 14px; }

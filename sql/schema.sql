@@ -1,0 +1,85 @@
+-- Схема MySQL для системы мониторинга базовых станций (South Net Reference Station)
+-- Кодировка utf8mb4, движок InnoDB
+
+CREATE DATABASE IF NOT EXISTS gisdata
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+USE gisdata;
+
+-- ---------------------------------------------------------------------------
+-- Пользователи, синхронизированные из E_Ser190905.mdb (NRS_SER_UserDB)
+-- Источник истины — mdb. Эта таблица только зеркало для быстрой авторизации.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users_sync (
+  id            INT PRIMARY KEY,            -- ID из mdb (NRS_SER_UserDB.ID)
+  user_name     VARCHAR(64) NOT NULL,
+  gl_name       VARCHAR(64) NULL,
+  user_password VARCHAR(128) NOT NULL,       -- пароль как в mdb (не хэшируем, чтобы не сломать сверку)
+  user_time     BIGINT NOT NULL DEFAULT 0,   -- остаток "времени" доступа из mdb (USERTIME)
+  puser_time    BIGINT NOT NULL DEFAULT 0,
+  scope_name    VARCHAR(64) NULL,
+  mount_name    VARCHAR(64) NULL,
+  device_type   VARCHAR(64) NULL,
+  sn            VARCHAR(64) NULL,
+  email         VARCHAR(128) NULL,
+  contact_person VARCHAR(128) NULL,
+  telephone     VARCHAR(64) NULL,
+  is_active     TINYINT(1) NOT NULL DEFAULT 1, -- USERTIME > 0
+  synced_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_user_name (user_name)
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
+-- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
+-- через страницу администрирования. В mdb такого справочника нет.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stations (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  external_id   INT NULL,                    -- ID станции в исходной mdb (NRS_NET_StationInfo_*.ID), для идемпотентного импорта
+  station_code  VARCHAR(32) NULL,            -- StationID из mdb (короткий код станции)
+  name          VARCHAR(128) NOT NULL,
+  host          VARCHAR(255) NOT NULL,
+  port          INT NOT NULL DEFAULT 2101,
+  mountpoint    VARCHAR(128) NOT NULL,
+  ntrip_user    VARCHAR(128) NULL,
+  ntrip_password VARCHAR(128) NULL,
+  lat           DECIMAL(10,7) NOT NULL,
+  lon           DECIMAL(10,7) NOT NULL,
+  ecef_x        DECIMAL(12,4) NULL,
+  ecef_y        DECIMAL(12,4) NULL,
+  ecef_z        DECIMAL(12,4) NULL,
+  rinex_path    VARCHAR(255) NULL,           -- опционально: подпапка станции в E:\Ftp\RINEX\RINEX\2026
+  comment       VARCHAR(255) NULL,
+  is_enabled    TINYINT(1) NOT NULL DEFAULT 1,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_external_id (external_id),
+  KEY idx_host_mount (host, port, mountpoint) -- НЕ уникальный: несколько станций могут отдаваться через один relay-mount
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
+-- Текущий статус станции (одна строка на станцию, обновляется поллером)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS station_status (
+  station_id    INT PRIMARY KEY,
+  status        ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
+  last_check_at DATETIME NULL,
+  last_data_at  DATETIME NULL,               -- когда последний раз реально шли байты потока
+  bytes_received INT NOT NULL DEFAULT 0,     -- байт принято за последнюю проверку
+  last_error    VARCHAR(255) NULL,
+  CONSTRAINT fk_status_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
+-- История проверок (для графиков/диагностики, можно чистить по cron)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS station_log (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  station_id    INT NOT NULL,
+  checked_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status        ENUM('online','offline','unknown') NOT NULL,
+  bytes_received INT NOT NULL DEFAULT 0,
+  error_message VARCHAR(255) NULL,
+  KEY idx_station_time (station_id, checked_at),
+  CONSTRAINT fk_log_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
