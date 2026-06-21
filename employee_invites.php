@@ -17,8 +17,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $token = bin2hex(random_bytes(24));
 
         $pdo->prepare(
-            'INSERT INTO admin_invites (token, role, email, full_name, created_by, expires_at)
-             VALUES (:token, :role, :email, :full_name, :created_by, NOW() + INTERVAL '7 days')'
+            "INSERT INTO admin_invites (token, role, email, full_name, created_by, expires_at)
+             VALUES (:token, :role, :email, :full_name, :created_by, NOW() + INTERVAL '7 days')"
         )->execute([
             'token' => $token,
             'role' => $role,
