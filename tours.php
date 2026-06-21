@@ -111,6 +111,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->prepare('DELETE FROM tours WHERE id = :id')->execute(['id' => $id]);
         header('Location: /tours.php');
         exit;
+    } elseif ($action === 'sync_pg') {
+        $tourId = (int)($_POST['id'] ?? 0);
+        $connId = (int)($_POST['connection_id'] ?? 0);
+
+        $tourStmt = $pdo->prepare('SELECT * FROM tours WHERE id = :id');
+        $tourStmt->execute(['id' => $tourId]);
+        $tour = $tourStmt->fetch();
+
+        $connStmt = $pdo->prepare('SELECT * FROM pg_connections WHERE id = :id');
+        $connStmt->execute(['id' => $connId]);
+        $profile = $connStmt->fetch();
+
+        if (!$tour || !$profile) {
+            $error = 'Тур или профиль подключения не найден';
+        } else {
+            $localFile = $uploadDir . $tour['file_path'];
+            try {
+                if (!is_file($localFile)) {
+                    throw new RuntimeException('Файл модели не найден на сервере: ' . $tour['file_path']);
+                }
+
+                $pgPdo = pg($profile);
+
+                try {
+                    $pgPdo->exec('CREATE EXTENSION IF NOT EXISTS postgis');
+                } catch (Throwable $e) {
+                    // Может не быть прав на CREATE EXTENSION — не критично, если
+                    // расширение уже установлено администратором удалённой базы.
+                }
+
+                $pgPdo->exec(
+                    'CREATE TABLE IF NOT EXISTS gaussian_tours (
+                        id SERIAL PRIMARY KEY,
+                        source_tour_id INTEGER UNIQUE,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        geom geometry(Point, 4326) NOT NULL,
+                        file_format TEXT NOT NULL,
+                        model_data BYTEA NOT NULL,
+                        uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )'
+                );
+
+                $upsert = $pgPdo->prepare(
+                    'INSERT INTO gaussian_tours (source_tour_id, name, description, geom, file_format, model_data)
+                     VALUES (:source_tour_id, :name, :description, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), :file_format, :model_data)
+                     ON CONFLICT (source_tour_id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        description = EXCLUDED.description,
+                        geom = EXCLUDED.geom,
+                        file_format = EXCLUDED.file_format,
+                        model_data = EXCLUDED.model_data,
+                        uploaded_at = now()'
+                );
+                $upsert->bindValue(':source_tour_id', $tourId, PDO::PARAM_INT);
+                $upsert->bindValue(':name', $tour['name']);
+                $upsert->bindValue(':description', $tour['description']);
+                $upsert->bindValue(':lon', (float)$tour['lon']);
+                $upsert->bindValue(':lat', (float)$tour['lat']);
+                $upsert->bindValue(':file_format', $tour['file_format']);
+                $stream = fopen($localFile, 'rb');
+                $upsert->bindParam(':model_data', $stream, PDO::PARAM_LOB);
+                $upsert->execute();
+                fclose($stream);
+
+                $pdo->prepare(
+                    'UPDATE tours SET pg_connection_id = :conn_id, pg_synced_at = NOW(), pg_sync_error = NULL WHERE id = :id'
+                )->execute(['conn_id' => $connId, 'id' => $tourId]);
+            } catch (Throwable $e) {
+                $pdo->prepare(
+                    'UPDATE tours SET pg_sync_error = :error WHERE id = :id'
+                )->execute(['error' => substr($e->getMessage(), 0, 255), 'id' => $tourId]);
+            }
+            header('Location: /tours.php');
+            exit;
+        }
     }
 }
 
@@ -120,7 +196,13 @@ if (isset($_GET['edit'])) {
     $edit = $stmt->fetch() ?: null;
 }
 
-$tours = $pdo->query('SELECT * FROM tours ORDER BY name')->fetchAll();
+$tours = $pdo->query(
+    'SELECT t.*, c.name AS pg_connection_name
+     FROM tours t
+     LEFT JOIN pg_connections c ON c.id = t.pg_connection_id
+     ORDER BY t.name'
+)->fetchAll();
+$pgConnections = $pdo->query('SELECT id, name FROM pg_connections ORDER BY name')->fetchAll();
 
 $pageTitle = 'Туры (3DGS)';
 $pageIcon = 'bi-camera-reels';
@@ -183,7 +265,7 @@ require __DIR__ . '/app/views/_head.php';
       <div class="table-responsive">
         <table class="table table-clean align-middle">
           <thead>
-            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th></th></tr>
+            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>PostGIS</th><th></th></tr>
           </thead>
           <tbody>
           <?php foreach ($tours as $t): ?>
@@ -192,6 +274,27 @@ require __DIR__ . '/app/views/_head.php';
               <td><?= htmlspecialchars($t['lat'] . ', ' . $t['lon'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($t['file_path'] ?: '—', ENT_QUOTES, 'UTF-8') ?> <span class="text-secondary small">(<?= htmlspecialchars($t['file_format'], ENT_QUOTES, 'UTF-8') ?>)</span></td>
               <td><?= $t['is_enabled'] ? '<span class="badge text-bg-success">да</span>' : '<span class="badge text-bg-secondary">нет</span>' ?></td>
+              <td>
+                <?php if ($t['pg_synced_at']): ?>
+                  <span class="badge text-bg-success" title="<?= htmlspecialchars($t['pg_connection_name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">выгружено <?= htmlspecialchars(substr($t['pg_synced_at'], 0, 16), ENT_QUOTES, 'UTF-8') ?></span>
+                <?php elseif ($t['pg_sync_error']): ?>
+                  <span class="badge text-bg-danger" title="<?= htmlspecialchars($t['pg_sync_error'], ENT_QUOTES, 'UTF-8') ?>">ошибка</span>
+                <?php else: ?>
+                  <span class="badge text-bg-secondary">не выгружено</span>
+                <?php endif; ?>
+                <?php if ($pgConnections && $t['file_path']): ?>
+                <form method="post" action="/tours.php" class="d-flex gap-1 mt-1">
+                  <input type="hidden" name="action" value="sync_pg">
+                  <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                  <select name="connection_id" class="form-select form-select-sm" style="width: auto">
+                    <?php foreach ($pgConnections as $c): ?>
+                      <option value="<?= (int)$c['id'] ?>" <?= (int)$t['pg_connection_id'] === (int)$c['id'] ? 'selected' : '' ?>><?= htmlspecialchars($c['name'], ENT_QUOTES, 'UTF-8') ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-cloud-upload"></i></button>
+                </form>
+                <?php endif; ?>
+              </td>
               <td class="text-end">
                 <a href="/tours.php?edit=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
                 <form method="post" action="/tours.php" class="d-inline" onsubmit="return confirm('Удалить тур и файл модели?');">
@@ -203,7 +306,7 @@ require __DIR__ . '/app/views/_head.php';
             </tr>
           <?php endforeach; ?>
           <?php if (!$tours): ?>
-            <tr><td colspan="5" class="text-muted">Туров пока нет</td></tr>
+            <tr><td colspan="6" class="text-muted">Туров пока нет</td></tr>
           <?php endif; ?>
           </tbody>
         </table>

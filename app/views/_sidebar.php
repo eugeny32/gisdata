@@ -29,6 +29,9 @@ function nav_active(string $page, string $current): string
     <a class="sidebar-link<?= nav_active('tours.php', $__current) ?>" href="/tours.php">
       <i class="bi bi-camera-reels"></i><span>Туры</span>
     </a>
+    <a class="sidebar-link<?= nav_active('pg_connections.php', $__current) ?>" href="/pg_connections.php">
+      <i class="bi bi-hdd-rack"></i><span>Подключения БД</span>
+    </a>
     <div class="sidebar-group-label">Сотрудники</div>
     <a class="sidebar-link sidebar-sublink<?= nav_active('employee_invites.php', $__current) ?>" href="/employee_invites.php">
       <i class="bi bi-envelope-paper"></i><span>Приглашения</span>

@@ -62,3 +62,25 @@ function mdb(): PDO
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     ]);
 }
+
+/**
+ * Подключение к внешнему серверу PostgreSQL/PostGIS по сохранённому профилю
+ * (таблица pg_connections, см. pg_connections.php). Требует расширение
+ * PHP pdo_pgsql — на shared-хостинге оно не всегда включено по умолчанию.
+ */
+function pg(array $profile): PDO
+{
+    if (!extension_loaded('pdo_pgsql')) {
+        throw new RuntimeException('Расширение PHP pdo_pgsql не подключено (php.ini: extension=pdo_pgsql)');
+    }
+    $dsn = sprintf(
+        'pgsql:host=%s;port=%d;dbname=%s;sslmode=%s',
+        $profile['host'],
+        (int)$profile['port'],
+        $profile['dbname'],
+        $profile['sslmode'] ?: 'prefer'
+    );
+    return new PDO($dsn, $profile['username'], $profile['password'], [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    ]);
+}

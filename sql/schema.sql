@@ -119,6 +119,38 @@ CREATE TABLE IF NOT EXISTS tours (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- Профили подключения к внешним PostgreSQL/PostGIS-серверам (страница
+-- "Подключения БД"). Несколько именованных профилей — разные сервера/базы,
+-- куда можно выгрузить копию 3DGS-модели (см. ALTER tours ниже и tours.php).
+-- Пароль хранится в открытом виде — тот же уровень защиты, что и
+-- stations.ntrip_password; страница доступна только role='admin'.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pg_connections (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  name        VARCHAR(64) NOT NULL,
+  host        VARCHAR(255) NOT NULL,
+  port        INT NOT NULL DEFAULT 5432,
+  dbname      VARCHAR(128) NOT NULL,
+  username    VARCHAR(128) NOT NULL,
+  password    VARCHAR(255) NOT NULL,
+  sslmode     VARCHAR(20) NOT NULL DEFAULT 'prefer',
+  is_default  TINYINT(1) NOT NULL DEFAULT 0,
+  created_by  INT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_pg_conn_name (name),
+  CONSTRAINT fk_pgconn_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- Отслеживание выгрузки тура во внешний PostGIS (см. tours.php, action=sync_pg).
+-- ВНИМАНИЕ: как и раньше с admins.role — этот ALTER не идемпотентен, выполнить
+-- один раз; при повторном запуске получите "Duplicate column", это нормально.
+ALTER TABLE tours ADD COLUMN pg_connection_id INT NULL;
+ALTER TABLE tours ADD COLUMN pg_synced_at DATETIME NULL;
+ALTER TABLE tours ADD COLUMN pg_sync_error VARCHAR(255) NULL;
+ALTER TABLE tours ADD CONSTRAINT fk_tour_pg_connection FOREIGN KEY (pg_connection_id) REFERENCES pg_connections(id) ON DELETE SET NULL;
+
+-- ---------------------------------------------------------------------------
 -- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
 -- через страницу администрирования. В mdb такого справочника нет.
 -- ---------------------------------------------------------------------------

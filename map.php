@@ -247,9 +247,9 @@ async function loadTourScene(url, rotation) {
   container.innerHTML = '';
   container.style.position = 'relative';
 
-  // Канвас вьювера и оверлей "Загрузка..." — отдельные слои. Оверлей лежит
-  // сверху (z-index) и убирается только после полной загрузки модели, чтобы
-  // не было видно построчного/постепенного проявления сплатов.
+  // Канвас вьювера и оверлей "Загрузка..." — отдельные слои. Оверлей нужен
+  // только на момент инициализации вьювера/импорта библиотек, дальше сплаты
+  // проявляются прямо в канвасе по мере загрузки файла (progressiveLoad).
   const canvasHost = document.createElement('div');
   canvasHost.style.width = '100%';
   canvasHost.style.height = '100%';
@@ -275,14 +275,14 @@ async function loadTourScene(url, rotation) {
       // недоступен — отключаем его использование в воркере сортировки.
       sharedMemoryForWorkers: false,
     });
-    // progressiveLoad: false — ждём, пока модель загрузится полностью, и
-    // только потом показываем её целиком (без видимого построчного проявления).
-    await tourViewer.addSplatScene(url, {
-      progressiveLoad: false,
-      rotation: rotation,
-    });
+    // Запускаем рендер-цикл сразу и сразу убираем оверлей — дальше сплаты
+    // будут проявляться по мере загрузки файла (progressiveLoad: true).
     tourViewer.start();
     overlay.remove();
+    await tourViewer.addSplatScene(url, {
+      progressiveLoad: true,
+      rotation: rotation,
+    });
   } catch (e) {
     overlay.remove();
     container.innerHTML = '<div class="alert alert-danger m-3">Не удалось загрузить просмотрщик: ' + escapeHtml(String(e)) + '</div>';
