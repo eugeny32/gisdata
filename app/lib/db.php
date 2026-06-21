@@ -24,13 +24,12 @@ function db(): PDO
 {
     static $pdo = null;
     if ($pdo === null) {
-        $cfg = app_config()['mysql'];
+        $cfg = app_config()['pgsql'];
         $dsn = sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=%s',
+            'pgsql:host=%s;port=%d;dbname=%s',
             $cfg['host'],
             $cfg['port'],
-            $cfg['dbname'],
-            $cfg['charset']
+            $cfg['dbname']
         );
         $pdo = new PDO($dsn, $cfg['user'], $cfg['password'], [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,

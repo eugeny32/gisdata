@@ -95,12 +95,12 @@ $stations = $pdo->query('SELECT * FROM stations WHERE is_enabled = 1')->fetchAll
 $updateStatus = $pdo->prepare(
     'INSERT INTO station_status (station_id, status, last_check_at, last_data_at, bytes_received, last_error)
      VALUES (:id, :status, NOW(), :last_data_at, :bytes, :error)
-     ON DUPLICATE KEY UPDATE
-        status = VALUES(status),
-        last_check_at = VALUES(last_check_at),
-        last_data_at = VALUES(last_data_at),
-        bytes_received = VALUES(bytes_received),
-        last_error = VALUES(last_error)'
+     ON CONFLICT (station_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        last_check_at = EXCLUDED.last_check_at,
+        last_data_at = EXCLUDED.last_data_at,
+        bytes_received = EXCLUDED.bytes_received,
+        last_error = EXCLUDED.last_error'
 );
 $insertLog = $pdo->prepare(
     'INSERT INTO station_log (station_id, status, bytes_received, error_message) VALUES (:id, :status, :bytes, :error)'

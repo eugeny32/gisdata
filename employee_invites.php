@@ -18,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $pdo->prepare(
             'INSERT INTO admin_invites (token, role, email, full_name, created_by, expires_at)
-             VALUES (:token, :role, :email, :full_name, :created_by, DATE_ADD(NOW(), INTERVAL 7 DAY))'
+             VALUES (:token, :role, :email, :full_name, :created_by, NOW() + INTERVAL '7 days')'
         )->execute([
             'token' => $token,
             'role' => $role,

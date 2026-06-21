@@ -183,6 +183,8 @@ function escapeAttr(s) {
   return escapeHtml(s).replace(/'/g, '&#39;');
 }
 
+const tourUrlsById = {};
+
 async function loadTours() {
   let data;
   try {
@@ -192,10 +194,11 @@ async function loadTours() {
     return;
   }
   for (const t of data.tours) {
+    tourUrlsById[t.id] = t.file_urls && t.file_urls.length ? t.file_urls : [t.file_url];
     const popup = `<b>${escapeHtml(t.name)}</b>` +
       (t.description ? `<br>${escapeHtml(t.description)}` : '') +
       `<br><button type="button" class="btn btn-sm btn-outline-primary mt-2" ` +
-      `onclick="openTour('${escapeAttr(t.name)}', '${escapeAttr(t.file_url)}')">` +
+      `onclick="openTour(${t.id}, '${escapeAttr(t.name)}')">` +
       `<i class="bi bi-camera-reels"></i> Открыть тур</button>`;
     L.marker([t.lat, t.lon], { icon: tourMarkerIcon() }).addTo(map).bindPopup(popup);
   }
@@ -204,8 +207,8 @@ loadTours();
 
 // --- Просмотрщик 3DGS (mkkellogg/GaussianSplats3D, библиотеки грузятся лениво по клику) ---
 let tourViewer = null;
-let pendingTourUrl = null;
-let currentTourUrl = null;
+let pendingTourUrls = null;
+let currentTourUrls = null;
 let GaussianSplats3DModule = null;
 
 // Кватернионы [x,y,z,w] — перебираем поворотами по 90°/180° вокруг разных
@@ -225,13 +228,13 @@ let rotationIndex = 0; // дефолт — рабочий вариант, кно
 const tourModalEl = document.getElementById('tourViewerModal');
 const tourModal = new bootstrap.Modal(tourModalEl);
 
-function openTour(name, url) {
+function openTour(tourId, name) {
   document.getElementById('tourViewerTitle').textContent = name;
-  pendingTourUrl = url;
+  pendingTourUrls = tourUrlsById[tourId] || [];
   tourModal.show();
 }
 
-async function loadTourScene(url, rotation) {
+async function loadTourScene(urls, rotation) {
   const container = document.getElementById('tourViewerContainer');
 
   if (tourViewer) {
@@ -276,13 +279,16 @@ async function loadTourScene(url, rotation) {
       sharedMemoryForWorkers: false,
     });
     // Запускаем рендер-цикл сразу и сразу убираем оверлей — дальше сплаты
-    // будут проявляться по мере загрузки файла (progressiveLoad: true).
+    // будут проявляться по мере загрузки файлов (progressiveLoad: true).
     tourViewer.start();
     overlay.remove();
-    await tourViewer.addSplatScene(url, {
-      progressiveLoad: true,
-      rotation: rotation,
-    });
+    // Несколько файлов одного тура (общая система координат, без ручного
+    // совмещения) — грузим все сразу через addSplatScenes(), один и тот же
+    // поворот применяется к каждому, т.к. он компенсирует общую ориентацию
+    // исходных данных, а не взаимное расположение кусков.
+    await tourViewer.addSplatScenes(
+      urls.map((u) => ({ path: u, rotation: rotation, progressiveLoad: true }))
+    );
   } catch (e) {
     overlay.remove();
     container.innerHTML = '<div class="alert alert-danger m-3">Не удалось загрузить просмотрщик: ' + escapeHtml(String(e)) + '</div>';
@@ -290,20 +296,20 @@ async function loadTourScene(url, rotation) {
 }
 
 tourModalEl.addEventListener('shown.bs.modal', () => {
-  if (!pendingTourUrl) return;
-  currentTourUrl = pendingTourUrl;
-  pendingTourUrl = null;
-  loadTourScene(currentTourUrl, rotationPresets[rotationIndex]);
+  if (!pendingTourUrls) return;
+  currentTourUrls = pendingTourUrls;
+  pendingTourUrls = null;
+  loadTourScene(currentTourUrls, rotationPresets[rotationIndex]);
 });
 
 document.getElementById('tourRotateBtn').addEventListener('click', () => {
-  if (!currentTourUrl) return;
+  if (!currentTourUrls) return;
   rotationIndex = (rotationIndex + 1) % rotationPresets.length;
-  loadTourScene(currentTourUrl, rotationPresets[rotationIndex]);
+  loadTourScene(currentTourUrls, rotationPresets[rotationIndex]);
 });
 
 tourModalEl.addEventListener('hidden.bs.modal', async () => {
-  currentTourUrl = null;
+  currentTourUrls = null;
   if (tourViewer) {
     const oldViewer = tourViewer;
     tourViewer = null;

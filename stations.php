@@ -43,7 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $stmt = $pdo->prepare(
                     'INSERT INTO stations (name, host, port, mountpoint, ntrip_user, ntrip_password, lat, lon, rinex_path, comment, is_enabled)
-                     VALUES (:name, :host, :port, :mountpoint, :ntrip_user, :ntrip_password, :lat, :lon, :rinex_path, :comment, :is_enabled)'
+                     VALUES (:name, :host, :port, :mountpoint, :ntrip_user, :ntrip_password, :lat, :lon, :rinex_path, :comment, :is_enabled)
+                     RETURNING id'
                 );
                 $stmt->execute([
                     'name' => $name, 'host' => $host, 'port' => $port, 'mountpoint' => $mount,
@@ -51,8 +52,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'lat' => $lat, 'lon' => $lon, 'rinex_path' => $rinexPath ?: null,
                     'comment' => $comment ?: null, 'is_enabled' => $isEnabled,
                 ]);
-                $newId = (int)$pdo->lastInsertId();
-                $pdo->prepare('INSERT INTO station_status (station_id, status) VALUES (:id, "unknown")')
+                $newId = (int)$stmt->fetchColumn();
+                $pdo->prepare("INSERT INTO station_status (station_id, status) VALUES (:id, 'unknown')")
                     ->execute(['id' => $newId]);
             }
             header('Location: /stations.php');

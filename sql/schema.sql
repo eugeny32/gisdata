@@ -1,11 +1,17 @@
--- Схема MySQL для системы мониторинга базовых станций (South Net Reference Station)
--- Кодировка utf8mb4, движок InnoDB
+-- Схема PostgreSQL для системы мониторинга базовых станций (South Net Reference Station)
 --
--- Скрипт НЕ создаёт базу данных и не делает USE — таблицы создаются в той БД,
--- к которой подключен клиент (на shared-хостинге пользователь обычно уже
--- привязан к своей единственной базе и не имеет права CREATE DATABASE).
--- Запускайте так: mysql -u ваш_пользователь -p ваша_база < sql\schema.sql
--- либо выполните импорт через phpMyAdmin, выбрав свою базу перед запуском.
+-- Скрипт НЕ создаёт базу данных — таблицы создаются в той БД, к которой
+-- подключен клиент. Запускайте через psql:
+--   psql -U ваш_пользователь -d ваша_база -f sql/schema.sql
+-- либо через веб-интерфейс (phpPgAdmin/pgAdmin) — выбрать базу, открыть SQL,
+-- вставить и выполнить.
+--
+-- Булевы флаги (is_enabled, is_active, is_default, is_cancelled) сделаны
+-- SMALLINT (0/1), а не native BOOLEAN — PDO_PGSQL возвращает boolean как
+-- строки 't'/'f', а 'f' в PHP truthy, это тихо ломает существующие проверки
+-- вида $row['is_enabled'] ? ... — поэтому сознательно остаёмся на 0/1.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto; -- нужно для digest()/encode() — аналог MySQL SHA2() в ручных SQL-вставках (см. README)
 
 -- ---------------------------------------------------------------------------
 -- Пользователи, синхронизированные из E_Ser190905.mdb (NRS_SER_UserDB)
@@ -25,108 +31,68 @@ CREATE TABLE IF NOT EXISTS users_sync (
   email         VARCHAR(128) NULL,
   contact_person VARCHAR(128) NULL,
   telephone     VARCHAR(64) NULL,
-  is_active     TINYINT(1) NOT NULL DEFAULT 1, -- USERTIME > 0
-  synced_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_user_name (user_name)
-) ENGINE=InnoDB;
+  is_active     SMALLINT NOT NULL DEFAULT 1, -- USERTIME > 0
+  synced_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_user_name UNIQUE (user_name)
+);
+
+CREATE OR REPLACE FUNCTION set_synced_at() RETURNS TRIGGER AS $$
+BEGIN
+  NEW.synced_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_users_sync_synced_at ON users_sync;
+CREATE TRIGGER trg_users_sync_synced_at BEFORE UPDATE ON users_sync
+  FOR EACH ROW EXECUTE FUNCTION set_synced_at();
 
 -- ---------------------------------------------------------------------------
--- Суперпользователи приложения (управление станциями, не связаны с mdb).
--- password_hash = SHA2(пароль, 256) в hex, чтобы запись можно было создать
--- одним SQL-запросом (см. ниже пример INSERT) без доступа к PHP CLI.
+-- Сотрудники кабинета (управление станциями/сотрудниками/подписками, не
+-- связаны с mdb). role='admin' — полный доступ, role='viewer' — только
+-- просмотр (карта, RINEX). password_hash = SHA2-256 в hex (через PHP
+-- hash('sha256', ...) при создании из bin/create_admin.php или
+-- invite_accept.php; либо вручную через SQL — см. README, используется
+-- digest(...,'sha256')/encode(...,'hex') из pgcrypto).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS admins (
-  id            INT AUTO_INCREMENT PRIMARY KEY,
+  id            SERIAL PRIMARY KEY,
   login         VARCHAR(64) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   full_name     VARCHAR(128) NULL,
-  is_active     TINYINT(1) NOT NULL DEFAULT 1,
-  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_admin_login (login)
-) ENGINE=InnoDB;
+  role          VARCHAR(20) NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'viewer')),
+  email         VARCHAR(128) NULL,
+  phone         VARCHAR(64) NULL,
+  is_active     SMALLINT NOT NULL DEFAULT 1,
+  created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_admin_login UNIQUE (login)
+);
 
 -- ---------------------------------------------------------------------------
--- Роли сотрудников и приглашения (страницы "Сотрудники" в кабинете).
--- role='admin' — полный доступ (станции, сотрудники), role='viewer' — только
--- просмотр (карта, RINEX). Существующие записи admins (созданные до этого
--- изменения через bin/create_admin.php) получают role='admin' по умолчанию,
--- права не теряются.
---
--- ВНИМАНИЕ: эти три ALTER не идемпотентны (старые MySQL/MariaDB не понимают
--- ADD COLUMN IF NOT EXISTS) — выполните их ОДИН РАЗ. При повторном запуске
--- получите ошибку "Duplicate column name", это нормально и означает, что
--- колонки уже добавлены — просто пропустите эти 3 строки и продолжайте дальше.
+-- Приглашения сотрудников (страница "Сотрудники → Приглашения" в кабинете).
 -- ---------------------------------------------------------------------------
-ALTER TABLE admins ADD COLUMN role ENUM('admin','viewer') NOT NULL DEFAULT 'admin';
-ALTER TABLE admins ADD COLUMN email VARCHAR(128) NULL;
-ALTER TABLE admins ADD COLUMN phone VARCHAR(64) NULL;
-
 CREATE TABLE IF NOT EXISTS admin_invites (
-  id          INT AUTO_INCREMENT PRIMARY KEY,
+  id          SERIAL PRIMARY KEY,
   token       VARCHAR(64) NOT NULL,
-  role        ENUM('admin','viewer') NOT NULL DEFAULT 'viewer',
+  role        VARCHAR(20) NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'viewer')),
   email       VARCHAR(128) NULL,
   full_name   VARCHAR(128) NULL,
   created_by  INT NULL,
-  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at  DATETIME NOT NULL,
-  used_at     DATETIME NULL,
-  UNIQUE KEY uq_invite_token (token),
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMP NOT NULL,
+  used_at     TIMESTAMP NULL,
+  CONSTRAINT uq_invite_token UNIQUE (token),
   CONSTRAINT fk_invite_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
-) ENGINE=InnoDB;
-
--- ---------------------------------------------------------------------------
--- Подписки клиентов RTK (страница "Подписки" в кабинете, доступна только
--- role='admin'). Полностью отдельно от users_sync.user_time (то приходит из
--- mdb и перезатирается при каждом запуске bin/sync_mdb_users.php) — статус
--- подписки считается только по датам/is_cancelled в этой таблице,
--- синхронизация с mdb её не трогает. У одного пользователя может быть
--- несколько записей (история продлений) — действующая подписка — самая
--- свежая по ends_at, у которой is_cancelled = 0 и ends_at > NOW().
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS subscriptions (
-  id            INT AUTO_INCREMENT PRIMARY KEY,
-  user_id       INT NOT NULL,
-  plan_name     VARCHAR(64) NULL,
-  starts_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  ends_at       DATETIME NOT NULL,
-  is_cancelled  TINYINT(1) NOT NULL DEFAULT 0,
-  note          VARCHAR(255) NULL,
-  created_by    INT NULL,
-  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  KEY idx_sub_user (user_id, ends_at),
-  CONSTRAINT fk_sub_user FOREIGN KEY (user_id) REFERENCES users_sync(id) ON DELETE CASCADE,
-  CONSTRAINT fk_sub_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
-) ENGINE=InnoDB;
-
--- ---------------------------------------------------------------------------
--- 3DGS-туры (виртуальные туры Gaussian Splatting) — метки на карте, отдельные
--- от станций. Файлы моделей лежат в uploads/tours/ (см. tours.php), здесь
--- только метаданные и путь к файлу.
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS tours (
-  id            INT AUTO_INCREMENT PRIMARY KEY,
-  name          VARCHAR(128) NOT NULL,
-  description   VARCHAR(500) NULL,
-  lat           DECIMAL(10,7) NOT NULL,
-  lon           DECIMAL(10,7) NOT NULL,
-  file_path     VARCHAR(255) NOT NULL,   -- относительный путь внутри uploads/tours/
-  file_format   ENUM('ply','splat','ksplat') NOT NULL DEFAULT 'ksplat',
-  is_enabled    TINYINT(1) NOT NULL DEFAULT 1,
-  created_by    INT NULL,
-  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_tour_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+);
 
 -- ---------------------------------------------------------------------------
 -- Профили подключения к внешним PostgreSQL/PostGIS-серверам (страница
--- "Подключения БД"). Несколько именованных профилей — разные сервера/базы,
--- куда можно выгрузить копию 3DGS-модели (см. ALTER tours ниже и tours.php).
+-- "Подключения БД") — куда можно выгрузить копию 3DGS-модели (см. tours.php).
 -- Пароль хранится в открытом виде — тот же уровень защиты, что и
 -- stations.ntrip_password; страница доступна только role='admin'.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pg_connections (
-  id          INT AUTO_INCREMENT PRIMARY KEY,
+  id          SERIAL PRIMARY KEY,
   name        VARCHAR(64) NOT NULL,
   host        VARCHAR(255) NOT NULL,
   port        INT NOT NULL DEFAULT 5432,
@@ -134,28 +100,93 @@ CREATE TABLE IF NOT EXISTS pg_connections (
   username    VARCHAR(128) NOT NULL,
   password    VARCHAR(255) NOT NULL,
   sslmode     VARCHAR(20) NOT NULL DEFAULT 'prefer',
-  is_default  TINYINT(1) NOT NULL DEFAULT 0,
+  is_default  SMALLINT NOT NULL DEFAULT 0,
   created_by  INT NULL,
-  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_pg_conn_name (name),
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_pg_conn_name UNIQUE (name),
   CONSTRAINT fk_pgconn_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+);
 
--- Отслеживание выгрузки тура во внешний PostGIS (см. tours.php, action=sync_pg).
--- ВНИМАНИЕ: как и раньше с admins.role — этот ALTER не идемпотентен, выполнить
--- один раз; при повторном запуске получите "Duplicate column", это нормально.
-ALTER TABLE tours ADD COLUMN pg_connection_id INT NULL;
-ALTER TABLE tours ADD COLUMN pg_synced_at DATETIME NULL;
-ALTER TABLE tours ADD COLUMN pg_sync_error VARCHAR(255) NULL;
-ALTER TABLE tours ADD CONSTRAINT fk_tour_pg_connection FOREIGN KEY (pg_connection_id) REFERENCES pg_connections(id) ON DELETE SET NULL;
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_pg_connections_updated_at ON pg_connections;
+CREATE TRIGGER trg_pg_connections_updated_at BEFORE UPDATE ON pg_connections
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---------------------------------------------------------------------------
+-- Подписки клиентов RTK (страница "Подписки", доступна только role='admin').
+-- Полностью отдельно от users_sync.user_time (то приходит из mdb и
+-- перезатирается при каждом запуске bin/sync_mdb_users.php) — статус
+-- подписки считается только по датам/is_cancelled в этой таблице.
+-- У одного пользователя может быть несколько записей (история продлений) —
+-- действующая подписка — самая свежая по ends_at, у которой is_cancelled = 0
+-- и ends_at > NOW().
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id            SERIAL PRIMARY KEY,
+  user_id       INT NOT NULL,
+  plan_name     VARCHAR(64) NULL,
+  starts_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+  ends_at       TIMESTAMP NOT NULL,
+  is_cancelled  SMALLINT NOT NULL DEFAULT 0,
+  note          VARCHAR(255) NULL,
+  created_by    INT NULL,
+  created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_sub_user FOREIGN KEY (user_id) REFERENCES users_sync(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sub_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sub_user ON subscriptions (user_id, ends_at);
+
+-- ---------------------------------------------------------------------------
+-- 3DGS-туры (виртуальные туры Gaussian Splatting) — метки на карте, отдельные
+-- от станций. Файлы моделей лежат в uploads/tours/ (см. tours.php).
+-- pg_connection_id/pg_synced_at/pg_sync_error — статус выгрузки копии тура во
+-- внешний PostGIS-профиль (см. pg_connections выше, action=sync_pg в tours.php).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tours (
+  id              SERIAL PRIMARY KEY,
+  name            VARCHAR(128) NOT NULL,
+  description     VARCHAR(500) NULL,
+  lat             DECIMAL(10,7) NOT NULL,
+  lon             DECIMAL(10,7) NOT NULL,
+  file_path       VARCHAR(255) NOT NULL,   -- относительный путь внутри uploads/tours/
+  file_format     VARCHAR(10) NOT NULL DEFAULT 'ksplat' CHECK (file_format IN ('ply', 'splat', 'ksplat')),
+  is_enabled      SMALLINT NOT NULL DEFAULT 1,
+  pg_connection_id INT NULL,
+  pg_synced_at    TIMESTAMP NULL,
+  pg_sync_error   VARCHAR(255) NULL,
+  created_by      INT NULL,
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_tour_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL,
+  CONSTRAINT fk_tour_pg_connection FOREIGN KEY (pg_connection_id) REFERENCES pg_connections(id) ON DELETE SET NULL
+);
+
+-- Дополнительные файлы тура, когда модель состоит из нескольких .ply/.splat/
+-- .ksplat кусков одного скана в общей системе координат (tours.file_path —
+-- первый/основной файл, эта таблица — все остальные). Просмотрщик в map.php
+-- грузит их все одновременно через GaussianSplats3D.Viewer.addSplatScenes().
+CREATE TABLE IF NOT EXISTS tour_files (
+  id          SERIAL PRIMARY KEY,
+  tour_id     INT NOT NULL,
+  file_path   VARCHAR(255) NOT NULL,
+  file_format VARCHAR(10) NOT NULL CHECK (file_format IN ('ply', 'splat', 'ksplat')),
+  sort_order  INT NOT NULL DEFAULT 0,
+  CONSTRAINT fk_tour_file_tour FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tour_files_tour ON tour_files (tour_id, sort_order);
 
 -- ---------------------------------------------------------------------------
 -- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
 -- через страницу администрирования. В mdb такого справочника нет.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS stations (
-  id            INT AUTO_INCREMENT PRIMARY KEY,
+  id            SERIAL PRIMARY KEY,
   external_id   INT NULL,                    -- ID станции в исходной mdb (NRS_NET_StationInfo_*.ID), для идемпотентного импорта
   station_code  VARCHAR(32) NULL,            -- StationID из mdb (короткий код станции)
   name          VARCHAR(128) NOT NULL,
@@ -171,36 +202,40 @@ CREATE TABLE IF NOT EXISTS stations (
   ecef_z        DECIMAL(12,4) NULL,
   rinex_path    VARCHAR(255) NULL,           -- опционально: подпапка станции в E:\Ftp\RINEX\RINEX\2026
   comment       VARCHAR(255) NULL,
-  is_enabled    TINYINT(1) NOT NULL DEFAULT 1,
-  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_external_id (external_id),
-  KEY idx_host_mount (host, port, mountpoint) -- НЕ уникальный: несколько станций могут отдаваться через один relay-mount
-) ENGINE=InnoDB;
+  is_enabled    SMALLINT NOT NULL DEFAULT 1,
+  created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_external_id UNIQUE (external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_host_mount ON stations (host, port, mountpoint); -- НЕ уникальный: несколько станций могут отдаваться через один relay-mount
+
+DROP TRIGGER IF EXISTS trg_stations_updated_at ON stations;
+CREATE TRIGGER trg_stations_updated_at BEFORE UPDATE ON stations
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ---------------------------------------------------------------------------
 -- Текущий статус станции (одна строка на станцию, обновляется поллером)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS station_status (
   station_id    INT PRIMARY KEY,
-  status        ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
-  last_check_at DATETIME NULL,
-  last_data_at  DATETIME NULL,               -- когда последний раз реально шли байты потока
+  status        VARCHAR(10) NOT NULL DEFAULT 'unknown' CHECK (status IN ('online', 'offline', 'unknown')),
+  last_check_at TIMESTAMP NULL,
+  last_data_at  TIMESTAMP NULL,               -- когда последний раз реально шли байты потока
   bytes_received INT NOT NULL DEFAULT 0,     -- байт принято за последнюю проверку
   last_error    VARCHAR(255) NULL,
   CONSTRAINT fk_status_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+);
 
 -- ---------------------------------------------------------------------------
 -- История проверок (для графиков/диагностики, можно чистить по cron)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS station_log (
-  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  id            BIGSERIAL PRIMARY KEY,
   station_id    INT NOT NULL,
-  checked_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  status        ENUM('online','offline','unknown') NOT NULL,
+  checked_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  status        VARCHAR(10) NOT NULL CHECK (status IN ('online', 'offline', 'unknown')),
   bytes_received INT NOT NULL DEFAULT 0,
   error_message VARCHAR(255) NULL,
-  KEY idx_station_time (station_id, checked_at),
   CONSTRAINT fk_log_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+);
+CREATE INDEX IF NOT EXISTS idx_station_time ON station_log (station_id, checked_at);

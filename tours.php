@@ -25,43 +25,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($name === '') {
             $error = 'Укажите название тура';
         } else {
-            $filePath = null;
-            $fileFormat = null;
+            // Собираем список загружаемых файлов: либо через форму (несколько
+            // файлов одного скана), либо именами уже залитых по FTP (по одному
+            // на строку в поле "Файл(ы) уже на сервере").
+            $newFiles = []; // [['file_path' => ..., 'file_format' => ...], ...]
 
-            if (!empty($_FILES['model_file']['name'])) {
-                $origName = (string)$_FILES['model_file']['name'];
-                $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
-                if (!in_array($ext, $allowedExt, true)) {
-                    $error = 'Недопустимый формат файла. Разрешено: ' . implode(', ', $allowedExt);
-                } elseif ($_FILES['model_file']['error'] !== UPLOAD_ERR_OK) {
-                    $error = 'Ошибка загрузки файла (код ' . $_FILES['model_file']['error'] . '). Возможно, файл превышает лимит хостинга (upload_max_filesize/post_max_size) — попробуйте залить файл по FTP и указать его имя в поле «Файл уже на сервере».';
-                } else {
-                    if (!is_dir($uploadDir)) {
-                        mkdir($uploadDir, 0755, true);
+            $uploadedNames = $_FILES['model_files']['name'] ?? [];
+            $hasUpload = is_array($uploadedNames) && array_filter($uploadedNames);
+
+            if ($hasUpload) {
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+                foreach ($uploadedNames as $i => $origName) {
+                    if ($origName === '') {
+                        continue;
                     }
-                    $storedName = uniqid('tour_', true) . '_' . preg_replace('/[^a-zA-Z0-9_.-]/', '_', $origName);
-                    if (!move_uploaded_file($_FILES['model_file']['tmp_name'], $uploadDir . $storedName)) {
-                        $error = 'Не удалось сохранить загруженный файл на сервере';
-                    } else {
-                        $filePath = $storedName;
-                        $fileFormat = $ext;
+                    $ext = strtolower(pathinfo((string)$origName, PATHINFO_EXTENSION));
+                    if (!in_array($ext, $allowedExt, true)) {
+                        $error = 'Недопустимый формат файла "' . $origName . '". Разрешено: ' . implode(', ', $allowedExt);
+                        break;
                     }
+                    if ($_FILES['model_files']['error'][$i] !== UPLOAD_ERR_OK) {
+                        $error = 'Ошибка загрузки файла "' . $origName . '" (код ' . $_FILES['model_files']['error'][$i] . '). Возможно, превышен лимит хостинга (upload_max_filesize/post_max_size) — для крупных моделей залейте файлы по FTP и укажите их имена в поле «Файл(ы) уже на сервере».';
+                        break;
+                    }
+                    $storedName = uniqid('tour_', true) . '_' . preg_replace('/[^a-zA-Z0-9_.-]/', '_', (string)$origName);
+                    if (!move_uploaded_file($_FILES['model_files']['tmp_name'][$i], $uploadDir . $storedName)) {
+                        $error = 'Не удалось сохранить загруженный файл "' . $origName . '" на сервере';
+                        break;
+                    }
+                    $newFiles[] = ['file_path' => $storedName, 'file_format' => $ext];
                 }
             } elseif ($existingFileName !== '') {
-                $ext = strtolower(pathinfo($existingFileName, PATHINFO_EXTENSION));
-                if (!in_array($ext, $allowedExt, true)) {
-                    $error = 'Недопустимый формат файла. Разрешено: ' . implode(', ', $allowedExt);
-                } elseif (!is_file($uploadDir . $existingFileName)) {
-                    $error = 'Файл "' . $existingFileName . '" не найден в uploads/tours/ на сервере';
-                } else {
-                    $filePath = $existingFileName;
-                    $fileFormat = $ext;
+                foreach (preg_split('/[\r\n]+/', $existingFileName, -1, PREG_SPLIT_NO_EMPTY) as $name1) {
+                    $name1 = trim($name1);
+                    $ext = strtolower(pathinfo($name1, PATHINFO_EXTENSION));
+                    if (!in_array($ext, $allowedExt, true)) {
+                        $error = 'Недопустимый формат файла "' . $name1 . '". Разрешено: ' . implode(', ', $allowedExt);
+                        break;
+                    }
+                    if (!is_file($uploadDir . $name1)) {
+                        $error = 'Файл "' . $name1 . '" не найден в uploads/tours/ на сервере';
+                        break;
+                    }
+                    $newFiles[] = ['file_path' => $name1, 'file_format' => $ext];
                 }
             } elseif ($id <= 0) {
-                $error = 'Для нового тура нужно загрузить файл модели или указать имя уже загруженного файла';
+                $error = 'Для нового тура нужно загрузить файл(ы) модели или указать имена уже загруженных файлов';
             }
 
             if (!$error) {
+                $filePath = $newFiles ? $newFiles[0]['file_path'] : null;
+                $fileFormat = $newFiles ? $newFiles[0]['file_format'] : null;
+                $extraFiles = $newFiles ? array_slice($newFiles, 1) : [];
+
                 if ($id > 0) {
                     if ($filePath !== null) {
                         $stmt = $pdo->prepare(
@@ -74,6 +92,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
                             'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
                         ]);
+                        // Новый набор файлов полностью заменяет старые доп. файлы тура.
+                        $pdo->prepare('DELETE FROM tour_files WHERE tour_id = :id')->execute(['id' => $id]);
                     } else {
                         $stmt = $pdo->prepare(
                             'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon, is_enabled=:is_enabled
@@ -84,10 +104,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled,
                         ]);
                     }
+                    $tourId = $id;
                 } else {
                     $stmt = $pdo->prepare(
                         'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by)
-                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :created_by)'
+                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :created_by)
+                         RETURNING id'
                     );
                     $stmt->execute([
                         'name' => $name, 'description' => $description ?: null,
@@ -95,7 +117,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
                         'created_by' => $admin['id'],
                     ]);
+                    $tourId = (int)$stmt->fetchColumn();
                 }
+
+                if ($extraFiles) {
+                    $insertExtra = $pdo->prepare(
+                        'INSERT INTO tour_files (tour_id, file_path, file_format, sort_order) VALUES (:tour_id, :file_path, :file_format, :sort_order)'
+                    );
+                    foreach ($extraFiles as $i => $f) {
+                        $insertExtra->execute([
+                            'tour_id' => $tourId, 'file_path' => $f['file_path'],
+                            'file_format' => $f['file_format'], 'sort_order' => $i,
+                        ]);
+                    }
+                }
+
                 header('Location: /tours.php');
                 exit;
             }
@@ -108,7 +144,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($row && $row['file_path'] && is_file($uploadDir . $row['file_path'])) {
             unlink($uploadDir . $row['file_path']);
         }
-        $pdo->prepare('DELETE FROM tours WHERE id = :id')->execute(['id' => $id]);
+        $extraStmt = $pdo->prepare('SELECT file_path FROM tour_files WHERE tour_id = :id');
+        $extraStmt->execute(['id' => $id]);
+        foreach ($extraStmt->fetchAll() as $extra) {
+            if ($extra['file_path'] && is_file($uploadDir . $extra['file_path'])) {
+                unlink($uploadDir . $extra['file_path']);
+            }
+        }
+        $pdo->prepare('DELETE FROM tours WHERE id = :id')->execute(['id' => $id]); // tour_files удалятся каскадом (ON DELETE CASCADE)
         header('Location: /tours.php');
         exit;
     } elseif ($action === 'sync_pg') {
@@ -190,14 +233,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$editExtraCount = 0;
 if (isset($_GET['edit'])) {
     $stmt = $pdo->prepare('SELECT * FROM tours WHERE id = :id');
     $stmt->execute(['id' => (int)$_GET['edit']]);
     $edit = $stmt->fetch() ?: null;
+    if ($edit) {
+        $cntStmt = $pdo->prepare('SELECT COUNT(*) FROM tour_files WHERE tour_id = :id');
+        $cntStmt->execute(['id' => $edit['id']]);
+        $editExtraCount = (int)$cntStmt->fetchColumn();
+    }
 }
 
 $tours = $pdo->query(
-    'SELECT t.*, c.name AS pg_connection_name
+    'SELECT t.*, c.name AS pg_connection_name,
+            (SELECT COUNT(*) FROM tour_files tf WHERE tf.tour_id = t.id) AS extra_files_count
      FROM tours t
      LEFT JOIN pg_connections c ON c.id = t.pg_connection_id
      ORDER BY t.name'
@@ -240,15 +290,19 @@ require __DIR__ . '/app/views/_head.php';
           <label class="form-check-label" for="isEnabled">Показывать на карте</label>
         </div>
         <div class="col-md-6">
-          <label class="form-label small">Файл модели (.ply / .splat / .ksplat)</label>
-          <input type="file" name="model_file" class="form-control" accept=".ply,.splat,.ksplat">
+          <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat)</label>
+          <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat" multiple>
+          <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно.</div>
           <?php if ($edit && $edit['file_path']): ?>
-            <div class="form-text">Текущий файл: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?>. Оставьте поле пустым, чтобы не менять.</div>
+            <div class="form-text">
+              Текущие файлы: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?><?= $editExtraCount ? ' + ещё ' . $editExtraCount : '' ?>.
+              Оставьте поле пустым, чтобы не менять.
+            </div>
           <?php endif; ?>
         </div>
         <div class="col-md-6">
-          <label class="form-label small">Или файл уже на сервере (uploads/tours/...), если залит по FTP</label>
-          <input type="text" name="existing_file" class="form-control" placeholder="model.ksplat">
+          <label class="form-label small">Или файл(ы) уже на сервере (uploads/tours/...), если залиты по FTP — по одному имени на строку</label>
+          <textarea name="existing_file" class="form-control" rows="3" placeholder="model_part1.ply&#10;model_part2.ply"></textarea>
         </div>
 
         <div class="col-12 d-flex gap-2">
@@ -272,7 +326,13 @@ require __DIR__ . '/app/views/_head.php';
             <tr>
               <td><?= htmlspecialchars($t['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($t['lat'] . ', ' . $t['lon'], ENT_QUOTES, 'UTF-8') ?></td>
-              <td><?= htmlspecialchars($t['file_path'] ?: '—', ENT_QUOTES, 'UTF-8') ?> <span class="text-secondary small">(<?= htmlspecialchars($t['file_format'], ENT_QUOTES, 'UTF-8') ?>)</span></td>
+              <td>
+                <?= htmlspecialchars($t['file_path'] ?: '—', ENT_QUOTES, 'UTF-8') ?>
+                <span class="text-secondary small">(<?= htmlspecialchars($t['file_format'], ENT_QUOTES, 'UTF-8') ?>)</span>
+                <?php if ((int)$t['extra_files_count'] > 0): ?>
+                  <span class="badge text-bg-secondary">+<?= (int)$t['extra_files_count'] ?></span>
+                <?php endif; ?>
+              </td>
               <td><?= $t['is_enabled'] ? '<span class="badge text-bg-success">да</span>' : '<span class="badge text-bg-secondary">нет</span>' ?></td>
               <td>
                 <?php if ($t['pg_synced_at']): ?>
@@ -281,6 +341,9 @@ require __DIR__ . '/app/views/_head.php';
                   <span class="badge text-bg-danger" title="<?= htmlspecialchars($t['pg_sync_error'], ENT_QUOTES, 'UTF-8') ?>">ошибка</span>
                 <?php else: ?>
                   <span class="badge text-bg-secondary">не выгружено</span>
+                <?php endif; ?>
+                <?php if ((int)$t['extra_files_count'] > 0): ?>
+                  <div class="form-text">В PostGIS уйдёт только основной файл, без +<?= (int)$t['extra_files_count'] ?></div>
                 <?php endif; ?>
                 <?php if ($pgConnections && $t['file_path']): ?>
                 <form method="post" action="/tours.php" class="d-flex gap-1 mt-1">

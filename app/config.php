@@ -8,13 +8,12 @@ require_once __DIR__ . '/lib/env.php';
 load_env();
 
 return [
-    'mysql' => [
-        'host'     => env('MYSQL_HOST', '127.0.0.1'),
-        'port'     => (int)env('MYSQL_PORT', 3306),
-        'dbname'   => env('MYSQL_DATABASE', 'gisdata'),
-        'user'     => env('MYSQL_USER', 'root'),
-        'password' => env('MYSQL_PASSWORD', ''),
-        'charset'  => env('MYSQL_CHARSET', 'utf8mb4'),
+    'pgsql' => [
+        'host'     => env('PGSQL_HOST', '127.0.0.1'),
+        'port'     => (int)env('PGSQL_PORT', 5432),
+        'dbname'   => env('PGSQL_DATABASE', 'gisdata'),
+        'user'     => env('PGSQL_USER', 'postgres'),
+        'password' => env('PGSQL_PASSWORD', '914999'),
     ],
 
     // Путь не меняем — путь к исходной базе South Net Reference Station

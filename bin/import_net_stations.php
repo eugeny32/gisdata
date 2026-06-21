@@ -79,21 +79,21 @@ $upsert = $pdo->prepare(
      VALUES
         (:external_id, :station_code, :name, :host, :port, :mountpoint, :ntrip_user, :ntrip_password,
          :lat, :lon, :ecef_x, :ecef_y, :ecef_z, :comment, :is_enabled)
-     ON DUPLICATE KEY UPDATE
-        station_code = VALUES(station_code),
-        name = VALUES(name),
-        host = VALUES(host),
-        port = VALUES(port),
-        mountpoint = VALUES(mountpoint),
-        ntrip_user = VALUES(ntrip_user),
-        ntrip_password = VALUES(ntrip_password),
-        lat = VALUES(lat),
-        lon = VALUES(lon),
-        ecef_x = VALUES(ecef_x),
-        ecef_y = VALUES(ecef_y),
-        ecef_z = VALUES(ecef_z),
-        comment = VALUES(comment),
-        is_enabled = VALUES(is_enabled)'
+     ON CONFLICT (external_id) DO UPDATE SET
+        station_code = EXCLUDED.station_code,
+        name = EXCLUDED.name,
+        host = EXCLUDED.host,
+        port = EXCLUDED.port,
+        mountpoint = EXCLUDED.mountpoint,
+        ntrip_user = EXCLUDED.ntrip_user,
+        ntrip_password = EXCLUDED.ntrip_password,
+        lat = EXCLUDED.lat,
+        lon = EXCLUDED.lon,
+        ecef_x = EXCLUDED.ecef_x,
+        ecef_y = EXCLUDED.ecef_y,
+        ecef_z = EXCLUDED.ecef_z,
+        comment = EXCLUDED.comment,
+        is_enabled = EXCLUDED.is_enabled'
 );
 
 $pdo->beginTransaction();
@@ -140,10 +140,10 @@ $pdo->commit();
 
 // Гарантируем строку статуса для каждой новой станции
 $pdo->exec(
-    'INSERT INTO station_status (station_id, status)
-     SELECT s.id, "unknown" FROM stations s
+    "INSERT INTO station_status (station_id, status)
+     SELECT s.id, 'unknown' FROM stations s
      LEFT JOIN station_status st ON st.station_id = s.id
-     WHERE st.station_id IS NULL'
+     WHERE st.station_id IS NULL"
 );
 
 log_line("Импортировано станций: $count, пропущено: $skipped");

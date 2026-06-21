@@ -34,17 +34,19 @@ if ($invite && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = 'Такой логин уже занят';
         } else {
             $pdo->beginTransaction();
-            $pdo->prepare(
+            $insertStmt = $pdo->prepare(
                 'INSERT INTO admins (login, password_hash, full_name, role, email, is_active)
-                 VALUES (:login, :password_hash, :full_name, :role, :email, 1)'
-            )->execute([
+                 VALUES (:login, :password_hash, :full_name, :role, :email, 1)
+                 RETURNING id'
+            );
+            $insertStmt->execute([
                 'login' => $login,
                 'password_hash' => hash('sha256', $password),
                 'full_name' => $invite['full_name'],
                 'role' => $invite['role'],
                 'email' => $invite['email'],
             ]);
-            $newId = (int)$pdo->lastInsertId();
+            $newId = (int)$insertStmt->fetchColumn();
             $pdo->prepare('UPDATE admin_invites SET used_at = NOW() WHERE id = :id')->execute(['id' => $invite['id']]);
             $pdo->commit();
 

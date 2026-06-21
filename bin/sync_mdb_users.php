@@ -42,20 +42,20 @@ $upsert = $pdo->prepare(
      VALUES
         (:id, :user_name, :gl_name, :user_password, :user_time, :puser_time,
          :scope_name, :mount_name, :device_type, :sn, :email, :contact_person, :telephone, :is_active)
-     ON DUPLICATE KEY UPDATE
-        user_name = VALUES(user_name),
-        gl_name = VALUES(gl_name),
-        user_password = VALUES(user_password),
-        user_time = VALUES(user_time),
-        puser_time = VALUES(puser_time),
-        scope_name = VALUES(scope_name),
-        mount_name = VALUES(mount_name),
-        device_type = VALUES(device_type),
-        sn = VALUES(sn),
-        email = VALUES(email),
-        contact_person = VALUES(contact_person),
-        telephone = VALUES(telephone),
-        is_active = VALUES(is_active)'
+     ON CONFLICT (id) DO UPDATE SET
+        user_name = EXCLUDED.user_name,
+        gl_name = EXCLUDED.gl_name,
+        user_password = EXCLUDED.user_password,
+        user_time = EXCLUDED.user_time,
+        puser_time = EXCLUDED.puser_time,
+        scope_name = EXCLUDED.scope_name,
+        mount_name = EXCLUDED.mount_name,
+        device_type = EXCLUDED.device_type,
+        sn = EXCLUDED.sn,
+        email = EXCLUDED.email,
+        contact_person = EXCLUDED.contact_person,
+        telephone = EXCLUDED.telephone,
+        is_active = EXCLUDED.is_active'
 );
 
 $pdo->beginTransaction();

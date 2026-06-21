@@ -52,10 +52,10 @@ $pdo = db();
 $stmt = $pdo->prepare(
     'INSERT INTO admins (login, password_hash, full_name, role, is_active)
      VALUES (:login, :hash, :full_name, :role, 1)
-     ON DUPLICATE KEY UPDATE
-        password_hash = VALUES(password_hash),
-        full_name = COALESCE(VALUES(full_name), full_name),
-        role = VALUES(role),
+     ON CONFLICT (login) DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
+        full_name = COALESCE(EXCLUDED.full_name, admins.full_name),
+        role = EXCLUDED.role,
         is_active = 1'
 );
 $stmt->execute([
