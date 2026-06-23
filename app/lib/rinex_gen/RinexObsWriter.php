@@ -46,15 +46,12 @@ require_once __DIR__ . '/GlonassNav.php';
 
 const RGEN_ELEVATION_MASK_DEG = 5.0;
 
-// ВРЕМЕННО для диагностики: реальный приёмник/антенна Trimble (точно есть в
-// базе TBC — это его собственное оборудование), вместо "CHC i50", чтобы
-// проверить, не из-за НЕРАСПОЗНАННОЙ антенны ли "Insufficient code
-// measurements" (TBC может не применять стандартные поправки антенны для
-// неизвестной модели и из-за этого считать измерения подозрительными).
-// ПОСЛЕ ПРОВЕРКИ ОБЯЗАТЕЛЬНО ВЕРНУТЬ "CHC i50" — пользователь должен
-// обрабатывать реальные станции именно с этим приёмником.
-const RGEN_RECEIVER_TYPE = 'TRIMBLE NETR9';
-const RGEN_ANTENNA_TYPE = 'TRM57971.00';
+// Диагностический тест с известным TBC приёмником/антенной (Trimble NETR9 /
+// TRM57971.00) дал ту же ошибку "Insufficient code measurements" — значит,
+// распознавание антенны тут ни при чём. Возвращаем "CHC i50" — реальные
+// станции пользователя именно с этим приёмником.
+const RGEN_RECEIVER_TYPE = 'CHC i50';
+const RGEN_ANTENNA_TYPE = 'CHC i50';
 
 function rgen_merge_ephemerides(array $dayFiles): array
 {
