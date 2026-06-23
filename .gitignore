@@ -1,4 +1,5 @@
 .env
+.ftp_deploy_marker
 app/config.local.php
 uploads/*
 !uploads/tours/
