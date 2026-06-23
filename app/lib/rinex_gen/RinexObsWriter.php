@@ -42,6 +42,18 @@ require_once __DIR__ . '/GlonassNav.php';
  *  - смещение часов ПРИЁМНИКА — случайное на сессию (умеренное, единицы
  *    км эквивалента), с медленным дрейфом;
  *  - небольшой шум измерений (код — дециметры, фаза — мм).
+ *
+ * ГЛАВНАЯ НАХОДКА (после долгой диагностики "Insufficient code measurements",
+ * не зависевшей ни от одной физической правки выше): пользователь предоставил
+ * настоящий RINEX-файл с приёмника CHC (тот же производитель, что "CHC i50")
+ * — и набор типов наблюдений у него СОВСЕМ не такой, как мы писали. У нас
+ * было 5 типов (C1/P1/P2/L1/L2). У настоящего CHC — 17: C1,L1,D1,S1 (L1),
+ * P2,L2,D2,S2 (L2/G2, без отдельного C2 для GPS/ГЛОНАСС — он всегда 0.000),
+ * плюс C5/L5/D5/S5/C7/L7/D7/S7 (L5/L7 — тоже 0.000 у GPS/ГЛОНАСС, реальные
+ * значения там только у Galileo/BeiDou, которых у нас нет). Если TBC сверяет
+ * заявленную модель приёмника с фактическим набором наблюдений — урезанный
+ * 5-типовый файл могло отбраковывать именно поэтому, всегда и независимо от
+ * качества самих данных. См. RGEN_RINEX2_OBS_TYPES.
  */
 
 const RGEN_ELEVATION_MASK_DEG = 5.0;
@@ -240,29 +252,52 @@ function rgen_header_line(string $data, string $label): string
     return str_pad(substr($data, 0, 60), 60) . str_pad($label, 20) . "\r\n";
 }
 
+/**
+ * Реальный набор типов наблюдений приёмника CHC (сверено байт-в-байт с
+ * настоящим файлом с приёмника CHC I73, тот же производитель/линейка, что
+ * "CHC i50" из заголовка) — 17 типов, а не 5, как было раньше! У нас были
+ * только C1/P1/P2/L1/L2 — если TBC сверяет ожидаемый набор наблюдений для
+ * заявленной модели приёмника, урезанный набор мог быть и причиной
+ * "Insufficient code measurements" всё это время. C2/C5/L5/D5/S5/C7/L7/D7/S7
+ * у настоящего CHC для GPS/ГЛОНАСС спутников всегда 0.000 (приёмник физически
+ * не трекает эти диапазоны для них — ненулевые они только у Galileo/BeiDou,
+ * которых у нас в генераторе нет) — это НЕ "нет данных" (пусто), а явный
+ * 0.000, как в реальном файле.
+ */
+const RGEN_RINEX2_OBS_TYPES = ['C1', 'L1', 'D1', 'S1', 'P2', 'L2', 'D2', 'S2', 'C2', 'C5', 'L5', 'D5', 'S5', 'C7', 'L7', 'D7', 'S7'];
+
+/** "# / TYPES OF OBSERV" — переносится на несколько строк, максимум 9 типов на строку (число — только на первой). */
+function rgen_build_obs_types_header_lines(array $types): string
+{
+    $out = '';
+    foreach (array_chunk($types, 9) as $i => $chunk) {
+        $prefix = $i === 0 ? sprintf('%6d', count($types)) : str_repeat(' ', 6);
+        $line = $prefix;
+        foreach ($chunk as $t) {
+            $line .= sprintf('%6s', $t);
+        }
+        $out .= rgen_header_line($line, '# / TYPES OF OBSERV');
+    }
+    return $out;
+}
+
 function rgen_build_rinex2_header(string $stationName, array $ecef, int $startUnix, float $intervalSec, bool $gpsOnly = false): string
 {
     $sysLabel = $gpsOnly ? 'G (GPS)' : 'M (MIXED)';
     $out = '';
-    // Версия 2.10, не 2.11 — точно как в реальном рабочем файле-эталоне.
-    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', 2.10, '', 'OBSERVATION DATA', $sysLabel), 'RINEX VERSION / TYPE');
+    // Версия 2.11 — как в реальном файле с приёмника CHC (не 2.10, как у
+    // более старого синтетического эталона SiGOGbcst).
+    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', 2.11, '', 'OBSERVATION DATA', $sysLabel), 'RINEX VERSION / TYPE');
     $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', 'gisdata-rinex-synth', 'gisdata', gmdate('Ymd His', time()) . ' UTC'), 'PGM / RUN BY / DATE');
-    $out .= rgen_header_line('Synthetic RINEX (artificial test data, not real observations)', 'COMMENT');
     $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NAME');
+    $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NUMBER');
     $out .= rgen_header_line(sprintf('%-20s%-40s', 'SYNTH', 'gisdata'), 'OBSERVER / AGENCY');
     $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', '1', RGEN_RECEIVER_TYPE, '1.0'), 'REC # / TYPE / VERS');
     $out .= rgen_header_line(sprintf('%-20s%-20s', '1', RGEN_ANTENNA_TYPE), 'ANT # / TYPE');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', $ecef[0], $ecef[1], $ecef[2]), 'APPROX POSITION XYZ');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', 0.0, 0.0, 0.0), 'ANTENNA: DELTA H/E/N');
     $out .= rgen_header_line(sprintf('%6d%6d', 1, 1), 'WAVELENGTH FACT L1/2');
-    // S1/S2 (SNR) пробовали добавить и здесь, но это означало перенос строк
-    // данных (RINEX 2.11 — максимум 5 значений на строку при >5 типов), и
-    // именно после этого TBC перестал даже ОТКРЫВАТЬ файл ("Cannot open
-    // file") — то есть полная регрессия (раньше хотя бы импортировался).
-    // Возвращаем 5 типов без переноса — историческая версия, которая
-    // стабильно импортировалась. S1/S2 оставлены только в RINEX3 (там
-    // перенос строк не нужен — гораздо ниже риск).
-    $out .= rgen_header_line(sprintf('%6d%6s%6s%6s%6s%6s', 5, 'C1', 'P1', 'P2', 'L1', 'L2'), '# / TYPES OF OBSERV');
+    $out .= rgen_build_obs_types_header_lines(RGEN_RINEX2_OBS_TYPES);
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
     // Сверено байт-в-байт с реальным рабочим файлом (RP1 2390.25O,
     // принимается TBC) — там метка времени именно "GPS", не "UTC". Моя
@@ -289,16 +324,22 @@ function rgen_format_sat_list_lines(string $epochPrefix, array $satIds): string
 
 function rgen_format_obs_line(array $values): string
 {
-    // LLI и SSI — ОБА пустые (сверено байт-в-байт с реальным рабочим
-    // файлом RP1 2390.25O: между значениями ровно 4 пробела — 2 пустых
-    // флага текущего значения + 2 ведущих пробела следующего F14.3, а не 3,
-    // как было при LLI='0'). Ровно 5 значений (без S1/S2 — см. примечание у
-    // "# / TYPES OF OBSERV" выше), поэтому перенос строк не нужен.
-    $line = '';
-    foreach ($values as $v) {
-        $line .= $v === null ? str_repeat(' ', 16) : sprintf('%14.3f', $v) . '  ';
+    // LLI и SSI — ОБА пустые (сверено байт-в-байт с реальными рабочими
+    // файлами: между значениями ровно 4 пробела — 2 пустых флага текущего
+    // значения + 2 ведущих пробела следующего F14.3, а не 3, как было при
+    // LLI='0'). 17 типов наблюдений (см. RGEN_RINEX2_OBS_TYPES) — максимум
+    // 5 значений на строку данных (RINEX 2.11), остаток переносится на
+    // следующую строку БЕЗ какого-либо префикса — именно так устроен
+    // настоящий файл с приёмника CHC (4 строки на спутник: 5+5+5+2).
+    $out = '';
+    foreach (array_chunk($values, 5) as $chunk) {
+        $line = '';
+        foreach ($chunk as $v) {
+            $line .= $v === null ? str_repeat(' ', 16) : sprintf('%14.3f', $v) . '  ';
+        }
+        $out .= $line . "\r\n";
     }
-    return $line . "\r\n";
+    return $out;
 }
 
 /**
@@ -334,9 +375,14 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         if (!$ranges) {
             continue;
         }
+        // Допплер (D1/D2) — численная производная дальности (доп. вызов на
+        // t+1с), раньше этих полей не было вообще. Знак — стандартное
+        // соглашение GPS: дальность растёт (спутник удаляется) => допплер
+        // отрицательный.
+        $rangesNext = rgen_compute_visible_ranges($eph, $ecef, (float)($t + 1));
         $clockOffsetM = $clockBiasM + $clockDriftMPerSec * ($t - $startUnix);
 
-        $epochRows = []; // satId => [C1, P1, P2, L1, L2]
+        $epochRows = []; // satId => [C1, L1, D1, S1, P2, L2, D2, S2, C2, C5, L5, D5, S5, C7, L7, D7, S7]
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
@@ -350,12 +396,20 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
             $ionoL2 = $ionoL1 * ($f1 / $f2) ** 2;
 
             [$ambN1, $ambN2] = $ambiguities[$sat];
-            $p1 = $range + $ionoL1 + $clockOffsetM + mt_rand(-300, 300) / 1000.0;
+            $c1 = $range + $ionoL1 + $clockOffsetM + mt_rand(-300, 300) / 1000.0;
             $p2 = $range + $ionoL2 + $clockOffsetM + mt_rand(-300, 300) / 1000.0;
             $l1 = ($range - $ionoL1 + $clockOffsetM) / $lambda1 + $ambN1 + mt_rand(-5, 5) / 1000.0;
             $l2 = ($range - $ionoL2 + $clockOffsetM) / $lambda2 + $ambN2 + mt_rand(-5, 5) / 1000.0;
-            // C1 = P1 (оба на L1 — C/A-код и P-код видят одну ионосферу).
-            $epochRows[$sat] = [$p1, $p1, $p2, $l1, $l2];
+            $s1 = rgen_snr_db($info['elevDeg']);
+            $s2 = rgen_snr_db($info['elevDeg']);
+            $rangeRate = isset($rangesNext[$sat]) ? $rangesNext[$sat]['range'] - $range : 0.0;
+            $d1 = -$rangeRate / $lambda1;
+            $d2 = -$rangeRate / $lambda2;
+            // C1 (без P1 вовсе — настоящий CHC его не выдаёт); C2/C5/L5/D5/
+            // S5/C7/L7/D7/S7 — реальные нули (приёмник физически не трекает
+            // эти диапазоны для GPS/ГЛОНАСС, см. примечание у
+            // RGEN_RINEX2_OBS_TYPES).
+            $epochRows[$sat] = [$c1, $l1, $d1, $s1, $p2, $l2, $d2, $s2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         }
 
         ksort($epochRows);

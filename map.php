@@ -39,7 +39,7 @@ require __DIR__ . '/app/views/_head.php';
     </div>
   </div>
 
-  <div class="modal fade" id="tourViewerModal" tabindex="-1">
+  <div class="modal fade" id="tourViewerModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-dialog-centered tour-viewer-dialog">
       <div class="modal-content">
         <div class="modal-header">

@@ -206,9 +206,10 @@ require __DIR__ . '/app/views/_head.php';
   <div class="card surface-card">
     <div class="card-body">
       <p class="text-secondary">
-        Создаёт искусственный RINEX OBS-файл (2.10 или 3.04, GPS + ГЛОНАСС, интервал 5 с) для заданных
+        Создаёт искусственный RINEX OBS-файл (2.11 или 3.04, GPS + ГЛОНАСС, интервал 5 с) для заданных
         неподвижных точек по их ECEF-координатам — с часами спутника/приёмника, тропосферой,
-        ионосферой и целочисленной неоднозначностью фазы. Приёмник/антенна — всегда "CHC i50".
+        ионосферой, допплером и целочисленной неоднозначностью фазы. Приёмник/антенна — всегда
+        "CHC i50", набор типов наблюдений в RINEX2 — как у настоящего приёмника CHC (17 типов).
         На выходе .zip: наблюдения по каждой станции (имя — классическое короткое RINEX2, например
         "P2632390.26O") + broadcast-эфемериды за период (подгружаются автоматически).
       </p>
@@ -238,7 +239,7 @@ require __DIR__ . '/app/views/_head.php';
         <div class="col-md-6">
           <label class="form-label small">Версия RINEX</label>
           <select name="rinex_version" class="form-select">
-            <option value="2" <?= $rinexVersion === '2' ? 'selected' : '' ?>>2.10 (классический, проверено — принимается)</option>
+            <option value="2" <?= $rinexVersion === '2' ? 'selected' : '' ?>>2.11 (классический, набор наблюдений как у CHC)</option>
             <option value="3" <?= $rinexVersion === '3' ? 'selected' : '' ?>>3.04 (мультисистемный, современный)</option>
           </select>
         </div>
