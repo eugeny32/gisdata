@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "Bash(curl -s --max-time 25 -L --location-trusted -c /tmp/c.txt -b /tmp/c.txt --user 'admin32:K7BLhQ+rrhQ$@c$' https://cddis.nasa.gov/archive/gnss/products/2424/COD0OPSRAP_20261720000_01D_05M_ORB.SP3.gz -o /tmp/sp3c.gz -w 'HTTP:%{http_code}\\\\n')",
+      "Bash(gunzip -c /tmp/sp3c.gz)",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/rtklibexplorer/RTKLIB/contents/test/data\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/search/repositories?q=rinex+3.04+sample+obs\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/rtklibexplorer/RTKLIB/contents/test/data/rinex\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/geospace-code/georinex/contents\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/geospace-code/georinex/contents/src/georinex/tests/data\")",
+      "Bash(curl -s --max-time 15 \"https://raw.githubusercontent.com/geospace-code/georinex/main/src/georinex/tests/data/minimal3.10o\" -o /tmp/minimal3.10o)",
+      "Bash(awk 'NR==5{print length\\($0\\); for\\(i=1;i<=length\\($0\\);i+=6\\){print i,\"-\",i+5,\":\",substr\\($0,i,6\\)}}' /tmp/minimal3.10o)",
+      "Bash(awk 'NR==5{print \"GPS pos:\", index\\($0,\"GPS\"\\)}' /tmp/minimal3.10o)",
+      "Bash(awk 'NR==5{print \"[\" substr\\($0,1,30\\) \"]\"; print \"[\" substr\\($0,31,13\\) \"]\"; print \"[\" substr\\($0,44,5\\) \"]\"; print \"[\" substr\\($0,49,3\\) \"]\"}' /tmp/minimal3.10o)",
+      "Bash(awk 'NR==5{print \"[\" substr\\($0,31,13\\) \"]\"; print \"[\" substr\\($0,44,6\\) \"]\"; print \"[\" substr\\($0,50,3\\) \"]\"}' /tmp/minimal3.10o)",
+      "Bash(awk 'NR==8{ *)",
+      "Bash(awk 'NR==7{ *)",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/search/repositories?q=rinex+3+sample+observation+data&sort=stars\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/search/repositories?q=topic:gnss+rinex+test+data\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/gnss-sdr/gnss-sdr/contents\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/nav-solutions/data/contents\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/nav-solutions/data/contents/OBS\")",
+      "Bash(curl -s --max-time 15 \"https://api.github.com/repos/nav-solutions/data/contents/OBS/V3\")",
+      "Bash(curl -s --max-time 20 \"https://raw.githubusercontent.com/nav-solutions/data/main/OBS/V3/ACOR00ESP_R_20213550000_01D_30S_MO.rnx\" -o /tmp/real_obs.rnx)",
+      "WebSearch",
+      "WebFetch(domain:help.fieldsystems.trimble.com)",
+      "WebFetch(domain:community.trimble.com)",
+      "WebFetch(domain:community.emlid.com)",
+      "Bash(ls \"D:\\\\5002\\\\5002_BITC_S\" 2>&1 | head -50)",
+      "Read(//d/5002/5002_BITC_S/**)",
+      "Bash(curl -s --max-time 25 -L --location-trusted -c /tmp/c.txt -b /tmp/c.txt --user 'admin32:K7BLhQ+rrhQ$@c$' https://cddis.nasa.gov/archive/gnss/data/daily/2024/brdc/BRDC00IGS_R_20240010000_01D_MN.rnx.gz -o /tmp/brdc.gz)",
+      "Bash(gunzip -c /tmp/brdc.gz)",
+      "Bash(node verify_orbit.js)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\admin"
+    ]
+  }
+}

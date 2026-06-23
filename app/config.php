@@ -40,4 +40,39 @@ return [
         'name'     => 'gisdata_sid',
         'lifetime' => 8 * 3600,
     ],
+
+    // Генератор искусственных RINEX (rinex_generate.php) — источники
+    // объединённых многосистемных navigation-файлов (broadcast ephemeris,
+    // нужны для расчёта орбит GPS/ГЛОНАСС). Пробуются по очереди, пока
+    // один не отдаст валидный файл.
+    // CDDIS проверен живьём и работает (HTTP Basic Auth логином/паролем
+    // Earthdata + переход по 302-редиректу на urs.earthdata.nasa.gov с тем
+    // же логином/паролем + cookie-сессия — см. rgen_http_get_authenticated()
+    // в NavFile.php). Нужен бесплatный аккаунт на urs.earthdata.nasa.gov,
+    // логин/пароль — в .env (CDDIS_EARTHDATA_USER/CDDIS_EARTHDATA_PASSWORD).
+    // BKG — НЕ проверен живьём (недоступен из среды разработки, не из
+    // реального сервера) — оставлен как анонимный (без логина) запасной
+    // вариант, на случай если CDDIS будет недоступен/сменит схему.
+    'rinex_synth' => [
+        'nav_url_templates' => [
+            'https://cddis.nasa.gov/archive/gnss/data/daily/{year}/brdc/BRDC00IGS_R_{year}{doy3}0000_01D_MN.rnx.gz',
+            'https://igs.bkg-ev.de/root_ftp/IGS/BRDC/{year}/{doy3}/BRDM00DLR_S_{year}{doy3}0000_01D_MN.rnx.gz',
+        ],
+        // Точные многосистемные эфемериды (SP3, CODE/AIUB) — кладутся в
+        // итоговый архив вместе с broadcast-файлом "для полноты" (не
+        // используются в собственном расчёте орбит этого генератора).
+        // Порядок — от самого точного к самому свежему: FIN (задержка
+        // ~2 недели, мультисистемный MGX) -> RAP (~1 день, "OPS"-вариант —
+        // MGX-rapid не публикуется, но проверено, что OPSRAP содержит и G,
+        // и R) -> ULT (почти реальное время, менее точный, тоже OPS).
+        // Официальный продукт IGS (IGS0OPSFIN) сюда не годится — проверено,
+        // он только GPS, без ГЛОНАСС.
+        'sp3_url_templates' => [
+            'https://cddis.nasa.gov/archive/gnss/products/{gpsweek}/COD0MGXFIN_{year}{doy3}0000_01D_05M_ORB.SP3.gz',
+            'https://cddis.nasa.gov/archive/gnss/products/{gpsweek}/COD0OPSRAP_{year}{doy3}0000_01D_05M_ORB.SP3.gz',
+            'https://cddis.nasa.gov/archive/gnss/products/{gpsweek}/COD0OPSULT_{year}{doy3}0000_02D_05M_ORB.SP3.gz',
+        ],
+        'earthdata_user' => env('CDDIS_EARTHDATA_USER'),
+        'earthdata_password' => env('CDDIS_EARTHDATA_PASSWORD'),
+    ],
 ];

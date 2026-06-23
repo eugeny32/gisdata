@@ -32,6 +32,10 @@ foreach ($rows as &$row) {
 
     $row['file_url'] = $fileUrls[0]; // обратная совместимость с однофайловыми турами
     $row['file_urls'] = $fileUrls;   // все файлы тура (для addSplatScenes в map.php)
+    // model_type — чтобы map.php знал, какой рендер-пайплайн использовать
+    // ДО начала загрузки: 'las' — облако точек (просмотр пока не реализован),
+    // иначе — 3DGS-сплат (GaussianSplats3D).
+    $row['model_type'] = $row['file_format'] === 'las' ? 'pointcloud' : 'splat';
     unset($row['file_path']);
 }
 

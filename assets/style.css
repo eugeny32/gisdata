@@ -3,6 +3,27 @@
   --sidebar-width: 250px;
 }
 
+/* Волнистый синий фон — оригинальный welcome_background.svg из pgAdmin 4
+   (PostgreSQL License — копирование/использование разрешено), взят с диска
+   из установленного pgAdmin (web/pgadmin/misc/workspaces/static/img/).
+   У самого pgAdmin он в CSS используется как no-repeat/center БЕЗ растяжения
+   (background-size не задан, т.е. auto — натуральный размер 800x282) —
+   "cover" тут исказил бы пропорции волн, поэтому используем "contain"
+   (вписываем целиком, без обрезки и без искажения, по аналогии с оригиналом,
+   адаптированной под фон на весь экран, а не маленькую панель, как в
+   pgAdmin). background-attachment: fixed — при скролле длинных таблиц волны
+   не "едут" вместе с контентом. Карточки/таблицы/сайдбар поверх него все с
+   непрозрачным фоном (см. .surface-card, .sidebar, .topbar ниже) —
+   читаемость не страдает. */
+body {
+  background-color: #0c0f14;
+  background-image: url('/assets/wave-bg.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-attachment: fixed;
+}
+
 /* --- App shell: sidebar + content --- */
 .app-shell {
   display: flex;
@@ -12,7 +33,12 @@
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
-  background: #161b22;
+  /* "Стекло" — полупрозрачный фон + небольшое размытие (легче, чем у
+     карточек ниже, чтобы меню оставалось четко читаемым, а не "мутным"). */
+  background: rgba(22, 27, 34, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-right: 1px solid rgba(255, 255, 255, .06);
   color: #cbd2d9;
   display: flex;
   flex-direction: column;
@@ -63,8 +89,11 @@
   align-items: center;
   gap: 8px;
   padding: 10px 20px;
-  border-bottom: 1px solid var(--bs-border-color);
-  background: var(--bs-body-bg);
+  border-bottom: 1px solid rgba(255, 255, 255, .06);
+  /* Та же "стеклянная" логика, что у .sidebar — топбар визуально часть меню. */
+  background: rgba(22, 27, 34, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -97,12 +126,12 @@
 }
 
 /* --- Login pages --- */
+/* Фон уже задан глобально на body (см. начало файла) — здесь только раскладка. */
 .login-page {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1f2933 0%, #2f6fed 100%);
 }
 .login-card {
   width: 100%;
@@ -127,12 +156,59 @@
   margin: 0 auto 1rem;
 }
 
+/* Спиннер загрузки 3D-вьювера (GaussianSplats3D) генерирует свои стили на
+   лету с цветом #07e8d6 (бирюзовый) прямо в JS — классы у него с числовым
+   суффиксом, который меняется при каждом новом вьювере (spinner0, spinner1,
+   ...), точечно через id не перебить. Кольцо-индикатор — единственный
+   элемент, у которого класс начинается на "spinner" и НЕ содержит
+   "Container" (контейнеры/подложка — это spinnerOuterContainerN,
+   spinnerContainerPrimaryN, spinnerContainerMinN), поэтому переопределяем
+   по этому признаку, специфичность выше, чем у их .spinnerN { ... }.
+   Видна и при загрузке point cloud, т.к. GaussianSplats3D.Viewer не
+   используется, но в map.php переиспользуется тот же импортированный THREE.
+*/
+[class^="spinner"]:not([class*="Container"]) {
+  background: var(--brand) !important;
+}
+
+/* Серая подложка-квадрат вокруг спиннера (spinnerContainerPrimaryN —
+   "развёрнутый" режим, spinnerContainerMinN — нижняя плашка) — тот же
+   LoadingSpinner.js, background-color: rgba(128,128,128,.75) + рамка
+   #666666 захардкожены инлайн-стилем. Убираем и то, и то. */
+[class*="spinnerContainerPrimary"],
+[class*="spinnerContainerMin"] {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+/* --- Индикаторы загрузки (прогресс-бар выгрузки файлов тура) — фирменный
+   синий, а не дефолтный/случайно зелёный --- */
+.progress-bar { background-color: var(--brand) !important; }
+
 /* --- Status pills --- */
-.status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; }
 .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.status-online  { background: #1f9d55; }
-.status-offline { background: #d64545; }
+.status-online  { background: #1b4d1f; } /* тёмно-зелёный */
+.status-offline { background: #6b1226; } /* бордовый */
 .status-unknown { background: #8a94a6; }
+
+/* --- Окно 3D-вьювера тура: не на весь экран, а 75% от размера окна
+   браузера, по центру — и тот же "стеклянный" фон, что у карточек на
+   остальных страницах (а не сплошной непрозрачный, как было раньше при
+   modal-fullscreen). За пределами модалки остаётся видна обычная страница
+   с волнистым фоном, как везде в кабинете. */
+.tour-viewer-dialog {
+  width: 75vw;
+  max-width: 75vw;
+  height: 75vh;
+}
+.tour-viewer-dialog .modal-content {
+  height: 100%;
+  background: rgba(27, 32, 40, 0.6);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
 
 /* --- Map --- */
 .map-card { border: none; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }
@@ -143,6 +219,17 @@
 .station-marker span { display: block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); }
 
 /* --- Cards / tables shared --- */
+/* Карточки — тоже "стекло", но более мутное/размытое, чем меню (.sidebar/
+   .topbar выше) — больше blur, чтобы блоки выглядели подложкой, а не просто
+   тонировкой. Правим сам .card, а не только .surface-card, чтобы эффект был
+   на всех карточках (map-card, login-card и т.д.), не задавая его на каждой
+   по отдельности. */
+.card {
+  background: rgba(27, 32, 40, 0.6);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
 .surface-card { border: none; border-radius: 16px; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }
 .table-clean th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #6b7280; border-top: none; }
 .table-clean td { vertical-align: middle; }

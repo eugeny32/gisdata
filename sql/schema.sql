@@ -175,11 +175,45 @@ CREATE TABLE IF NOT EXISTS tour_files (
   id          SERIAL PRIMARY KEY,
   tour_id     INT NOT NULL,
   file_path   VARCHAR(255) NOT NULL,
-  file_format VARCHAR(10) NOT NULL CHECK (file_format IN ('ply', 'splat', 'ksplat')),
+  file_format VARCHAR(10) NOT NULL CHECK (file_format IN ('ply', 'splat', 'ksplat', 'las')),
   sort_order  INT NOT NULL DEFAULT 0,
   CONSTRAINT fk_tour_file_tour FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_tour_files_tour ON tour_files (tour_id, sort_order);
+
+-- Чтобы добавить 'las' в существующую (уже созданную ранее) tours.file_format,
+-- именованного CHECK не было — Postgres сам назвал его по умолчанию
+-- <таблица>_<колонка>_check. Если этот ALTER упадёт с "constraint does not
+-- exist", узнайте реальное имя через \d tours (psql) и подставьте его.
+ALTER TABLE tours DROP CONSTRAINT IF EXISTS tours_file_format_check;
+ALTER TABLE tours ADD CONSTRAINT tours_file_format_check CHECK (file_format IN ('ply', 'splat', 'ksplat', 'las'));
+
+-- ---------------------------------------------------------------------------
+-- Слои и аннотации (точки/линии/полигоны), нарисованные пользователем прямо
+-- на 3D-модели тура в map.php. Координаты — в локальном пространстве модели
+-- (там же, где работает рейкастинг GaussianSplats3D), не геокоординаты.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tour_layers (
+  id          SERIAL PRIMARY KEY,
+  tour_id     INT NOT NULL,
+  name        VARCHAR(64) NOT NULL,
+  color       VARCHAR(7) NOT NULL DEFAULT '#ff3b30',
+  is_visible  SMALLINT NOT NULL DEFAULT 1,
+  sort_order  INT NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_layer_tour FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tour_annotations (
+  id          SERIAL PRIMARY KEY,
+  layer_id    INT NOT NULL,
+  geom_type   VARCHAR(10) NOT NULL CHECK (geom_type IN ('point', 'polyline', 'polygon')),
+  coordinates TEXT NOT NULL,   -- JSON [[x,y,z], ...] в локальном пространстве модели (после rotation)
+  label       VARCHAR(128) NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_annotation_layer FOREIGN KEY (layer_id) REFERENCES tour_layers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_layer ON tour_annotations (layer_id);
 
 -- ---------------------------------------------------------------------------
 -- Базовые станции — конфигурация подключения (NTRIP), создаётся вручную
