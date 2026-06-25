@@ -3,6 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/app/lib/auth.php';
 $user = require_login();
 $isAdmin = (current_admin()['role'] ?? null) === 'admin';
+$tourGroupsForMap = $isAdmin ? db()->query('SELECT id, name FROM tour_groups ORDER BY name')->fetchAll() : [];
 
 $pageTitle = 'Карта базовых станций';
 $pageIcon = 'bi-map';
@@ -39,6 +40,76 @@ require __DIR__ . '/app/views/_head.php';
     </div>
   </div>
 
+  <?php if ($isAdmin): ?>
+  <div id="mapContextMenu" class="d-none" style="position:absolute; z-index:1200; background:#1f232b; color:#fff; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); min-width:180px; overflow:hidden;">
+    <button type="button" id="mapContextAddTour" class="btn btn-sm w-100 text-start text-white" style="border-radius:0;">
+      <i class="bi bi-plus-circle"></i> Добавить объект
+    </button>
+  </div>
+
+  <div class="modal fade" id="quickAddTourModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Новый объект</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="quickAddTourForm" enctype="multipart/form-data">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="id" value="0">
+            <input type="hidden" name="lat" id="quickAddLat">
+            <input type="hidden" name="lon" id="quickAddLon">
+            <input type="hidden" name="is_enabled" value="1">
+            <div class="mb-2 small text-secondary">Координаты: <span id="quickAddCoordsLabel"></span></div>
+            <div class="mb-2">
+              <label class="form-label small">Название*</label>
+              <input type="text" name="name" class="form-control" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small">Описание</label>
+              <input type="text" name="description" class="form-control">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small">Группа</label>
+              <select name="group_id" id="quickAddGroupSelect" class="form-select">
+                <option value="">Без группы</option>
+                <?php foreach ($tourGroupsForMap as $g): ?>
+                  <option value="<?= (int)$g['id'] ?>"><?= htmlspecialchars($g['name'], ENT_QUOTES, 'UTF-8') ?></option>
+                <?php endforeach; ?>
+                <option value="new">+ Новая группа...</option>
+              </select>
+            </div>
+            <div class="mb-2 d-none" id="quickAddNewGroupWrap">
+              <label class="form-label small">Название новой группы</label>
+              <input type="text" name="new_group_name" id="quickAddNewGroupName" class="form-control">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat / .las)</label>
+              <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
+              <div class="form-text">.ply автоматически прогоняется через фильтр шума при сохранении.</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small">Или файл(ы) уже на сервере — по одному имени на строку</label>
+              <textarea name="existing_file" class="form-control" rows="2"></textarea>
+            </div>
+            <div class="d-none" id="quickAddProgressWrap">
+              <div class="progress" style="height: 18px">
+                <div class="progress-bar" id="quickAddProgressBar" style="width: 0%">0%</div>
+              </div>
+            </div>
+            <div id="quickAddError" class="alert alert-danger d-none mb-0 mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="quickAddSubmitBtn">Добавить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <?php endif; ?>
+
   <div class="modal fade" id="tourViewerModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-dialog-centered tour-viewer-dialog">
       <div class="modal-content">
@@ -46,7 +117,10 @@ require __DIR__ . '/app/views/_head.php';
           <h5 class="modal-title" id="tourViewerTitle">Тур</h5>
           <div class="d-flex align-items-center gap-2 ms-auto">
             <button type="button" class="btn btn-sm btn-outline-secondary" id="tourLayersBtn" title="Слои">
-              <i class="bi bi-layers"></i> Слои
+              <i class="bi bi-layers"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="tourCenterBtn" title="Центрировать">
+              <i class="bi bi-crosshair"></i>
             </button>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="tourHelpBtn" title="Управление мышью">
               <i class="bi bi-question-circle"></i>
@@ -86,9 +160,6 @@ require __DIR__ . '/app/views/_head.php';
           </div>
           <?php endif; ?>
 
-          <button type="button" class="btn btn-sm btn-outline-secondary position-absolute bottom-0 end-0 m-3" id="tourRotateBtn" style="z-index: 1100">
-            <i class="bi bi-arrow-clockwise"></i> Повернуть
-          </button>
           <div id="tourViewerContainer" style="width: 100%; height: 100%;"></div>
         </div>
       </div>
@@ -103,7 +174,7 @@ $extraScripts = '<script>const isAdminJs = ' . ($isAdmin ? 'true' : 'false') . '
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-    "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.6/build/gaussian-splats-3d.module.js",
+    "playcanvas": "https://cdn.jsdelivr.net/npm/playcanvas@2.20.0/build/playcanvas/src/index.js",
     "@loaders.gl/core": "https://cdn.jsdelivr.net/npm/@loaders.gl/core@4.3.0/+esm",
     "@loaders.gl/las": "https://cdn.jsdelivr.net/npm/@loaders.gl/las@4.3.0/+esm"
   }
@@ -111,10 +182,17 @@ $extraScripts = '<script>const isAdminJs = ' . ($isAdmin ? 'true' : 'false') . '
 </script>
 <script>
 const map = L.map('map').setView([55.75, 37.6], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap'
 }).addTo(map);
+// Esri World Imagery — бесплатный спутниковый слой без API-ключа (в отличие
+// от Google/Bing, у которых аккаунт и платный лимит обязательны).
+const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19,
+  attribution: 'Esri, Maxar, Earthstar Geographics',
+});
+L.control.layers({ 'Схема': osmLayer, 'Спутник': satelliteLayer }).addTo(map);
 
 const markers = new Map();
 const colors = { online: '#2ecc71', offline: '#e74c3c', unknown: '#95a5a6' };
@@ -163,7 +241,9 @@ function renderMarkers(stations) {
     const popup = `<b>${s.name}</b><br>${s.host}:${s.port} / ${s.station_code}<br>` +
       `Статус: <b>${s.status}</b><br>Последняя проверка: ${s.last_check_at ?? '—'}<br>` +
       `Последние данные: ${s.last_data_at ?? '—'}` +
-      (s.comment ? `<br>${s.comment}` : '');
+      (s.comment ? `<br>${s.comment}` : '') +
+      `<br><a href="/rinex.php?station=${encodeURIComponent(s.name)}" class="btn btn-sm btn-outline-primary mt-2" target="_blank">` +
+      `<i class="bi bi-folder2-open"></i> Запросить RINEX</a>`;
 
     if (markers.has(s.id)) {
       const m = markers.get(s.id);
@@ -228,6 +308,7 @@ function escapeAttr(s) {
 
 const tourDataById = {}; // {id: {urls: [...], modelType: 'splat'|'pointcloud'}}
 
+let tourMarkers = [];
 async function loadTours() {
   let data;
   try {
@@ -236,6 +317,13 @@ async function loadTours() {
   } catch (e) {
     return;
   }
+  // Снимаем старые маркеры перед перерисовкой — нужно, потому что теперь
+  // loadTours() может вызываться повторно (после добавления нового объекта
+  // через контекстное меню карты), не только один раз при загрузке страницы.
+  for (const m of tourMarkers) {
+    map.removeLayer(m);
+  }
+  tourMarkers = [];
   for (const t of data.tours) {
     tourDataById[t.id] = {
       urls: t.file_urls && t.file_urls.length ? t.file_urls : [t.file_url],
@@ -249,200 +337,136 @@ async function loadTours() {
       `<br><button type="button" class="btn btn-sm btn-outline-primary mt-2" ` +
       `onclick="openTour(${t.id}, '${escapeAttr(t.name)}')">` +
       `<i class="bi bi-camera-reels"></i> Открыть тур</button>`;
-    L.marker([t.lat, t.lon], { icon: tourMarkerIcon() }).addTo(map).bindPopup(popup);
+    tourMarkers.push(L.marker([t.lat, t.lon], { icon: tourMarkerIcon() }).addTo(map).bindPopup(popup));
   }
 }
 loadTours();
 
-// --- Просмотрщик 3DGS (mkkellogg/GaussianSplats3D, библиотеки грузятся лениво по клику) ---
-let tourViewer = null;
+// --- Контекстное меню карты (правый клик) — быстрое добавление объекта
+// (тура) прямо в точке клика, без перехода на отдельную страницу tours.php.
+if (isAdminJs) {
+  const contextMenu = document.getElementById('mapContextMenu');
+  let contextLatLng = null;
+
+  function hideContextMenu() {
+    contextMenu.classList.add('d-none');
+  }
+
+  map.on('contextmenu', (e) => {
+    e.originalEvent.preventDefault();
+    contextLatLng = e.latlng;
+    const mapContainer = document.getElementById('map');
+    const rect = mapContainer.getBoundingClientRect();
+    const pageRect = mapContainer.closest('.map-card').getBoundingClientRect();
+    contextMenu.style.left = (e.originalEvent.clientX - pageRect.left) + 'px';
+    contextMenu.style.top = (e.originalEvent.clientY - pageRect.top) + 'px';
+    contextMenu.classList.remove('d-none');
+  });
+  map.on('click movestart zoomstart', hideContextMenu);
+  document.addEventListener('click', (e) => {
+    if (!contextMenu.contains(e.target)) hideContextMenu();
+  });
+
+  const quickAddModalEl = document.getElementById('quickAddTourModal');
+  const quickAddModal = new bootstrap.Modal(quickAddModalEl);
+  const quickAddForm = document.getElementById('quickAddTourForm');
+  const quickAddGroupSelect = document.getElementById('quickAddGroupSelect');
+  const quickAddNewGroupWrap = document.getElementById('quickAddNewGroupWrap');
+
+  quickAddGroupSelect.addEventListener('change', () => {
+    quickAddNewGroupWrap.classList.toggle('d-none', quickAddGroupSelect.value !== 'new');
+  });
+
+  document.getElementById('mapContextAddTour').addEventListener('click', () => {
+    hideContextMenu();
+    if (!contextLatLng) return;
+    quickAddForm.reset();
+    quickAddNewGroupWrap.classList.add('d-none');
+    document.getElementById('quickAddError').classList.add('d-none');
+    document.getElementById('quickAddLat').value = contextLatLng.lat.toFixed(7);
+    document.getElementById('quickAddLon').value = contextLatLng.lng.toFixed(7);
+    document.getElementById('quickAddCoordsLabel').textContent =
+      contextLatLng.lat.toFixed(6) + ', ' + contextLatLng.lng.toFixed(6);
+    quickAddModal.show();
+  });
+
+  quickAddForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const submitBtn = document.getElementById('quickAddSubmitBtn');
+    const progressWrap = document.getElementById('quickAddProgressWrap');
+    const progressBar = document.getElementById('quickAddProgressBar');
+    const errorBox = document.getElementById('quickAddError');
+    errorBox.classList.add('d-none');
+    submitBtn.disabled = true;
+    progressWrap.classList.remove('d-none');
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
+
+    // Пустое <input type="file"> всё равно попадает в FormData как пустая
+    // часть multipart-тела — на некоторых хостингах это даёт 404 на весь
+    // запрос (та же причина, что уже была учтена в форме tours.php).
+    const rawData = new FormData(quickAddForm);
+    const data = new FormData();
+    for (const [key, value] of rawData.entries()) {
+      if (value instanceof File && value.name === '' && value.size === 0) continue;
+      data.append(key, value);
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/tours.php');
+    xhr.upload.onprogress = (evt) => {
+      if (evt.lengthComputable) {
+        const pct = Math.round((evt.loaded / evt.total) * 100);
+        progressBar.style.width = pct + '%';
+        progressBar.textContent = pct + '%';
+      }
+    };
+    xhr.onload = async () => {
+      submitBtn.disabled = false;
+      progressWrap.classList.add('d-none');
+      // tours.php при успехе делает редирект на /tours.php (302) — fetch/XHR
+      // сам следует за редиректом и вернёт 200 с HTML списка туров, а не
+      // ошибку; xhr.status здесь будет 200 и при успехе, и при ошибке
+      // валидации (та же страница с отрендеренным .alert-danger), поэтому
+      // отличаем по наличию .alert-danger в ответе, а не по статусу.
+      const match = xhr.responseText.match(/<div class="alert alert-danger">([\s\S]*?)<\/div>/);
+      if (match) {
+        errorBox.textContent = match[1].replace(/<[^>]+>/g, '').trim();
+        errorBox.classList.remove('d-none');
+        return;
+      }
+      quickAddModal.hide();
+      await loadTours();
+    };
+    xhr.onerror = () => {
+      submitBtn.disabled = false;
+      progressWrap.classList.add('d-none');
+      errorBox.textContent = 'Ошибка сети при отправке';
+      errorBox.classList.remove('d-none');
+    };
+    xhr.send(data);
+  });
+}
+
+// --- Унифицированный плеер тура на движке PlayCanvas — заменяет прежний
+// пайплайн THREE.js + @mkkellogg/gaussian-splats-3d (3DGS) и THREE.js +
+// @loaders.gl/las (точечные облака). Сам движок/камера/штурвал/загрузчики
+// теперь живут в собранном TS-бандле viewer/ (см. docs/CURRENT_STATE.md,
+// PR0) — здесь только глобальные переменные, которые ещё нужны секции
+// "Слои и рисование" ниже, и обращения к window.TourViewer (публичный API
+// бандла, см. viewer/README.md) вместо прежних прямых функций.
+//
+// НЕ перенесено: инструменты рисования аннотаций (точки/линии/полигоны) —
+// ниже, в разделе "Слои и рисование", код продолжает проверять
+// `tourViewer` (оставлен здесь объявленным, но никогда не присваивается),
+// поэтому весь этот функционал просто тихо не работает, пока для него не
+// будет сделан свой способ "попадания" в облако сплатов/точек под
+// PlayCanvas (готового публичного picking API под gsplat в движке нет).
 let pendingTourUrls = null;
 let pendingModelType = 'splat';
 let currentTourUrls = null;
 let currentTourId = null;
-let GaussianSplats3DModule = null;
-let tourLoadGeneration = 0;
-let pendingViewerDispose = null; // Promise текущей фоновой очистки старого вьювера (см. ниже)
-
-// --- Просмотрщик LAS-облаков точек (@loaders.gl/las) — отдельный рендер-пайплайн,
-// GaussianSplats3D.Viewer облака точек не рисует. Использует тот же
-// tourLoadGeneration, что и сплаты, чтобы гонка между двумя типами туров при
-// быстром закрытии/открытии модалки гасилась тем же механизмом.
-let pointCloudViewer = null; // {renderer, scene, camera, controls, frameId}
-let pointCloudLoaderModules = null;
-
-async function getLoadersGl() {
-  if (!pointCloudLoaderModules) {
-    const core = await import('@loaders.gl/core');
-    const las = await import('@loaders.gl/las');
-    pointCloudLoaderModules = { load: core.load, LASLoader: las.LASLoader };
-  }
-  return pointCloudLoaderModules;
-}
-
-function disposePointCloudViewer() {
-  if (!pointCloudViewer) return;
-  const v = pointCloudViewer;
-  pointCloudViewer = null;
-  cancelAnimationFrame(v.frameId);
-  v.controls.dispose();
-  v.renderer.dispose();
-}
-
-async function loadPointCloudScene(urls) {
-  hideViewerError();
-  tourLoadGeneration++;
-  const myGeneration = tourLoadGeneration;
-  if (pendingViewerDispose) {
-    await pendingViewerDispose;
-  }
-  if (myGeneration !== tourLoadGeneration) return;
-
-  disposePointCloudViewer();
-  if (tourViewer) {
-    const oldViewer = tourViewer;
-    tourViewer = null;
-    await oldViewer.dispose().catch(() => { /* noop */ });
-  }
-
-  const container = document.getElementById('tourViewerContainer');
-  container.innerHTML = '';
-  const canvasHost = document.createElement('div');
-  canvasHost.style.width = '100%';
-  canvasHost.style.height = '100%';
-  container.appendChild(canvasHost);
-
-  const overlay = document.createElement('div');
-  overlay.className = 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center text-secondary';
-  overlay.style.zIndex = '1050';
-  overlay.style.background = 'var(--bs-body-bg)';
-  overlay.textContent = 'Загрузка облака точек...';
-  container.appendChild(overlay);
-
-  try {
-    const THREE = await getThree();
-    const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
-    const { load, LASLoader } = await getLoadersGl();
-    if (myGeneration !== tourLoadGeneration) { overlay.remove(); return; }
-
-    const scene = new THREE.Scene();
-    const width = canvasHost.clientWidth || 1;
-    const height = canvasHost.clientHeight || 1;
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 10000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
-    canvasHost.appendChild(renderer.domElement);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-
-    // Центр и масштаб считаем по bounding box первого файла — реальные LAS
-    // координаты обычно абсолютные геодезические метры (могут быть в
-    // миллионах от нуля), без вычитания центра получим артефакты точности
-    // float32 и камеру "внутри" облака без ориентиров.
-    let centerOffset = null;
-    let maxExtent = 1;
-
-    for (const url of urls) {
-      if (myGeneration !== tourLoadGeneration) break;
-      const data = await load(url, LASLoader);
-      const posAttr = data.attributes && data.attributes.POSITION;
-      if (!posAttr) continue;
-      const pos = posAttr.value;
-      const count = pos.length / 3;
-
-      if (!centerOffset) {
-        let minX = Infinity, minY = Infinity, minZ = Infinity;
-        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-        for (let i = 0; i < count; i++) {
-          const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-          if (x < minX) minX = x; if (x > maxX) maxX = x;
-          if (y < minY) minY = y; if (y > maxY) maxY = y;
-          if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-        }
-        centerOffset = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: (minZ + maxZ) / 2 };
-        maxExtent = Math.max((maxX - minX) / 2, (maxY - minY) / 2, (maxZ - minZ) / 2, 1);
-      }
-
-      const positions = new Float32Array(count * 3);
-      // LAS обычно Z-up, наша сцена (как и у GaussianSplats3D) — Y-up:
-      // (x,y,z) -> (x, z, -y), координаты центрируем по bbox первого файла.
-      for (let i = 0; i < count; i++) {
-        const x = pos[i * 3] - centerOffset.x;
-        const y = pos[i * 3 + 1] - centerOffset.y;
-        const z = pos[i * 3 + 2] - centerOffset.z;
-        positions[i * 3] = x;
-        positions[i * 3 + 1] = z;
-        positions[i * 3 + 2] = -y;
-      }
-
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-      // COLOR_0 у LASLoader — RGBA по 16 бит/канал (см. документацию
-      // @loaders.gl/las); если в установленной версии формат иной, цвет
-      // выйдет некорректным, но геометрия всё равно отрисуется.
-      const colorAttr = data.attributes.COLOR_0 && data.attributes.COLOR_0.value;
-      let material;
-      if (colorAttr) {
-        const size = data.attributes.COLOR_0.size || 4;
-        const colors = new Float32Array(count * 3);
-        for (let i = 0; i < count; i++) {
-          colors[i * 3] = colorAttr[i * size] / 65535;
-          colors[i * 3 + 1] = colorAttr[i * size + 1] / 65535;
-          colors[i * 3 + 2] = colorAttr[i * size + 2] / 65535;
-        }
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        material = new THREE.PointsMaterial({ size: Math.max(maxExtent / 500, 0.005), vertexColors: true });
-      } else {
-        material = new THREE.PointsMaterial({ size: Math.max(maxExtent / 500, 0.005), color: 0xcccccc });
-      }
-
-      scene.add(new THREE.Points(geometry, material));
-    }
-
-    if (myGeneration !== tourLoadGeneration) {
-      overlay.remove();
-      renderer.dispose();
-      controls.dispose();
-      return;
-    }
-
-    camera.far = maxExtent * 20;
-    camera.updateProjectionMatrix();
-    camera.position.set(0, maxExtent, maxExtent * 2);
-    controls.target.set(0, 0, 0);
-    controls.update();
-
-    function animate() {
-      if (!pointCloudViewer) return;
-      pointCloudViewer.frameId = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-
-    pointCloudViewer = { renderer, scene, camera, controls, frameId: 0 };
-    overlay.remove();
-    animate();
-  } catch (e) {
-    overlay.remove();
-    showViewerError('Не удалось загрузить облако точек: ' + String(e));
-  }
-}
-
-// Кватернионы [x,y,z,w] — перебираем поворотами по 90°/180° вокруг разных
-// осей, пока модель не встанет правильно (кнопка «Повернуть» в шапке модалки).
-const rotationPresets = [
-  [-0.7071, 0, 0, 0.7071],      // -90° X — подобрано опытным путём, подходит для текущих моделей
-  [0, 0, 0, 1],                 // без поворота
-  [1, 0, 0, 0],                 // 180° X
-  [0, 0, 1, 0],                 // 180° Z
-  [0, 1, 0, 0],                 // 180° Y
-  [0.7071, 0, 0, 0.7071],       // 90° X
-  [0, 0, 0.7071, 0.7071],       // 90° Z
-  [0, 0, -0.7071, 0.7071],      // -90° Z
-];
-let rotationIndex = 0; // дефолт — рабочий вариант, кнопка «Повернуть» — если у конкретной модели потребуется другой
+let tourViewer = null; // см. комментарий выше — умышленно всегда null
 
 const tourModalEl = document.getElementById('tourViewerModal');
 const tourModal = new bootstrap.Modal(tourModalEl);
@@ -455,160 +479,6 @@ function openTour(tourId, name) {
   currentTourId = tourId;
   document.getElementById('tourExportLink').href = '/tour_export.php?tour_id=' + tourId;
   tourModal.show();
-}
-
-// addSplatScene() с progressiveLoad:true иногда резолвит свой промис раньше,
-// чем сам Viewer внутри сбрасывает флаг "идёт загрузка/выгрузка" (файл
-// докачивается в фоне) — следующий addSplatScene() в цикле по нескольким
-// файлам тура тогда падает с "Cannot add splat scene while another load or
-// unload is already in progress", хотя по факту нужно просто чуть подождать.
-// Библиотека не отдаёт публичного способа спросить "уже можно?", поэтому
-// просто повторяем попытку с паузой, пока флаг не снимется сам.
-async function addSplatSceneWithRetry(viewer, url, options, isStillCurrent) {
-  const maxAttempts = 50;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (!isStillCurrent()) return;
-    try {
-      await viewer.addSplatScene(url, options);
-      return;
-    } catch (e) {
-      const isBusy = /already in progress/i.test(String(e && e.message ? e.message : e));
-      if (!isBusy || attempt === maxAttempts - 1) {
-        throw e;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-  }
-}
-
-// Ошибка загрузки рисуется отдельным оверлеем поверх всего модал-боди
-// (а не внутри tourViewerContainer.innerHTML), чтобы её было видно независимо
-// от того, в каком состоянии остался канвас вьювера/point cloud-сцены —
-// раньше сообщение могло потеряться за уже отрендеренной моделью.
-function showViewerError(message) {
-  hideViewerError();
-  const body = document.querySelector('#tourViewerModal .modal-body');
-  const overlay = document.createElement('div');
-  overlay.id = 'tourViewerError';
-  overlay.className = 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center p-3';
-  overlay.style.zIndex = '2000';
-  overlay.style.background = 'rgba(0,0,0,.6)';
-  overlay.innerHTML = '<div class="alert alert-danger mb-0" style="max-width: 600px;">' + escapeHtml(message) + '</div>';
-  body.appendChild(overlay);
-}
-
-function hideViewerError() {
-  const existing = document.getElementById('tourViewerError');
-  if (existing) existing.remove();
-}
-
-async function loadTourScene(urls, rotation) {
-  hideViewerError();
-  // Счётчик поколений — если loadTourScene вызовут повторно (например,
-  // два клика по "Повернуть" подряд) до того, как предыдущий вызов
-  // закончил свой цикл addSplatScene(), старый цикл должен прерваться,
-  // а не продолжать дёргать viewer, который уже заменён новым вызовом.
-  const myGeneration = ++tourLoadGeneration;
-  const container = document.getElementById('tourViewerContainer');
-
-  // Если модалку только что закрыли (hidden.bs.modal), там уже мог запуститься
-  // фоновый dispose() старого вьювера, а tourViewer уже обнулён — без этого
-  // ожидания мы создали бы новый вьювер ДО того, как библиотека внутри сняла
-  // у себя флаг "идёт загрузка/выгрузка", и addSplatScene() упал бы с
-  // "Cannot add splat scene while another load or unload is already in progress".
-  if (pendingViewerDispose) {
-    try { await pendingViewerDispose; } catch (e) { /* noop */ }
-  }
-
-  if (tourViewer) {
-    const oldViewer = tourViewer;
-    tourViewer = null;
-    try {
-      // dispose() асинхронный и сам чистит DOM внутри container — нужно
-      // дождаться его завершения, иначе наш innerHTML ниже подменит узлы
-      // раньше, и внутренняя очистка вьювера упадёт на removeChild.
-      await oldViewer.dispose();
-    } catch (e) { /* noop — гонка при очистке не критична */ }
-  }
-  container.innerHTML = '';
-  container.style.position = 'relative';
-
-  // Канвас вьювера и оверлей "Загрузка..." — отдельные слои. Оверлей нужен
-  // только на момент инициализации вьювера/импорта библиотек, дальше сплаты
-  // проявляются прямо в канвасе по мере загрузки файла (progressiveLoad).
-  const canvasHost = document.createElement('div');
-  canvasHost.style.width = '100%';
-  canvasHost.style.height = '100%';
-  container.appendChild(canvasHost);
-
-  const overlay = document.createElement('div');
-  overlay.className = 'position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center text-secondary';
-  overlay.style.zIndex = '1050';
-  overlay.style.background = 'var(--bs-body-bg)';
-  overlay.textContent = 'Загрузка модели...';
-  container.appendChild(overlay);
-
-  try {
-    if (!GaussianSplats3DModule) {
-      GaussianSplats3DModule = await import('@mkkellogg/gaussian-splats-3d');
-    }
-    const viewer = new GaussianSplats3DModule.Viewer({
-      rootElement: canvasHost,
-      cameraUp: [0, 1, 0],
-      // На обычном shared-хостинге страница не отдаётся с заголовками
-      // Cross-Origin-Opener-Policy/Cross-Origin-Embedder-Policy (это сломало
-      // бы загрузку тайлов карты и CDN-скриптов), поэтому SharedArrayBuffer
-      // недоступен — отключаем его использование в воркере сортировки.
-      sharedMemoryForWorkers: false,
-      // Наши модели — это десятки/сотни миллионов сплатов из реальных
-      // фотограмметрических сканов (файлы по несколько ГБ), не демо-сцены.
-      // Без этих настроек на слабом/среднем GPU камера дёргается при
-      // вращении — пересортировка такого объёма точек каждый кадр слишком
-      // дорогая. Жертвуем качеством цвета/АА ради стабильного FPS.
-      dynamicScene: false,            // сцена статична — не пересчитывать то, что не меняется
-      sphericalHarmonicsDegree: 0,    // меньше данных на сплат (без view-dependent цвета)
-      // halfPrecisionCovariancesOnGPU: true — убрано: на реальных сканах
-      // (не демо-данных) часть сплатов даёт ковариацию вне диапазона half
-      // float, отсюда спам "Value out of range" в консоли и потеря точности
-      // у части точек. Эффект на FPS был не критичен по сравнению с
-      // dynamicScene/sphericalHarmonicsDegree, жертвовать точностью не стоит.
-      freeIntermediateSplatData: true,
-      antialiased: false,
-      ignoreDevicePixelRatio: true,   // не рендерить в полное разрешение Retina/HiDPI
-    });
-    tourViewer = viewer;
-    // Запускаем рендер-цикл сразу и сразу убираем оверлей — дальше сплаты
-    // будут проявляться по мере загрузки файлов.
-    viewer.start();
-    overlay.remove();
-    // Слои/аннотации уже могли быть подгружены параллельно (fetchLayers() в
-    // shown.bs.modal) — отрисовываем их в сцену сразу, не дожидаясь полной
-    // загрузки самой модели.
-    renderAllLayerObjects();
-    // ВАЖНО: progressiveLoad официально поддерживается только у addSplatScene()
-    // (одиночная загрузка), но не у addSplatScenes() (пакетная) — при пакетной
-    // загрузке рендер не начинался бы, пока не докачаются ВСЕ файлы. Поэтому
-    // несколько файлов одного тура грузим по очереди через addSplatScene().
-    // Используем локальную переменную viewer (не глобальный tourViewer) и
-    // проверку поколения — если за время await тур переоткрыли/повернули
-    // снова, этот цикл должен молча прекратиться, а не лезть в новый viewer.
-    //
-    // progressiveLoad включаем ТОЛЬКО когда файл один: при нескольких файлах
-    // внутренний флаг "идёт загрузка" у Viewer на практике не снимается даже
-    // после ретраев (addSplatSceneWithRetry не спасает — ошибка вылетает и
-    // через 5+ секунд), т.е. это не гонка, а реальная несовместимость
-    // progressiveLoad с последовательной пакетной загрузкой нескольких файлов
-    // в этой версии библиотеки. Без progressiveLoad каждый addSplatScene()
-    // надёжно дожидается полной загрузки файла перед тем, как резолвить промис.
-    const useProgressive = urls.length === 1;
-    for (const u of urls) {
-      if (myGeneration !== tourLoadGeneration) return;
-      await addSplatSceneWithRetry(viewer, u, { rotation: rotation, progressiveLoad: useProgressive }, () => myGeneration === tourLoadGeneration);
-    }
-  } catch (e) {
-    overlay.remove();
-    showViewerError('Не удалось загрузить просмотрщик: ' + String(e));
-  }
 }
 
 // --- Слои и рисование на 3D-модели тура (точки/линии/полигоны + экспорт DXF) ---
@@ -648,8 +518,8 @@ function buildAnnotationObject(THREE, anno, color) {
 }
 
 // Рендерит уже загруженные tourLayersData как THREE-объекты в сцене вьювера.
-// Вызывается из loadTourScene() сразу после создания viewer — до этого
-// момента tourViewer.threeScene ещё не существует.
+// tourViewer всегда null (см. комментарий выше движка) — пока инструмент
+// рисования не перенесён на PlayCanvas, это тихий no-op.
 async function renderAllLayerObjects() {
   if (!tourViewer || !tourViewer.threeScene) return;
   const THREE = await getThree();
@@ -717,18 +587,12 @@ async function fetchLayers() {
   await renderAllLayerObjects();
 }
 
-// Рейкастинг на сплаты — см. план в serene-wishing-hickey.md: API не
-// документирован официально, основан на чтении исходников Viewer.js текущей
-// версии библиотеки. Если имена свойств в установленной версии другие —
-// упадёт в catch, и рисование просто не будет находить точку под курсором
-// (об этом будет видно сообщение в консоли браузера).
+// Рейкастинг на сплаты — см. план в serene-wishing-hickey.md. Написан под
+// GaussianSplats3D.Raycaster; tourViewer теперь всегда null (движок —
+// PlayCanvas), поэтому функция всегда возвращает null без ошибок —
+// инструменты рисования тихо не работают до отдельного переноса picking'а
+// на PlayCanvas.
 async function pickPointOnModel(clientX, clientY) {
-  // GaussianSplats3D.Raycaster существует только как внутренний класс
-  // библиотеки — в публичных экспортах CDN-сборки (build/*.module.js) его
-  // нет (проверено по исходникам пакета на GitHub), поэтому
-  // `new GaussianSplats3DModule.Raycaster()` падает с "is not a constructor".
-  // Но сам Viewer создаёт такой инстанс при инициализации и хранит его в
-  // публичном свойстве `viewer.raycaster` — берём готовый, без своего импорта.
   if (!tourViewer || !tourViewer.camera || !tourViewer.splatMesh || !tourViewer.raycaster) return null;
   const THREE = await getThree();
   const container = document.getElementById('tourViewerContainer');
@@ -845,33 +709,27 @@ tourModalEl.addEventListener('shown.bs.modal', () => {
   document.getElementById('tourMouseHelp').classList.remove('d-none');
   document.getElementById('tourLayersPanel').classList.add('d-none');
   setDrawingTool(null);
+  // Рисование/слои поверх модели сделаны под рейкастинг GaussianSplats3D,
+  // которого в PlayCanvas нет (см. комментарий у движка выше) — прячем
+  // тулбар для ОБОИХ типов моделей, пока не перенесён picking. Кнопка
+  // центрирования, наоборот, теперь полезна для обоих типов.
   const toolbar = document.getElementById('tourDrawToolbar');
-  const rotateBtn = document.getElementById('tourRotateBtn');
-  const isPointCloud = pendingModelType === 'pointcloud';
-  // Рисование/слои поверх модели и пресеты поворота сделаны под рейкастинг
-  // GaussianSplats3D — для point cloud своего рейкастинга/поворота нет
-  // (свободное вращение камеры уже даёт OrbitControls), поэтому прячем.
-  if (toolbar) toolbar.classList.toggle('d-none', isPointCloud);
-  rotateBtn.classList.toggle('d-none', isPointCloud);
+  if (toolbar) toolbar.classList.add('d-none');
+  document.getElementById('tourCenterBtn').classList.remove('d-none');
   fetchLayers();
   if (!pendingTourUrls) return;
   currentTourUrls = pendingTourUrls;
+  const modelType = pendingModelType;
   pendingTourUrls = null;
-  if (isPointCloud) {
-    loadPointCloudScene(currentTourUrls);
-  } else {
-    loadTourScene(currentTourUrls, rotationPresets[rotationIndex]);
-  }
+  window.TourViewer.load(currentTourUrls, modelType);
 });
 
-document.getElementById('tourRotateBtn').addEventListener('click', () => {
-  if (!currentTourUrls || pendingModelType === 'pointcloud') return;
-  rotationIndex = (rotationIndex + 1) % rotationPresets.length;
-  loadTourScene(currentTourUrls, rotationPresets[rotationIndex]);
+document.getElementById('tourCenterBtn').addEventListener('click', () => {
+  window.TourViewer.recenter();
 });
 
 tourModalEl.addEventListener('hidden.bs.modal', () => {
-  hideViewerError();
+  window.TourViewer.hideError();
   currentTourUrls = null;
   currentTourId = null;
   tourLayersData = [];
@@ -881,26 +739,10 @@ tourModalEl.addEventListener('hidden.bs.modal', () => {
   drawingTool = null;
   drawingPoints = [];
   drawingPreviewLine = null;
-  if (pointCloudViewer) {
-    disposePointCloudViewer();
-    document.getElementById('tourViewerContainer').innerHTML = '';
-  }
-  if (tourViewer) {
-    const oldViewer = tourViewer;
-    tourViewer = null;
-    // Не await здесь — закрытие модалки не должно блокироваться, но и
-    // следующий loadTourScene() не должен стартовать раньше времени, поэтому
-    // публикуем промис в pendingViewerDispose (см. loadTourScene выше).
-    pendingViewerDispose = oldViewer.dispose()
-      .catch(() => { /* noop */ })
-      .finally(() => {
-        pendingViewerDispose = null;
-        document.getElementById('tourViewerContainer').innerHTML = '';
-      });
-  } else {
-    document.getElementById('tourViewerContainer').innerHTML = '';
-  }
+  window.TourViewer.dispose();
+  document.getElementById('tourViewerContainer').innerHTML = '';
 });
 </script>
+<script type="module" src="/assets/viewer/tour-viewer.js"></script>
 HTML;
 require __DIR__ . '/app/views/_foot.php';
