@@ -23,6 +23,23 @@ function tour_copc_url(string $filePath, string $uploadDir): ?string
     return tour_file_url($filePath . '.copc.laz');
 }
 
+// Та же логика для PLY -> SOG/коллайдер (PR5, см. bin/process_splat_transforms.php).
+function tour_sog_url(string $filePath, string $uploadDir): ?string
+{
+    if (!is_file($uploadDir . $filePath . '.sog')) {
+        return null;
+    }
+    return tour_file_url($filePath . '.sog');
+}
+
+function tour_collision_url(string $filePath, string $uploadDir): ?string
+{
+    if (!is_file($uploadDir . $filePath . '.collision.glb')) {
+        return null;
+    }
+    return tour_file_url($filePath . '.collision.glb');
+}
+
 $uploadDir = realpath(__DIR__ . '/../uploads/tours') . '/';
 
 $pdo = db();
@@ -51,6 +68,16 @@ foreach ($rows as &$row) {
     // для model_type === 'pointcloud', для сплатов всегда null).
     $row['copc_urls'] = array_map(
         fn($p) => tour_copc_url($p, $uploadDir),
+        $filePaths
+    );
+    // sog_urls/collision_urls — параллельные массивы, актуальны только для
+    // model_type === 'splat' (для LAS всегда null).
+    $row['sog_urls'] = array_map(
+        fn($p) => tour_sog_url($p, $uploadDir),
+        $filePaths
+    );
+    $row['collision_urls'] = array_map(
+        fn($p) => tour_collision_url($p, $uploadDir),
         $filePaths
     );
     // model_type — чтобы map.php знал, какой рендер-пайплайн использовать

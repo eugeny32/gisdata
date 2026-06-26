@@ -183,8 +183,9 @@ require __DIR__ . '/app/views/_head.php';
               <select class="form-select form-select-sm" id="tourSettingNavMode">
                 <option value="orbit">Орбита (вокруг модели)</option>
                 <option value="fly">Полёт (свободная камера, WASD)</option>
+                <option value="walk">Прогулка (со столкновениями)</option>
               </select>
-              <div class="small text-secondary">Полёт: левая кнопка — поворот, правая кнопка — сдвиг в стороны (как мышью, так и WASD), Space/Shift — вверх/вниз.</div>
+              <div class="small text-secondary">Полёт/прогулка: левая кнопка — поворот, правая кнопка — сдвиг в стороны (как мышью, так и WASD), Space/Shift — вверх/вниз. Прогулка останавливается перед препятствием — доступна только для сплат-туров с готовым коллайдером, иначе работает как обычный полёт.</div>
             </div>
             <div class="mb-2">
               <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
@@ -388,6 +389,9 @@ async function loadTours() {
       urls: t.file_urls && t.file_urls.length ? t.file_urls : [t.file_url],
       modelType: t.model_type || 'splat',
       copcUrls: t.copc_urls || [],
+      sogUrls: t.sog_urls || [],
+      // Коллайдер — только у первого файла тура (как и центрирование).
+      collisionUrl: (t.collision_urls && t.collision_urls[0]) || null,
     };
     const typeBadge = t.model_type === 'pointcloud'
       ? '<span class="badge text-bg-info">Point Cloud</span>'
@@ -525,6 +529,8 @@ if (isAdminJs) {
 let pendingTourUrls = null;
 let pendingModelType = 'splat';
 let pendingCopcUrls = [];
+let pendingSogUrls = [];
+let pendingCollisionUrl = null;
 let currentTourUrls = null;
 let currentTourId = null;
 let tourViewer = null; // см. комментарий выше — умышленно всегда null
@@ -538,6 +544,8 @@ function openTour(tourId, name) {
   pendingTourUrls = data.urls;
   pendingModelType = data.modelType;
   pendingCopcUrls = data.copcUrls || [];
+  pendingSogUrls = data.sogUrls || [];
+  pendingCollisionUrl = data.collisionUrl || null;
   currentTourId = tourId;
   document.getElementById('tourExportLink').href = '/tour_export.php?tour_id=' + tourId;
   tourModal.show();
@@ -752,8 +760,7 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingNear').value = s.nearClip;
   document.getElementById('tourSettingFar').value = s.farClip;
   document.getElementById('tourSettingProjection').value = s.projection;
-  // 'walk' пока не предлагается в UI (PR5) — отображаем как 'fly'.
-  document.getElementById('tourSettingNavMode').value = s.navigationMode === 'orbit' ? 'orbit' : 'fly';
+  document.getElementById('tourSettingNavMode').value = s.navigationMode;
   document.getElementById('tourSettingSensitivity').value = s.orbitSensitivity;
   document.getElementById('tourSettingSensitivityValue').textContent = s.orbitSensitivity;
   document.getElementById('tourSettingZoomSpeed').value = s.zoomSpeed;
@@ -853,8 +860,10 @@ tourModalEl.addEventListener('shown.bs.modal', () => {
   currentTourUrls = pendingTourUrls;
   const modelType = pendingModelType;
   const copcUrls = pendingCopcUrls;
+  const sogUrls = pendingSogUrls;
+  const collisionUrl = pendingCollisionUrl;
   pendingTourUrls = null;
-  window.TourViewer.load(currentTourUrls, modelType, copcUrls);
+  window.TourViewer.load(currentTourUrls, modelType, copcUrls, sogUrls, collisionUrl);
 });
 
 document.getElementById('tourCenterBtn').addEventListener('click', () => {

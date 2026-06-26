@@ -11,7 +11,13 @@ import type { ModelType } from './types';
  * (loadTourScenePlayCanvas/disposePcViewer/pcApp._gisdata.recenter()).
  */
 export interface TourViewerApi {
-  load(urls: string[], modelType: ModelType, copcUrls?: (string | null)[]): Promise<void>;
+  load(
+    urls: string[],
+    modelType: ModelType,
+    copcUrls?: (string | null)[],
+    sogUrls?: (string | null)[],
+    collisionUrl?: string | null
+  ): Promise<void>;
   dispose(): void;
   recenter(): void;
   showError(message: string): void;

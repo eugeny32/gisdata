@@ -102,10 +102,11 @@ function createNavCubeGizmo(pc, app) {
   return { updateTransform, handlePointerDown };
 }
 const AXIS_FIX_ROTATION = [-0.7071, 0, 0, 0.7071];
-async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTransform, isCurrent, showProgress) {
+async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTransform, isCurrent, showProgress, sogUrls = []) {
   let fileIndex = 0;
-  for (const url of urls) {
+  for (const rawUrl of urls) {
     if (!isCurrent()) return;
+    const url = sogUrls[fileIndex] || rawUrl;
     fileIndex++;
     const filePrefix = urls.length > 1 ? `Файл ${fileIndex} из ${urls.length}: ` : "";
     showProgress(`${filePrefix}Загрузка модели...`, 0);
@@ -4784,6 +4785,80 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   showProgress("COPC: подгрузка по области видимости...", 100);
   return { refresh, dispose };
 }
+async function loadCollisionMesh(pc, app, url) {
+  var _a;
+  const asset = new pc.Asset("collision-mesh", "container", { url });
+  app.assets.add(asset);
+  await new Promise((resolve, reject) => {
+    asset.on("load", () => resolve());
+    asset.on("error", (err) => reject(new Error(String(err))));
+    app.assets.load(asset);
+  });
+  const rotQuat = new pc.Quat(...AXIS_FIX_ROTATION);
+  const rotated = new pc.Vec3();
+  const triangles = [];
+  const resource = asset.resource;
+  for (const renderAsset of resource.renders ?? []) {
+    const meshes = ((_a = renderAsset.resource) == null ? void 0 : _a.meshes) ?? [];
+    for (const mesh of meshes) {
+      const positions = [];
+      const indices = [];
+      mesh.getPositions(positions);
+      mesh.getIndices(indices);
+      for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i] * 3;
+        const b = indices[i + 1] * 3;
+        const c = indices[i + 2] * 3;
+        for (const idx of [a, b, c]) {
+          rotated.set(positions[idx], positions[idx + 1], positions[idx + 2]);
+          rotQuat.transformVector(rotated, rotated);
+          triangles.push(rotated.x, rotated.y, rotated.z);
+        }
+      }
+    }
+  }
+  asset.unload();
+  app.assets.remove(asset);
+  if (triangles.length === 0) return null;
+  const tri = new Float32Array(triangles);
+  function raycast(origin, direction, maxDistance) {
+    const [ox, oy, oz] = origin;
+    const [dx, dy, dz] = direction;
+    const EPS = 1e-7;
+    let nearest = null;
+    for (let i = 0; i < tri.length; i += 9) {
+      const ax = tri[i], ay = tri[i + 1], az = tri[i + 2];
+      const bx = tri[i + 3], by = tri[i + 4], bz = tri[i + 5];
+      const cx = tri[i + 6], cy = tri[i + 7], cz = tri[i + 8];
+      const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+      const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+      const px = dy * e2z - dz * e2y;
+      const py = dz * e2x - dx * e2z;
+      const pz = dx * e2y - dy * e2x;
+      const det = e1x * px + e1y * py + e1z * pz;
+      if (Math.abs(det) < EPS) continue;
+      const invDet = 1 / det;
+      const tx = ox - ax, ty = oy - ay, tz = oz - az;
+      const u = (tx * px + ty * py + tz * pz) * invDet;
+      if (u < 0 || u > 1) continue;
+      const qx = ty * e1z - tz * e1y;
+      const qy = tz * e1x - tx * e1z;
+      const qz = tx * e1y - ty * e1x;
+      const v = (dx * qx + dy * qy + dz * qz) * invDet;
+      if (v < 0 || u + v > 1) continue;
+      const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+      if (t < EPS || t > maxDistance) continue;
+      if (nearest === null || t < nearest) nearest = t;
+    }
+    return nearest;
+  }
+  return {
+    raycast,
+    dispose() {
+      tri.fill(0);
+    }
+  };
+}
 const DEFAULT_CAMERA_SETTINGS = {
   fov: 45,
   nearClip: 0.05,
@@ -4931,6 +5006,7 @@ class OrbitController {
   }
 }
 const MOVE_KEYS = /* @__PURE__ */ new Set(["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight"]);
+const COLLISION_SKIN = 0.05;
 class FlyController {
   // pc принимается, но не используется напрямую (camera.forward/right/up и
   // setEulerAngles — обычные методы Entity, без отдельных pc.* вызовов) —
@@ -4938,6 +5014,7 @@ class FlyController {
   constructor(_pc, camera, gizmo) {
     this.yaw = 0;
     this.pitch = 0;
+    this.collisionMesh = null;
     this.canvas = null;
     this.dragButton = null;
     this.lastX = 0;
@@ -5032,13 +5109,30 @@ class FlyController {
   update(dt) {
     if (this.pressedKeys.size === 0) return;
     const speed = cameraSettings.moveSpeed * dt;
-    const pos = this.camera.getPosition().clone();
+    const oldPos = this.camera.getPosition().clone();
+    const pos = oldPos.clone();
     if (this.pressedKeys.has("KeyW")) pos.add(this.camera.forward.clone().mulScalar(speed));
     if (this.pressedKeys.has("KeyS")) pos.add(this.camera.forward.clone().mulScalar(-speed));
     if (this.pressedKeys.has("KeyD")) pos.add(this.camera.right.clone().mulScalar(speed));
     if (this.pressedKeys.has("KeyA")) pos.add(this.camera.right.clone().mulScalar(-speed));
     if (this.pressedKeys.has("Space")) pos.add(this.camera.up.clone().mulScalar(speed));
     if (this.pressedKeys.has("ShiftLeft") || this.pressedKeys.has("ShiftRight")) pos.add(this.camera.up.clone().mulScalar(-speed));
+    if (this.collisionMesh) {
+      const delta = pos.clone().sub(oldPos);
+      const distance = delta.length();
+      if (distance > 1e-6) {
+        const dir = delta.clone().mulScalar(1 / distance);
+        const hit = this.collisionMesh.raycast(
+          [oldPos.x, oldPos.y, oldPos.z],
+          [dir.x, dir.y, dir.z],
+          distance + COLLISION_SKIN
+        );
+        if (hit !== null) {
+          const safeDistance = Math.max(0, hit - COLLISION_SKIN);
+          pos.copy(oldPos).add(dir.mulScalar(safeDistance));
+        }
+      }
+    }
     this.camera.setPosition(pos);
   }
 }
@@ -5066,6 +5160,7 @@ function hideViewerError() {
 let currentApp = null;
 let generation = 0;
 function disposeTourViewer() {
+  var _a;
   if (!currentApp) return;
   const entry = currentApp;
   currentApp = null;
@@ -5073,6 +5168,7 @@ function disposeTourViewer() {
     entry.unsubscribeSettings();
     entry.detachNavigation();
     for (const handle of entry.copcHandles) handle.dispose();
+    (_a = entry.collisionMesh) == null ? void 0 : _a.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -5082,7 +5178,7 @@ function recenterTourCamera() {
   if (!currentApp) return;
   currentApp.recenter();
 }
-async function loadTourScene(urls, modelType, copcUrls = []) {
+async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], collisionUrl = null) {
   hideViewerError();
   generation++;
   const myGeneration = generation;
@@ -5128,9 +5224,13 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
       }
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === "orbit") orbit.update();
+    }, updateFlyCollision = function() {
+      fly.collisionMesh = requestedMode === "walk" ? collisionMesh : null;
     }, syncFlyFromOrbit = function() {
       fly.syncFrom(camera.getPosition(), orbit.yaw, orbit.pitch);
     }, setNavigationModeInternal = function(mode) {
+      requestedMode = mode;
+      updateFlyCollision();
       const next = mode === "orbit" ? "orbit" : "fly";
       if (next === activeMode) return;
       if (activeMode === "orbit") orbit.detach();
@@ -5176,6 +5276,8 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
     const orbit = new OrbitController(pc, camera, gizmo);
     const fly = new FlyController(pc, camera, gizmo);
     let activeMode = cameraSettings.navigationMode === "orbit" ? "orbit" : "fly";
+    let requestedMode = cameraSettings.navigationMode;
+    let collisionMesh = null;
     if (activeMode === "orbit") orbit.attach(canvas);
     else {
       syncFlyFromOrbit();
@@ -5195,8 +5297,21 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
       recenter,
       unsubscribeSettings,
       detachNavigation: () => activeMode === "orbit" ? orbit.detach() : fly.detach(),
-      copcHandles
+      copcHandles,
+      get collisionMesh() {
+        return collisionMesh;
+      }
     };
+    if (collisionUrl) {
+      loadCollisionMesh(pc, app, collisionUrl).then((mesh) => {
+        if (!isCurrent()) {
+          mesh == null ? void 0 : mesh.dispose();
+          return;
+        }
+        collisionMesh = mesh;
+        updateFlyCollision();
+      }).catch((err) => console.error("Walk: не удалось загрузить коллайдер", err));
+    }
     if (modelType === "pointcloud") {
       let isFirstFile = true;
       const legacyUrls = [];
@@ -5253,7 +5368,8 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
         (d) => orbit.setDistance(d),
         () => orbit.update(),
         isCurrent,
-        showProgress
+        showProgress,
+        sogUrls
       );
     }
     if (isCurrent()) {

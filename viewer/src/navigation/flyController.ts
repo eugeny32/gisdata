@@ -1,18 +1,28 @@
 import type { PcModule } from '../types';
 import { cameraSettings } from '../cameraSettings';
 import type { NavCubeGizmo } from '../gizmo';
+import type { CollisionMesh } from '../collisionMesh';
 
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight']);
+/** Зазор перед препятствием — без него камера могла бы "застрять" ровно
+ * в плоскости столкновения и дёргаться от шума плавающей точки. */
+const COLLISION_SKIN = 0.05;
 
 /**
- * Свободный полёт (модуль 1.1, без коллизий) — left-drag вращает саму
- * камеру (не орбиту вокруг target), WASD двигает вдоль её локальных осей,
- * Space/Shift — вверх/вниз. Коллизии (`-K`-коллайдер из splat-transform)
- * — отдельная задача PR5, здесь камера свободно проходит сквозь геометрию.
+ * Свободный полёт/прогулка (модуль 1.1) — left-drag вращает саму камеру
+ * (не орбиту вокруг target), WASD двигает вдоль её локальных осей,
+ * Space/Shift — вверх/вниз. collisionMesh (PR5, `-K`-коллайдер из
+ * splat-transform) — опционален: без него это "полёт" (сквозь геометрию),
+ * с ним — "прогулка" (останавливается перед препятствием по ходу
+ * движения). Один и тот же класс обслуживает оба пункта меню навигации
+ * (cameraSettings.navigationMode 'fly'/'walk') — разница только в том,
+ * выставлен ли collisionMesh вызывающим кодом (см. tourViewer.ts).
  */
 export class FlyController {
   yaw = 0;
   pitch = 0;
+  /** null — полёт без коллизий; задаётся снаружи при входе в 'walk'. */
+  collisionMesh: CollisionMesh | null = null;
 
   private camera: InstanceType<PcModule['Entity']>;
   private gizmo: NavCubeGizmo;
@@ -128,13 +138,32 @@ export class FlyController {
   update(dt: number): void {
     if (this.pressedKeys.size === 0) return;
     const speed = cameraSettings.moveSpeed * dt;
-    const pos = this.camera.getPosition().clone();
+    const oldPos = this.camera.getPosition().clone();
+    const pos = oldPos.clone();
     if (this.pressedKeys.has('KeyW')) pos.add(this.camera.forward.clone().mulScalar(speed));
     if (this.pressedKeys.has('KeyS')) pos.add(this.camera.forward.clone().mulScalar(-speed));
     if (this.pressedKeys.has('KeyD')) pos.add(this.camera.right.clone().mulScalar(speed));
     if (this.pressedKeys.has('KeyA')) pos.add(this.camera.right.clone().mulScalar(-speed));
     if (this.pressedKeys.has('Space')) pos.add(this.camera.up.clone().mulScalar(speed));
     if (this.pressedKeys.has('ShiftLeft') || this.pressedKeys.has('ShiftRight')) pos.add(this.camera.up.clone().mulScalar(-speed));
+
+    if (this.collisionMesh) {
+      const delta = pos.clone().sub(oldPos);
+      const distance = delta.length();
+      if (distance > 1e-6) {
+        const dir = delta.clone().mulScalar(1 / distance);
+        const hit = this.collisionMesh.raycast(
+          [oldPos.x, oldPos.y, oldPos.z],
+          [dir.x, dir.y, dir.z],
+          distance + COLLISION_SKIN
+        );
+        if (hit !== null) {
+          const safeDistance = Math.max(0, hit - COLLISION_SKIN);
+          pos.copy(oldPos).add(dir.mulScalar(safeDistance));
+        }
+      }
+    }
+
     this.camera.setPosition(pos);
   }
 }

@@ -23,8 +23,10 @@ export interface CameraSettings {
   moveSpeed: number;
   pointSizePx: number;
   edlEnabled: boolean;
-  /** 'walk' зарезервирован под PR5 (коллизии) — UI пока предлагает только
-   * orbit/fly, выбор 'walk' молча трактуется как 'fly' (см. tourViewer.ts). */
+  /** 'walk' — тот же FlyController, но с коллизиями по `-K`-коллайдеру
+   * (PR5). Если для тура нет готового .collision.glb (не сплат-тур или
+   * конвертация ещё не завершилась), молча работает как 'fly' — см.
+   * tourViewer.ts/updateFlyCollision. */
   navigationMode: 'orbit' | 'fly' | 'walk';
 }
 

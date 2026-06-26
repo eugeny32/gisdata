@@ -3,6 +3,7 @@ import { createNavCubeGizmo } from './gizmo';
 import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
 import { loadCopcPointCloud, type CopcStreamHandle } from './copcLoader';
+import { loadCollisionMesh, type CollisionMesh } from './collisionMesh';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
@@ -41,6 +42,7 @@ interface PcAppWithGisdata {
   unsubscribeSettings: () => void;
   detachNavigation: () => void;
   copcHandles: CopcStreamHandle[];
+  collisionMesh: CollisionMesh | null;
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -54,6 +56,7 @@ export function disposeTourViewer(): void {
     entry.unsubscribeSettings();
     entry.detachNavigation();
     for (const handle of entry.copcHandles) handle.dispose();
+    entry.collisionMesh?.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -72,7 +75,12 @@ export async function loadTourScene(
   /** Параллельный urls массив той же длины — элемент не null, если для
    * этого файла уже готов потоковый .copc.laz (см. api/tours.php, PR4).
    * Файлы без готового COPC грузятся старым полным lasLoader.ts. */
-  copcUrls: (string | null)[] = []
+  copcUrls: (string | null)[] = [],
+  /** То же самое для .sog (PR5) — параллельно urls, для сплат-туров. */
+  sogUrls: (string | null)[] = [],
+  /** Коллайдер для Walk-режима (PR5) — берётся только у первого файла
+   * тура, как и центрирование/distance (см. loadSplatFiles ниже). */
+  collisionUrl: string | null = null
 ): Promise<void> {
   hideViewerError();
   generation++;
@@ -171,15 +179,25 @@ export async function loadTourScene(
     const orbit = new OrbitController(pc, camera, gizmo);
     const fly = new FlyController(pc, camera, gizmo);
 
-    // 'walk' зарезервирован под PR5 (коллизии через -K-коллайдер из
-    // splat-transform) — пока молча работает как 'fly' (см. cameraSettings.ts).
+    // FlyController обслуживает и 'fly', и 'walk' — различие только в том,
+    // выставлен ли fly.collisionMesh (см. updateFlyCollision ниже). 'walk'
+    // без загруженного коллайдера (тур без сплатов/без готового .collision.glb)
+    // молча работает как обычный полёт без коллизий.
     let activeMode: 'orbit' | 'fly' = cameraSettings.navigationMode === 'orbit' ? 'orbit' : 'fly';
+    let requestedMode: 'orbit' | 'fly' | 'walk' = cameraSettings.navigationMode;
+    let collisionMesh: CollisionMesh | null = null;
+
+    function updateFlyCollision(): void {
+      fly.collisionMesh = requestedMode === 'walk' ? collisionMesh : null;
+    }
 
     function syncFlyFromOrbit(): void {
       fly.syncFrom(camera.getPosition(), orbit.yaw, orbit.pitch);
     }
 
     function setNavigationModeInternal(mode: 'orbit' | 'fly' | 'walk'): void {
+      requestedMode = mode;
+      updateFlyCollision();
       const next = mode === 'orbit' ? 'orbit' : 'fly';
       if (next === activeMode) return;
       if (activeMode === 'orbit') orbit.detach();
@@ -227,7 +245,26 @@ export async function loadTourScene(
       unsubscribeSettings,
       detachNavigation: () => (activeMode === 'orbit' ? orbit.detach() : fly.detach()),
       copcHandles,
+      get collisionMesh() {
+        return collisionMesh;
+      },
     };
+
+    // Коллайдер грузится параллельно с моделью (не блокирует появление
+    // сплатов на экране) — готов он будет позже, Walk просто без коллизий
+    // до этого момента (см. updateFlyCollision).
+    if (collisionUrl) {
+      loadCollisionMesh(pc, app, collisionUrl)
+        .then((mesh) => {
+          if (!isCurrent()) {
+            mesh?.dispose();
+            return;
+          }
+          collisionMesh = mesh;
+          updateFlyCollision();
+        })
+        .catch((err) => console.error('Walk: не удалось загрузить коллайдер', err));
+    }
 
     if (modelType === 'pointcloud') {
       // Центрирование/distance выставляет только первый файл (как и раньше
@@ -280,7 +317,8 @@ export async function loadTourScene(
         (d) => orbit.setDistance(d),
         () => orbit.update(),
         isCurrent,
-        showProgress
+        showProgress,
+        sogUrls
       );
     }
     if (isCurrent()) {

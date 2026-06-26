@@ -2,10 +2,12 @@ import type { PcModule } from './types';
 import { AXIS_FIX_ROTATION } from './constants';
 
 /**
- * Загрузка 3DGS-сплат-файлов (.ply) через нативный gsplat-пайплайн
- * PlayCanvas. Перенесено 1:1 из map.php (PR0) — порт без изменения
- * поведения; переход на SOG/streamed-LOD — отдельная задача (см.
- * docs/CURRENT_STATE.md, раздел 11, PR5).
+ * Загрузка 3DGS-сплат-файлов через нативный gsplat-пайплайн PlayCanvas.
+ * Если для файла готов .sog (PR5, см. bin/process_splat_transforms.php),
+ * грузим его вместо raw .ply — движок сам выбирает парсер по расширению
+ * URL (GSplatComponentSystem: parsers['sog'] = SogBundleParser,
+ * см. docs/CURRENT_STATE.md, раздел 12) — для нас это просто другой URL,
+ * остальной код ниже не меняется.
  */
 export async function loadSplatFiles(
   pc: PcModule,
@@ -15,11 +17,13 @@ export async function loadSplatFiles(
   setDistance: (d: number) => void,
   updateCameraTransform: () => void,
   isCurrent: () => boolean,
-  showProgress: (text: string, pct: number) => void
+  showProgress: (text: string, pct: number) => void,
+  sogUrls: (string | null)[] = []
 ): Promise<void> {
   let fileIndex = 0;
-  for (const url of urls) {
+  for (const rawUrl of urls) {
     if (!isCurrent()) return;
+    const url = sogUrls[fileIndex] || rawUrl;
     fileIndex++;
     const filePrefix = urls.length > 1 ? `Файл ${fileIndex} из ${urls.length}: ` : '';
     showProgress(`${filePrefix}Загрузка модели...`, 0);
