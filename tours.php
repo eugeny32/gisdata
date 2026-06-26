@@ -32,6 +32,83 @@ function pg_upload_large_object(PDO $pgPdo, string $localFile): int
     return (int)$oid;
 }
 
+/**
+ * Чистит сплат-файл (.ply) от двух типов шума, на которые жаловался
+ * пользователь — "единичные гауссианы без соседей, закрывающие просмотр
+ * свечением" — через CLI @playcanvas/splat-transform (GPU-вокселизация),
+ * установленный на сервере по SSH в этой же сессии:
+ *   1) -V scale_*,lt,N — гигантские по размеру отдельные сплаты (в реальном
+ *      туре встречались sca le до 18-26м при медиане ~0.02м — они и дают тот
+ *      самый "глоу", и из-за них раздувается bounding box для вокселизации
+ *      на шаге 2, так что без этого шага -G падает с RangeError на больших
+ *      сценах);
+ *   2) -G — стандартный voxel-based фильтр "точек без соседей" из самого
+ *      инструмента.
+ * Жёстко прописанные пути — это конкретная установка на ЭТОМ сервере
+ * (Windows, see SSH-сессию), а не переносимая конфигурация; на машине, где
+ * splat-transform не установлен (например, локальная дев-среда), node.exe
+ * по этому пути просто не существует — функция тихо пропускает шаг,
+ * исходный файл остаётся как был (это значит "без денойза", не ошибка).
+ * Если сам процесс упал (RangeError на экстремально большом экстенте,
+ * таймаут и т.п.) — тоже тихо оставляем оригинал: денойз — это улучшение
+ * качества, а не обязательное условие создания тура.
+ */
+function denoise_splat_ply_if_possible(string $absolutePath): void
+{
+    $nodeExe = 'C:\\Program Files\\nodejs\\node.exe';
+    $cliScript = 'C:\\Users\\admin\\AppData\\Roaming\\npm\\node_modules\\@playcanvas\\splat-transform\\bin\\cli.mjs';
+    if (!is_file($nodeExe) || !is_file($cliScript) || !is_file($absolutePath)) {
+        return;
+    }
+
+    $tmpOut = $absolutePath . '.denoised.ply';
+    $cmd = sprintf(
+        '%s %s %s -N -V scale_0,lt,2 -V scale_1,lt,2 -V scale_2,lt,2 -G %s -w',
+        escapeshellarg($nodeExe),
+        escapeshellarg($cliScript),
+        escapeshellarg($absolutePath),
+        escapeshellarg($tmpOut)
+    );
+
+    $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    if (!is_resource($proc)) {
+        return;
+    }
+    // PHP-овский max_execution_time (по умолчанию 120с в php.ini) считает
+    // именно это время ожидания дочернего процесса и обрывает скрипт
+    // ("Fatal error: Maximum execution time exceeded") раньше, чем
+    // успевает сработать наш собственный 300-секундный $deadline ниже —
+    // set_time_limit() двигает лимит именно с этого момента.
+    set_time_limit(330);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $deadline = time() + 300; // не должно занимать больше пары минут на реальных файлах туров
+    do {
+        // Прогресс-бар инструмента пишет в stdout/stderr часто — если не
+        // вычитывать пайпы, буфер (на Windows ~64КБ) заполняется и дочерний
+        // процесс блокируется на записи, то есть зависает не из-за реальной
+        // работы, а из-за того, что никто не читает его вывод. Содержимое
+        // нам не нужно, просто дренируем.
+        fread($pipes[1], 65536);
+        fread($pipes[2], 65536);
+        usleep(200000);
+        $status = proc_get_status($proc);
+    } while ($status['running'] && time() < $deadline);
+    if ($status['running']) {
+        proc_terminate($proc);
+    }
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($proc);
+
+    if (!$status['running'] && $status['exitcode'] === 0 && is_file($tmpOut)) {
+        unlink($absolutePath);
+        rename($tmpOut, $absolutePath);
+    } elseif (is_file($tmpOut)) {
+        unlink($tmpOut); // неудачный/частичный результат — не подменяем оригинал
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Если размер запроса превышает post_max_size, PHP молча обнуляет $_POST
     // и $_FILES ещё до старта скрипта (Content-Length при этом известен) —
@@ -57,10 +134,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lon         = (float)($_POST['lon'] ?? 0);
         $existingFileName = trim((string)($_POST['existing_file'] ?? ''));
         $isEnabled   = isset($_POST['is_enabled']) ? 1 : 0;
+        $groupIdRaw  = (string)($_POST['group_id'] ?? '');
+        $newGroupName = trim((string)($_POST['new_group_name'] ?? ''));
 
         if ($name === '') {
             $error = 'Укажите название тура';
         } else {
+            // Группа — ручной выбор (см. <select name="group_id"> в форме):
+            // либо существующая (числовой id), либо "new" + поле
+            // new_group_name для только что придуманной. Группа определяет
+            // и подпапку хранения новых файлов (см. ниже, $groupFolder) —
+            // "группировка по мере поступления": решение принимается один
+            // раз при сохранении тура, а не автоматическим анализом файла.
+            $groupId = null;
+            if ($groupIdRaw === 'new') {
+                if ($newGroupName !== '') {
+                    $groupStmt = $pdo->prepare(
+                        'INSERT INTO tour_groups (name) VALUES (:name)
+                         ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                         RETURNING id'
+                    );
+                    $groupStmt->execute(['name' => $newGroupName]);
+                    $groupId = (int)$groupStmt->fetchColumn();
+                }
+            } elseif ($groupIdRaw !== '') {
+                $groupId = (int)$groupIdRaw;
+            }
+
+            // Подпапка хранения по группе — "полная онлайн-организация
+            // хранилища" для растущего числа крупных облаков означает в
+            // первую очередь не одну гигантскую плоскую папку uploads/tours/,
+            // а структуру по группам: uploads/tours/g{id}-{slug}/...
+            // Применяется только к НОВЫМ файлам, загруженным через форму —
+            // файлы "уже на сервере" (залитые по FTP) лежат там, где их
+            // оставили, переносить их автоматически рискованно (можно
+            // случайно сослаться на путь, который ещё не успели залить).
+            $groupFolder = '';
+            if ($groupId) {
+                $groupNameStmt = $pdo->prepare('SELECT name FROM tour_groups WHERE id = :id');
+                $groupNameStmt->execute(['id' => $groupId]);
+                $groupName = (string)$groupNameStmt->fetchColumn();
+                if ($groupName !== '') {
+                    $slug = strtolower(trim(preg_replace('/[^a-zA-Z0-9]+/', '-', $groupName), '-'));
+                    $groupFolder = 'g' . $groupId . ($slug !== '' ? '-' . $slug : '') . '/';
+                }
+            }
+
             // Собираем список загружаемых файлов: либо через форму (несколько
             // файлов одного скана), либо именами уже залитых по FTP (по одному
             // на строку в поле "Файл(ы) уже на сервере").
@@ -70,8 +189,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $hasUpload = is_array($uploadedNames) && array_filter($uploadedNames);
 
             if ($hasUpload) {
-                if (!is_dir($uploadDir)) {
-                    mkdir($uploadDir, 0755, true);
+                $targetDir = $uploadDir . $groupFolder;
+                if (!is_dir($targetDir)) {
+                    mkdir($targetDir, 0755, true);
                 }
                 foreach ($uploadedNames as $i => $origName) {
                     if ($origName === '') {
@@ -87,11 +207,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         break;
                     }
                     $storedName = uniqid('tour_', true) . '_' . preg_replace('/[^a-zA-Z0-9_.-]/', '_', (string)$origName);
-                    if (!move_uploaded_file($_FILES['model_files']['tmp_name'][$i], $uploadDir . $storedName)) {
+                    if (!move_uploaded_file($_FILES['model_files']['tmp_name'][$i], $targetDir . $storedName)) {
                         $error = 'Не удалось сохранить загруженный файл "' . $origName . '" на сервере';
                         break;
                     }
-                    $newFiles[] = ['file_path' => $storedName, 'file_format' => $ext];
+                    $newFiles[] = ['file_path' => $groupFolder . $storedName, 'file_format' => $ext];
                 }
             } elseif ($existingFileName !== '') {
                 foreach (preg_split('/[\r\n]+/', $existingFileName, -1, PREG_SPLIT_NO_EMPTY) as $name1) {
@@ -112,6 +232,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             if (!$error) {
+                foreach ($newFiles as $f) {
+                    if ($f['file_format'] === 'ply') {
+                        denoise_splat_ply_if_possible($uploadDir . $f['file_path']);
+                    }
+                }
+
                 $filePath = $newFiles ? $newFiles[0]['file_path'] : null;
                 $fileFormat = $newFiles ? $newFiles[0]['file_format'] : null;
                 $extraFiles = $newFiles ? array_slice($newFiles, 1) : [];
@@ -120,38 +246,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($filePath !== null) {
                         $stmt = $pdo->prepare(
                             'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon,
-                                file_path=:file_path, file_format=:file_format, is_enabled=:is_enabled
+                                file_path=:file_path, file_format=:file_format, is_enabled=:is_enabled, group_id=:group_id
                              WHERE id=:id'
                         );
                         $stmt->execute([
                             'id' => $id, 'name' => $name, 'description' => $description ?: null,
                             'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
-                            'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
+                            'file_format' => $fileFormat, 'is_enabled' => $isEnabled, 'group_id' => $groupId,
                         ]);
                         // Новый набор файлов полностью заменяет старые доп. файлы тура.
                         $pdo->prepare('DELETE FROM tour_files WHERE tour_id = :id')->execute(['id' => $id]);
                     } else {
                         $stmt = $pdo->prepare(
-                            'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon, is_enabled=:is_enabled
+                            'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon, is_enabled=:is_enabled, group_id=:group_id
                              WHERE id=:id'
                         );
                         $stmt->execute([
                             'id' => $id, 'name' => $name, 'description' => $description ?: null,
-                            'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled,
+                            'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled, 'group_id' => $groupId,
                         ]);
                     }
                     $tourId = $id;
                 } else {
                     $stmt = $pdo->prepare(
-                        'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by)
-                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :created_by)
+                        'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by, group_id)
+                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :created_by, :group_id)
                          RETURNING id'
                     );
                     $stmt->execute([
                         'name' => $name, 'description' => $description ?: null,
                         'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
                         'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
-                        'created_by' => $admin['id'],
+                        'created_by' => $admin['id'], 'group_id' => $groupId,
                     ]);
                     $tourId = (int)$stmt->fetchColumn();
                 }
@@ -374,14 +500,19 @@ if (isset($_GET['edit'])) {
     }
 }
 
+// ORDER BY группа (без группы — в самый конец списка), внутри группы по
+// имени — рендер ниже вставляет заголовок группы при каждой смене g.id,
+// этим и достигается визуальная группировка без отдельного дерева в PHP.
 $tours = $pdo->query(
-    'SELECT t.*, c.name AS pg_connection_name,
+    'SELECT t.*, c.name AS pg_connection_name, g.name AS group_name,
             (SELECT COUNT(*) FROM tour_files tf WHERE tf.tour_id = t.id) AS extra_files_count
      FROM tours t
      LEFT JOIN pg_connections c ON c.id = t.pg_connection_id
-     ORDER BY t.name'
+     LEFT JOIN tour_groups g ON g.id = t.group_id
+     ORDER BY (g.name IS NULL), g.name, t.name'
 )->fetchAll();
 $pgConnections = $pdo->query('SELECT id, name FROM pg_connections ORDER BY name')->fetchAll();
+$tourGroups = $pdo->query('SELECT id, name FROM tour_groups ORDER BY name')->fetchAll();
 
 $pageTitle = 'Туры (3DGS)';
 $pageIcon = 'bi-camera-reels';
@@ -419,9 +550,24 @@ require __DIR__ . '/app/views/_head.php';
           <label class="form-check-label" for="isEnabled">Показывать на карте</label>
         </div>
         <div class="col-md-6">
+          <label class="form-label small">Группа</label>
+          <select name="group_id" id="tourGroupSelect" class="form-select">
+            <option value="">Без группы</option>
+            <?php foreach ($tourGroups as $g): ?>
+              <option value="<?= (int)$g['id'] ?>" <?= (int)($edit['group_id'] ?? 0) === (int)$g['id'] ? 'selected' : '' ?>><?= htmlspecialchars($g['name'], ENT_QUOTES, 'UTF-8') ?></option>
+            <?php endforeach; ?>
+            <option value="new">+ Новая группа...</option>
+          </select>
+          <div class="form-text">Файлы новых туров складываются в подпапку своей группы — упорядочивает хранилище по мере роста числа туров.</div>
+        </div>
+        <div class="col-md-6 d-none" id="tourNewGroupWrap">
+          <label class="form-label small">Название новой группы</label>
+          <input type="text" name="new_group_name" id="tourNewGroupName" class="form-control" placeholder="Например: Объекты ЕКБ 2026">
+        </div>
+        <div class="col-md-6">
           <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat — 3DGS, или .las — облако точек LiDAR)</label>
           <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
-          <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — пока только хранение/выгрузка в PostGIS, 3D-просмотр облака точек на карте ещё не реализован (для .ply/.splat/.ksplat просмотр работает).</div>
+          <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — облако точек LiDAR, просмотр на карте работает (отдельный рендер, не через 3DGS).</div>
           <?php if ($edit && $edit['file_path']): ?>
             <div class="form-text">
               Текущие файлы: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?><?= $editExtraCount ? ' + ещё ' . $editExtraCount : '' ?>.
@@ -456,7 +602,15 @@ require __DIR__ . '/app/views/_head.php';
             <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>PostGIS</th><th></th></tr>
           </thead>
           <tbody>
+          <?php $currentGroupName = false; // false, не null — отличаем "ещё не печатали" от "группа без имени" ?>
           <?php foreach ($tours as $t): ?>
+            <?php if ($t['group_name'] !== $currentGroupName): $currentGroupName = $t['group_name']; ?>
+              <tr class="table-group-divider">
+                <td colspan="6" class="bg-body-tertiary fw-semibold small py-1">
+                  <i class="bi bi-folder2"></i> <?= htmlspecialchars($currentGroupName ?? 'Без группы', ENT_QUOTES, 'UTF-8') ?>
+                </td>
+              </tr>
+            <?php endif; ?>
             <tr>
               <td><?= htmlspecialchars($t['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($t['lat'] . ', ' . $t['lon'], ENT_QUOTES, 'UTF-8') ?></td>
@@ -530,6 +684,16 @@ $extraScripts = <<<'HTML'
 // чтобы получить реальный прогресс (xhr.upload.onprogress), а результат
 // (успех/ошибка валидации) показываем, заменив документ ответом сервера —
 // он всё равно отдаёт ту же полноценную HTML-страницу.
+(function () {
+  const groupSelect = document.getElementById('tourGroupSelect');
+  const newGroupWrap = document.getElementById('tourNewGroupWrap');
+  if (groupSelect && newGroupWrap) {
+    const syncNewGroupVisibility = () => newGroupWrap.classList.toggle('d-none', groupSelect.value !== 'new');
+    groupSelect.addEventListener('change', syncNewGroupVisibility);
+    syncNewGroupVisibility();
+  }
+})();
+
 (function () {
   const form = document.getElementById('tourForm');
   if (!form) return;

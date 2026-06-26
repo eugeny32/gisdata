@@ -28,6 +28,16 @@ return [
         'base_path' => 'E:\\Ftp\\RINEX\\RINEX\\2026',
     ],
 
+    // Удалённый FTP с почасовыми RINEX-файлами станций (см. app/lib/gnss_ftp.php).
+    // Структура: /{день_года}({ММДД})/{КОД_СТАНЦИИ}/{...}_MO.rnx|_MN.rnx —
+    // без подпапки года, один год на сервере.
+    'gnss_ftp' => [
+        'host'     => env('GNSS_FTP_HOST', 'gnss.host'),
+        'user'     => env('GNSS_FTP_USER', ''),
+        'password' => env('GNSS_FTP_PASSWORD', ''),
+        'timeout_sec' => 15,
+    ],
+
     // Параметры опроса NTRIP-потоков базовых станций
     'ntrip' => [
         'connect_timeout_sec' => 5,

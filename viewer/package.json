@@ -1,0 +1,21 @@
+{
+  "name": "gisdata-tour-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "PlayCanvas-вьювер тура (3DGS-сплаты + LAS-облака точек) для gisdata. Собирается отдельно от остального проекта (чистый PHP без сборки) и кладётся как обычный статический ассет — см. README.md в этой папке.",
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "copc": "^0.0.8",
+    "laz-perf": "^0.0.7"
+  },
+  "devDependencies": {
+    "playcanvas": "2.20.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

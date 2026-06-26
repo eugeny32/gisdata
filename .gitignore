@@ -1,7 +1,11 @@
 .env
 .ftp_deploy_marker
 app/config.local.php
+node_modules/
 uploads/*
 !uploads/tours/
 uploads/tours/*
 !uploads/tours/.gitkeep
+!uploads/rinex_results/
+uploads/rinex_results/*
+!uploads/rinex_results/.gitkeep
