@@ -173,6 +173,16 @@ export class OrbitController {
     this.homePitch = this.pitch;
   }
 
+  /** "Сфера модели" — центр и радиус, под которые подогнана камера при
+   * captureHome() (target/distance, теми же коэффициентами, что и framing
+   * самой камеры, см. copcLoader.ts/splatLoader.ts/lasLoader.ts). Используется
+   * только как ГРУБОЕ приближение поверхности модели для пикинга аннотаций
+   * (annotations.ts) — у PlayCanvas нет настоящего picking для облака точек/
+   * сплатов, см. комментарий там. */
+  getHomeSphere(): { center: InstanceType<PcModule['Vec3']>; radius: number } {
+    return { center: this.homeTarget.clone(), radius: this.homeDistance };
+  }
+
   /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
    * ТЕКУЩЕЕ состояние, а сначала восстанавливает target/distance/yaw/pitch
    * из снимка captureHome(), и только потом пересчитывает камеру. */

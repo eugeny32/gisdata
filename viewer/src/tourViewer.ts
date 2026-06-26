@@ -8,6 +8,7 @@ import { setPointCloudColorMode, setPointCloudClip } from './pointCloudMaterial'
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
+import { createAnnotationManager, type AnnotationLayerData, type VertexHit, type AnnotationManager } from './annotations';
 
 /** Минимальный HTML-escape для сообщения об ошибке — дублирует
  * escapeHtml() из map.php намеренно: модуль не должен тянуться в global
@@ -45,6 +46,9 @@ interface PcAppWithGisdata {
   copcHandles: CopcStreamHandle[];
   collisionMesh: CollisionMesh | null;
   splatObjectUrls: string[];
+  annotations: AnnotationManager;
+  camera: InstanceType<PcModule['Entity']>;
+  canvas: HTMLCanvasElement;
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -63,6 +67,7 @@ export function disposeTourViewer(): void {
     // лежат в Cache Storage, эти объекты — просто временная ручка
     // браузерной памяти на время жизни ЭТОГО pc.Application.
     for (const url of entry.splatObjectUrls) URL.revokeObjectURL(url);
+    entry.annotations.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -73,6 +78,31 @@ export function disposeTourViewer(): void {
 export function recenterTourCamera(): void {
   if (!currentApp) return;
   currentApp.recenter();
+}
+
+/** Точка на поверхности модели под курсором (приближённо, см. annotations.ts)
+ * — в локальных координатах модели (готово для сохранения через
+ * api/tour_annotations.php), либо null (модель не загружена/курсор мимо). */
+export function pickTourPoint(clientX: number, clientY: number): [number, number, number] | null {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+
+/** Существующая вершина аннотации под курсором (для редактирования) —
+ * см. annotations.ts. */
+export function pickTourAnnotationVertex(clientX: number, clientY: number): VertexHit | null {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickVertex(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+
+export function setTourAnnotationLayers(layers: AnnotationLayerData[]): void {
+  if (!currentApp) return;
+  currentApp.annotations.setLayers(layers);
+}
+
+export function setTourDrawingPreview(points: [number, number, number][] | null, color: string): void {
+  if (!currentApp) return;
+  currentApp.annotations.setDrawingPreview(points, color);
 }
 
 export async function loadTourScene(
@@ -206,6 +236,7 @@ export async function loadTourScene(
     const gizmo = createNavCubeGizmo(pc, app);
     const orbit = new OrbitController(pc, camera, gizmo);
     const fly = new FlyController(pc, camera, gizmo);
+    const annotations = createAnnotationManager(pc, app);
 
     // FlyController обслуживает и 'fly', и 'walk' — различие только в том,
     // выставлен ли fly.collisionMesh (см. updateFlyCollision ниже). 'walk'
@@ -295,6 +326,9 @@ export async function loadTourScene(
       detachNavigation: () => (activeMode === 'orbit' ? orbit.detach() : fly.detach()),
       copcHandles,
       splatObjectUrls,
+      annotations,
+      camera,
+      canvas,
       get collisionMesh() {
         return collisionMesh;
       },
@@ -378,6 +412,8 @@ export async function loadTourScene(
       // вид, к которому дальше будет возвращать кнопка "Центрировать".
       orbit.captureHome();
       recenter();
+      const sphere = orbit.getHomeSphere();
+      annotations.setPickSphere(sphere.center, sphere.radius);
     }
     hideProgress();
   } catch (e) {

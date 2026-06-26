@@ -1,6 +1,17 @@
-import { loadTourScene, disposeTourViewer, recenterTourCamera, showViewerError, hideViewerError } from './tourViewer';
+import {
+  loadTourScene,
+  disposeTourViewer,
+  recenterTourCamera,
+  showViewerError,
+  hideViewerError,
+  pickTourPoint,
+  pickTourAnnotationVertex,
+  setTourAnnotationLayers,
+  setTourDrawingPreview,
+} from './tourViewer';
 import { getCameraSettings, setCameraSettings, type CameraSettings } from './cameraSettings';
 import type { ModelType } from './types';
+import type { AnnotationLayerData, VertexHit } from './annotations';
 
 /**
  * Точка входа бандла — публичный API для map.php (и в будущем
@@ -24,6 +35,10 @@ export interface TourViewerApi {
   hideError(): void;
   getSettings(): CameraSettings;
   setSettings(partial: Partial<CameraSettings>): CameraSettings;
+  pickPoint(clientX: number, clientY: number): [number, number, number] | null;
+  pickAnnotationVertex(clientX: number, clientY: number): VertexHit | null;
+  setAnnotationLayers(layers: AnnotationLayerData[]): void;
+  setDrawingPreview(points: [number, number, number][] | null, color: string): void;
 }
 
 const api: TourViewerApi = {
@@ -34,6 +49,10 @@ const api: TourViewerApi = {
   hideError: hideViewerError,
   getSettings: getCameraSettings,
   setSettings: setCameraSettings,
+  pickPoint: pickTourPoint,
+  pickAnnotationVertex: pickTourAnnotationVertex,
+  setAnnotationLayers: setTourAnnotationLayers,
+  setDrawingPreview: setTourDrawingPreview,
 };
 
 declare global {

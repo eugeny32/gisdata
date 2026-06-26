@@ -285,12 +285,24 @@ require __DIR__ . '/app/views/_head.php';
           </div>
 
           <?php if ($isAdmin): ?>
-          <div id="tourDrawToolbar" class="position-absolute top-0 start-0 m-3 btn-group d-none" style="z-index: 1100">
-            <button type="button" class="btn btn-sm btn-outline-light" data-tool="point" title="Точка"><i class="bi bi-geo-alt"></i></button>
-            <button type="button" class="btn btn-sm btn-outline-light" data-tool="polyline" title="Линия"><i class="bi bi-bezier2"></i></button>
-            <button type="button" class="btn btn-sm btn-outline-light" data-tool="polygon" title="Полигон"><i class="bi bi-pentagon"></i></button>
-            <button type="button" class="btn btn-sm btn-success" id="tourDrawFinishBtn" title="Готово"><i class="bi bi-check-lg"></i></button>
-            <button type="button" class="btn btn-sm btn-outline-danger" id="tourDrawCancelBtn" title="Отмена/выключить инструмент"><i class="bi bi-x-lg"></i></button>
+          <div id="tourDrawToolbar" class="position-absolute top-0 start-0 m-3 d-none" style="z-index: 1100">
+            <div class="btn-group mb-2">
+              <button type="button" class="btn btn-sm btn-outline-light" data-tool="point" title="Точка"><i class="bi bi-geo-alt"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-light" data-tool="polyline" title="Линия"><i class="bi bi-bezier2"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-light" data-tool="polygon" title="Полигон"><i class="bi bi-pentagon"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-light" data-tool="edit" title="Выбор/редактирование — клик по объекту, перетаскивание точки"><i class="bi bi-cursor"></i></button>
+              <button type="button" class="btn btn-sm btn-success" id="tourDrawFinishBtn" title="Готово"><i class="bi bi-check-lg"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-danger" id="tourDrawCancelBtn" title="Отмена/выключить инструмент"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="d-flex align-items-center gap-2 p-1 rounded" style="background: rgba(20,20,20,.85);">
+              <label class="text-white small mb-0 ms-1">Активный слой:</label>
+              <select id="tourActiveLayerSelect" class="form-select form-select-sm" style="width: auto;"></select>
+            </div>
+            <div id="tourSelectedAnnoPanel" class="d-flex align-items-center gap-2 p-2 mt-2 rounded d-none" style="background: rgba(20,20,20,.92);">
+              <label class="text-white small mb-0">Слой объекта:</label>
+              <select id="tourSelectedAnnoLayerSelect" class="form-select form-select-sm" style="width: auto;"></select>
+              <button type="button" class="btn btn-sm btn-outline-danger" id="tourSelectedAnnoDeleteBtn" title="Удалить объект"><i class="bi bi-trash"></i></button>
+            </div>
           </div>
           <?php endif; ?>
 
@@ -590,16 +602,8 @@ if (isAdminJs) {
 // пайплайн THREE.js + @mkkellogg/gaussian-splats-3d (3DGS) и THREE.js +
 // @loaders.gl/las (точечные облака). Сам движок/камера/штурвал/загрузчики
 // теперь живут в собранном TS-бандле viewer/ (см. docs/CURRENT_STATE.md,
-// PR0) — здесь только глобальные переменные, которые ещё нужны секции
-// "Слои и рисование" ниже, и обращения к window.TourViewer (публичный API
-// бандла, см. viewer/README.md) вместо прежних прямых функций.
-//
-// НЕ перенесено: инструменты рисования аннотаций (точки/линии/полигоны) —
-// ниже, в разделе "Слои и рисование", код продолжает проверять
-// `tourViewer` (оставлен здесь объявленным, но никогда не присваивается),
-// поэтому весь этот функционал просто тихо не работает, пока для него не
-// будет сделан свой способ "попадания" в облако сплатов/точек под
-// PlayCanvas (готового публичного picking API под gsplat в движке нет).
+// PR0) — здесь только глобальные переменные тура и обращения к
+// window.TourViewer (публичный API бандла, см. viewer/README.md).
 let pendingTourUrls = null;
 let pendingModelType = 'splat';
 let pendingCopcUrls = [];
@@ -607,7 +611,6 @@ let pendingSogUrls = [];
 let pendingCollisionUrl = null;
 let currentTourUrls = null;
 let currentTourId = null;
-let tourViewer = null; // см. комментарий выше — умышленно всегда null
 
 const tourModalEl = document.getElementById('tourViewerModal');
 const tourModal = new bootstrap.Modal(tourModalEl);
@@ -626,61 +629,55 @@ function openTour(tourId, name) {
 }
 
 // --- Слои и рисование на 3D-модели тура (точки/линии/полигоны + экспорт DXF) ---
-let THREEModule = null;
+// Picking — через window.TourViewer.pickPoint/pickAnnotationVertex
+// (viewer/src/annotations.ts): луч из камеры пересекается с одной сферой,
+// охватывающей всю модель (точное попадание в поверхность сплатов/точек
+// у PlayCanvas нет публичного API) — одинаково для облака точек и сплатов.
 let tourLayersData = [];
-const layerGroups = {}; // layerId -> THREE.Group, добавленные в tourViewer.threeScene
-let drawingTool = null; // null | 'point' | 'polyline' | 'polygon'
+let drawingTool = null; // null | 'point' | 'polyline' | 'polygon' | 'edit'
 let drawingPoints = [];
-let drawingPreviewLine = null;
+let activeLayerId = null; // слой, в который рисуют новые объекты
+let selectedAnno = null; // { layerId, annotationId } — выбран инструментом "edit"
+let draggingVertex = null; // { layerId, annotationId, pointIndex } во время перетаскивания
 
-async function getThree() {
-  if (!THREEModule) {
-    THREEModule = await import('three');
-  }
-  return THREEModule;
+function findAnnotation(layerId, annotationId) {
+  const layer = tourLayersData.find((l) => l.id === layerId);
+  const anno = layer ? layer.annotations.find((a) => a.id === annotationId) : null;
+  return { layer, anno };
 }
 
-function buildAnnotationObject(THREE, anno, color) {
-  const pts = anno.coordinates;
-  if (!pts || !pts.length) return null;
-  if (anno.geom_type === 'point') {
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.05, 12, 12),
-      new THREE.MeshBasicMaterial({ color: color })
-    );
-    mesh.position.set(pts[0][0], pts[0][1], pts[0][2]);
-    return mesh;
-  }
-  const vertices = pts.map(p => new THREE.Vector3(p[0], p[1], p[2]));
-  if (anno.geom_type === 'polygon' && vertices.length) {
-    vertices.push(vertices[0].clone());
-  }
-  return new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(vertices),
-    new THREE.LineBasicMaterial({ color: color })
-  );
+function syncAnnotationsToViewer() {
+  if (!window.TourViewer) return;
+  window.TourViewer.setAnnotationLayers(tourLayersData.map((l) => ({
+    id: l.id,
+    color: l.color,
+    visible: l.is_visible,
+    annotations: l.annotations.map((a) => ({ id: a.id, geomType: a.geom_type, coordinates: a.coordinates })),
+  })));
 }
 
-// Рендерит уже загруженные tourLayersData как THREE-объекты в сцене вьювера.
-// tourViewer всегда null (см. комментарий выше движка) — пока инструмент
-// рисования не перенесён на PlayCanvas, это тихий no-op.
-async function renderAllLayerObjects() {
-  if (!tourViewer || !tourViewer.threeScene) return;
-  const THREE = await getThree();
-  for (const id in layerGroups) {
-    try { tourViewer.threeScene.remove(layerGroups[id]); } catch (e) { /* noop */ }
-    delete layerGroups[id];
+function renderActiveLayerSelect() {
+  const sel = document.getElementById('tourActiveLayerSelect');
+  const prev = activeLayerId;
+  sel.innerHTML = tourLayersData.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+  if (prev && tourLayersData.some((l) => l.id === prev)) {
+    activeLayerId = prev;
+  } else {
+    activeLayerId = tourLayersData.length ? tourLayersData[0].id : null;
   }
-  for (const layer of tourLayersData) {
-    const group = new THREE.Group();
-    group.visible = layer.is_visible;
-    for (const anno of layer.annotations) {
-      const obj = buildAnnotationObject(THREE, anno, layer.color);
-      if (obj) group.add(obj);
-    }
-    tourViewer.threeScene.add(group);
-    layerGroups[layer.id] = group;
+  sel.value = activeLayerId != null ? String(activeLayerId) : '';
+}
+
+function renderSelectedAnnoPanel() {
+  const panel = document.getElementById('tourSelectedAnnoPanel');
+  if (!selectedAnno) {
+    panel.classList.add('d-none');
+    return;
   }
+  panel.classList.remove('d-none');
+  const sel = document.getElementById('tourSelectedAnnoLayerSelect');
+  sel.innerHTML = tourLayersData.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+  sel.value = String(selectedAnno.layerId);
 }
 
 function renderLayersList() {
@@ -702,17 +699,18 @@ function renderLayersList() {
   }
   list.querySelectorAll('.layer-visibility').forEach((cb) => {
     cb.addEventListener('change', async () => {
-      const id = cb.dataset.layerId;
+      const id = Number(cb.dataset.layerId);
       await fetch('/api/tour_annotations.php', { method: 'POST', body: JSON.stringify({ action: 'toggle_layer', id: id }) });
-      const layer = tourLayersData.find((l) => String(l.id) === id);
+      const layer = tourLayersData.find((l) => l.id === id);
       if (layer) layer.is_visible = cb.checked;
-      if (layerGroups[id]) layerGroups[id].visible = cb.checked;
+      syncAnnotationsToViewer();
     });
   });
   list.querySelectorAll('.layer-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {
       if (!confirm('Удалить слой со всеми объектами?')) return;
-      await fetch('/api/tour_annotations.php', { method: 'POST', body: JSON.stringify({ action: 'delete_layer', id: btn.dataset.layerId }) });
+      await fetch('/api/tour_annotations.php', { method: 'POST', body: JSON.stringify({ action: 'delete_layer', id: Number(btn.dataset.layerId) }) });
+      if (selectedAnno && selectedAnno.layerId === Number(btn.dataset.layerId)) selectedAnno = null;
       await fetchLayers();
     });
   });
@@ -728,97 +726,118 @@ async function fetchLayers() {
     tourLayersData = [];
   }
   renderLayersList();
-  await renderAllLayerObjects();
-}
-
-// Рейкастинг на сплаты — см. план в serene-wishing-hickey.md. Написан под
-// GaussianSplats3D.Raycaster; tourViewer теперь всегда null (движок —
-// PlayCanvas), поэтому функция всегда возвращает null без ошибок —
-// инструменты рисования тихо не работают до отдельного переноса picking'а
-// на PlayCanvas.
-async function pickPointOnModel(clientX, clientY) {
-  if (!tourViewer || !tourViewer.camera || !tourViewer.splatMesh || !tourViewer.raycaster) return null;
-  const THREE = await getThree();
-  const container = document.getElementById('tourViewerContainer');
-  const rect = container.getBoundingClientRect();
-  const screenPos = new THREE.Vector2(clientX - rect.left, clientY - rect.top);
-  const dims = { x: rect.width, y: rect.height };
-  try {
-    tourViewer.raycaster.setFromCameraAndScreenPosition(tourViewer.camera, screenPos, dims);
-    const hits = [];
-    tourViewer.raycaster.intersectSplatMesh(tourViewer.splatMesh, hits);
-    if (hits.length > 0 && hits[0].origin) {
-      return [hits[0].origin.x, hits[0].origin.y, hits[0].origin.z];
-    }
-  } catch (e) {
-    console.error('Рейкастинг по сплатам не сработал:', e);
-  }
-  return null;
+  renderActiveLayerSelect();
+  renderSelectedAnnoPanel();
+  syncAnnotationsToViewer();
 }
 
 function setDrawingTool(tool) {
   drawingTool = tool;
   drawingPoints = [];
-  removeDrawingPreview();
+  selectedAnno = null;
+  renderSelectedAnnoPanel();
+  window.TourViewer?.setDrawingPreview(null, '#ffff00');
   document.querySelectorAll('#tourDrawToolbar [data-tool]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tool === tool);
   });
 }
 
-function removeDrawingPreview() {
-  if (drawingPreviewLine && tourViewer && tourViewer.threeScene) {
-    try { tourViewer.threeScene.remove(drawingPreviewLine); } catch (e) { /* noop */ }
-  }
-  drawingPreviewLine = null;
-}
-
-async function updateDrawingPreview() {
-  if (drawingPoints.length < 2 || !tourViewer || !tourViewer.threeScene) return;
-  const THREE = await getThree();
-  removeDrawingPreview();
-  const vertices = drawingPoints.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
-  drawingPreviewLine = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(vertices),
-    new THREE.LineBasicMaterial({ color: 0xffff00 })
-  );
-  tourViewer.threeScene.add(drawingPreviewLine);
-}
-
 async function saveAnnotation(geomType, coordinates) {
-  // MVP: рисуем всегда в первый слой тура — выбор конкретного слоя для
-  // рисования можно добавить позже, если понадобится несколько активных слоёв.
-  const layer = tourLayersData[0];
-  if (!layer) {
-    alert('Сначала создайте слой (кнопка «Слои» → поле снизу панели)');
+  if (!activeLayerId) {
+    alert('Сначала создайте слой и выберите его как активный (панель «Слои»)');
     return;
   }
   await fetch('/api/tour_annotations.php', {
     method: 'POST',
-    body: JSON.stringify({ action: 'save_annotation', layer_id: layer.id, geom_type: geomType, coordinates: coordinates }),
+    body: JSON.stringify({ action: 'save_annotation', layer_id: activeLayerId, geom_type: geomType, coordinates: coordinates }),
   });
   await fetchLayers();
 }
 
 async function finishDrawing() {
-  if (!drawingTool || drawingPoints.length < 2) return;
+  if (!drawingTool || drawingTool === 'edit' || drawingPoints.length < 2) return;
   await saveAnnotation(drawingTool, drawingPoints);
   drawingPoints = [];
-  removeDrawingPreview();
+  window.TourViewer?.setDrawingPreview(null, '#ffff00');
+}
+
+function onViewerVertexPointerDown(e) {
+  if (drawingTool !== 'edit' || !isAdminJs || !window.TourViewer) return;
+  const hit = window.TourViewer.pickAnnotationVertex(e.clientX, e.clientY);
+  if (!hit) {
+    selectedAnno = null;
+    renderSelectedAnnoPanel();
+    return;
+  }
+  selectedAnno = { layerId: hit.layerId, annotationId: hit.annotationId };
+  renderSelectedAnnoPanel();
+  draggingVertex = hit;
+  window.addEventListener('pointermove', onViewerVertexPointerMove);
+  window.addEventListener('pointerup', onViewerVertexPointerUp);
+}
+
+function onViewerVertexPointerMove(e) {
+  if (!draggingVertex || !window.TourViewer) return;
+  const point = window.TourViewer.pickPoint(e.clientX, e.clientY);
+  if (!point) return;
+  const { anno } = findAnnotation(draggingVertex.layerId, draggingVertex.annotationId);
+  if (!anno) return;
+  anno.coordinates[draggingVertex.pointIndex] = point;
+  syncAnnotationsToViewer();
+}
+
+async function onViewerVertexPointerUp() {
+  window.removeEventListener('pointermove', onViewerVertexPointerMove);
+  window.removeEventListener('pointerup', onViewerVertexPointerUp);
+  if (!draggingVertex) return;
+  const { anno } = findAnnotation(draggingVertex.layerId, draggingVertex.annotationId);
+  draggingVertex = null;
+  if (!anno) return;
+  await fetch('/api/tour_annotations.php', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'update_annotation', id: anno.id, coordinates: anno.coordinates }),
+  });
 }
 
 async function onViewerContainerClick(e) {
-  if (!drawingTool || !isAdminJs) return;
-  const point = await pickPointOnModel(e.clientX, e.clientY);
+  if (!drawingTool || drawingTool === 'edit' || !isAdminJs || !window.TourViewer) return;
+  const point = window.TourViewer.pickPoint(e.clientX, e.clientY);
   if (!point) return;
   if (drawingTool === 'point') {
     await saveAnnotation('point', [point]);
   } else {
     drawingPoints.push(point);
-    await updateDrawingPreview();
+    window.TourViewer.setDrawingPreview(drawingPoints, '#ffff00');
   }
 }
 
 document.getElementById('tourViewerContainer').addEventListener('click', onViewerContainerClick);
+document.getElementById('tourViewerContainer').addEventListener('pointerdown', onViewerVertexPointerDown);
+
+document.getElementById('tourActiveLayerSelect').addEventListener('change', (e) => {
+  activeLayerId = Number(e.target.value);
+});
+
+document.getElementById('tourSelectedAnnoLayerSelect').addEventListener('change', async (e) => {
+  if (!selectedAnno) return;
+  const newLayerId = Number(e.target.value);
+  await fetch('/api/tour_annotations.php', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'update_annotation', id: selectedAnno.annotationId, layer_id: newLayerId }),
+  });
+  selectedAnno = { ...selectedAnno, layerId: newLayerId };
+  await fetchLayers();
+});
+
+document.getElementById('tourSelectedAnnoDeleteBtn').addEventListener('click', async () => {
+  if (!selectedAnno || !confirm('Удалить объект?')) return;
+  await fetch('/api/tour_annotations.php', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'delete_annotation', id: selectedAnno.annotationId }),
+  });
+  selectedAnno = null;
+  await fetchLayers();
+});
 
 document.getElementById('tourLayersBtn').addEventListener('click', () => {
   document.getElementById('tourLayersPanel').classList.toggle('d-none');
@@ -958,12 +977,11 @@ tourModalEl.addEventListener('shown.bs.modal', () => {
   document.getElementById('tourLayersPanel').classList.add('d-none');
   document.getElementById('tourSettingsPanel').classList.add('d-none');
   setDrawingTool(null);
-  // Рисование/слои поверх модели сделаны под рейкастинг GaussianSplats3D,
-  // которого в PlayCanvas нет (см. комментарий у движка выше) — прячем
-  // тулбар для ОБОИХ типов моделей, пока не перенесён picking. Кнопка
-  // центрирования и настроек, наоборот, теперь полезны для обоих типов.
+  // Тулбар рисования — picking приближённый (через сферу модели, см.
+  // viewer/src/annotations.ts), но одинаково доступен для обоих типов
+  // моделей (точки/сплаты), элемент и так есть в DOM только для админов.
   const toolbar = document.getElementById('tourDrawToolbar');
-  if (toolbar) toolbar.classList.add('d-none');
+  if (toolbar) toolbar.classList.remove('d-none');
   document.getElementById('tourCenterBtn').classList.remove('d-none');
   document.getElementById('tourSettingsBtn').classList.remove('d-none');
   fetchLayers();
@@ -986,12 +1004,11 @@ tourModalEl.addEventListener('hidden.bs.modal', () => {
   currentTourUrls = null;
   currentTourId = null;
   tourLayersData = [];
-  for (const id in layerGroups) {
-    delete layerGroups[id];
-  }
   drawingTool = null;
   drawingPoints = [];
-  drawingPreviewLine = null;
+  activeLayerId = null;
+  selectedAnno = null;
+  draggingVertex = null;
   window.TourViewer.dispose();
   document.getElementById('tourViewerContainer').innerHTML = '';
 });

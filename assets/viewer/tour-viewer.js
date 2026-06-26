@@ -5366,6 +5366,15 @@ class OrbitController {
     this.homeYaw = this.yaw;
     this.homePitch = this.pitch;
   }
+  /** "Сфера модели" — центр и радиус, под которые подогнана камера при
+   * captureHome() (target/distance, теми же коэффициентами, что и framing
+   * самой камеры, см. copcLoader.ts/splatLoader.ts/lasLoader.ts). Используется
+   * только как ГРУБОЕ приближение поверхности модели для пикинга аннотаций
+   * (annotations.ts) — у PlayCanvas нет настоящего picking для облака точек/
+   * сплатов, см. комментарий там. */
+  getHomeSphere() {
+    return { center: this.homeTarget.clone(), radius: this.homeDistance };
+  }
   /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
    * ТЕКУЩЕЕ состояние, а сначала восстанавливает target/distance/yaw/pitch
    * из снимка captureHome(), и только потом пересчитывает камеру. */
@@ -5522,6 +5531,124 @@ class FlyController {
     this.camera.setPosition(pos);
   }
 }
+function createAnnotationManager(pc, app) {
+  const axisFix = new pc.Quat(...AXIS_FIX_ROTATION);
+  const axisFixInv = axisFix.clone().invert();
+  function localToWorld(p) {
+    return axisFix.transformVector(new pc.Vec3(p[0], p[1], p[2]));
+  }
+  function worldToLocal(v) {
+    const r = axisFixInv.transformVector(v.clone());
+    return [r.x, r.y, r.z];
+  }
+  let layers = [];
+  let drawingPreview = null;
+  let pickSphere = null;
+  function setPickSphere(center, radius) {
+    pickSphere = { center: center.clone(), radius: Math.max(radius, 1e-3) };
+  }
+  function setLayers(next) {
+    layers = next;
+  }
+  function setDrawingPreview(points, color) {
+    drawingPreview = points && points.length ? { points, color } : null;
+  }
+  function colorOf(hex) {
+    const c = new pc.Color();
+    c.fromString(hex);
+    return c;
+  }
+  function drawCross(center, color, size) {
+    const { x, y, z } = center;
+    app.drawLine(new pc.Vec3(x - size, y, z), new pc.Vec3(x + size, y, z), color, true);
+    app.drawLine(new pc.Vec3(x, y - size, z), new pc.Vec3(x, y + size, z), color, true);
+    app.drawLine(new pc.Vec3(x, y, z - size), new pc.Vec3(x, y, z + size), color, true);
+  }
+  function drawPolyline(points, color, closed) {
+    if (points.length < 2) return;
+    const worldPts = points.map(localToWorld);
+    for (let i = 0; i + 1 < worldPts.length; i++) {
+      app.drawLine(worldPts[i], worldPts[i + 1], color, true);
+    }
+    if (closed && worldPts.length > 2) {
+      app.drawLine(worldPts[worldPts.length - 1], worldPts[0], color, true);
+    }
+  }
+  function markerSize() {
+    return pickSphere ? Math.max(pickSphere.radius * 0.015, 0.01) : 0.05;
+  }
+  function renderFrame() {
+    const size = markerSize();
+    for (const layer of layers) {
+      if (!layer.visible) continue;
+      const color = colorOf(layer.color);
+      for (const anno of layer.annotations) {
+        if (!anno.coordinates.length) continue;
+        if (anno.geomType === "point") {
+          drawCross(localToWorld(anno.coordinates[0]), color, size);
+        } else {
+          drawPolyline(anno.coordinates, color, anno.geomType === "polygon");
+        }
+      }
+    }
+    if (drawingPreview) {
+      drawPolyline(drawingPreview.points, colorOf(drawingPreview.color), false);
+      for (const p of drawingPreview.points) drawCross(localToWorld(p), colorOf(drawingPreview.color), size * 0.6);
+    }
+  }
+  app.on("update", renderFrame);
+  function pickPoint(camera, canvas, clientX, clientY) {
+    if (!pickSphere) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
+    const py = (clientY - rect.top) / rect.height * canvas.clientHeight;
+    const camComp = camera.camera;
+    const near = camComp.screenToWorld(px, py, camComp.nearClip);
+    const far = camComp.screenToWorld(px, py, camComp.farClip);
+    const dir = far.clone().sub(near).normalize();
+    const oc = near.clone().sub(pickSphere.center);
+    const b = oc.dot(dir);
+    const c = oc.dot(oc) - pickSphere.radius * pickSphere.radius;
+    const disc = b * b - c;
+    if (disc < 0) return null;
+    const sqrtDisc = Math.sqrt(disc);
+    let t = -b - sqrtDisc;
+    if (t < 0) t = -b + sqrtDisc;
+    if (t < 0) return null;
+    const hit = near.clone().add(dir.clone().mulScalar(t));
+    return worldToLocal(hit);
+  }
+  function pickVertex(camera, canvas, clientX, clientY, thresholdPx = 14) {
+    const rect = canvas.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    const camComp = camera.camera;
+    let best = null;
+    let bestDist = thresholdPx;
+    for (const layer of layers) {
+      if (!layer.visible) continue;
+      for (const anno of layer.annotations) {
+        for (let i = 0; i < anno.coordinates.length; i++) {
+          const world = localToWorld(anno.coordinates[i]);
+          const screen = camComp.worldToScreen(world, new pc.Vec3());
+          if (!screen) continue;
+          const sx = screen.x / canvas.clientWidth * rect.width;
+          const sy = screen.y / canvas.clientHeight * rect.height;
+          const dist = Math.hypot(sx - px, sy - py);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = { layerId: layer.id, annotationId: anno.id, pointIndex: i };
+          }
+        }
+      }
+    }
+    return best;
+  }
+  function dispose() {
+    app.off("update", renderFrame);
+  }
+  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickVertex, dispose };
+}
 function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s ?? "";
@@ -5556,6 +5683,7 @@ function disposeTourViewer() {
     for (const handle of entry.copcHandles) handle.dispose();
     (_a = entry.collisionMesh) == null ? void 0 : _a.dispose();
     for (const url of entry.splatObjectUrls) URL.revokeObjectURL(url);
+    entry.annotations.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -5564,6 +5692,22 @@ function disposeTourViewer() {
 function recenterTourCamera() {
   if (!currentApp) return;
   currentApp.recenter();
+}
+function pickTourPoint(clientX, clientY) {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+function pickTourAnnotationVertex(clientX, clientY) {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickVertex(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+function setTourAnnotationLayers(layers) {
+  if (!currentApp) return;
+  currentApp.annotations.setLayers(layers);
+}
+function setTourDrawingPreview(points, color) {
+  if (!currentApp) return;
+  currentApp.annotations.setDrawingPreview(points, color);
 }
 async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], collisionUrl = null) {
   hideViewerError();
@@ -5677,6 +5821,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
     const gizmo = createNavCubeGizmo(pc, app);
     const orbit = new OrbitController(pc, camera, gizmo);
     const fly = new FlyController(pc, camera, gizmo);
+    const annotations = createAnnotationManager(pc, app);
     let activeMode = cameraSettings.navigationMode === "orbit" ? "orbit" : "fly";
     let requestedMode = cameraSettings.navigationMode;
     let collisionMesh = null;
@@ -5716,6 +5861,9 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       detachNavigation: () => activeMode === "orbit" ? orbit.detach() : fly.detach(),
       copcHandles,
       splatObjectUrls,
+      annotations,
+      camera,
+      canvas,
       get collisionMesh() {
         return collisionMesh;
       }
@@ -5794,6 +5942,8 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
     if (isCurrent()) {
       orbit.captureHome();
       recenter();
+      const sphere = orbit.getHomeSphere();
+      annotations.setPickSphere(sphere.center, sphere.radius);
     }
     hideProgress();
   } catch (e) {
@@ -5808,6 +5958,10 @@ const api = {
   showError: showViewerError,
   hideError: hideViewerError,
   getSettings: getCameraSettings,
-  setSettings: setCameraSettings
+  setSettings: setCameraSettings,
+  pickPoint: pickTourPoint,
+  pickAnnotationVertex: pickTourAnnotationVertex,
+  setAnnotationLayers: setTourAnnotationLayers,
+  setDrawingPreview: setTourDrawingPreview
 };
 window.TourViewer = api;
