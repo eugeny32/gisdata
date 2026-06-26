@@ -18,10 +18,14 @@ export interface CameraSettings {
   projection: 'perspective' | 'orthographic';
   orbitSensitivity: number;
   zoomSpeed: number;
-  /** units/сек — пока не используется (нет Fly/Walk), читается будущими PR2/PR5. */
+  /** units/сек — скорость свободного полёта (FlyController, PR2); Walk
+   * (PR5, с коллизиями через `-K`-коллайдер) использует то же поле. */
   moveSpeed: number;
   pointSizePx: number;
   edlEnabled: boolean;
+  /** 'walk' зарезервирован под PR5 (коллизии) — UI пока предлагает только
+   * orbit/fly, выбор 'walk' молча трактуется как 'fly' (см. tourViewer.ts). */
+  navigationMode: 'orbit' | 'fly' | 'walk';
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -34,6 +38,7 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   moveSpeed: 5,
   pointSizePx: 2,
   edlEnabled: false,
+  navigationMode: 'orbit',
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

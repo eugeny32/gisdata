@@ -3,6 +3,8 @@ import { createNavCubeGizmo } from './gizmo';
 import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
+import { OrbitController } from './navigation/orbitController';
+import { FlyController } from './navigation/flyController';
 
 /** Минимальный HTML-escape для сообщения об ошибке — дублирует
  * escapeHtml() из map.php намеренно: модуль не должен тянуться в global
@@ -36,6 +38,7 @@ interface PcAppWithGisdata {
   resizeObserver: ResizeObserver;
   recenter: () => void;
   unsubscribeSettings: () => void;
+  detachNavigation: () => void;
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -47,6 +50,7 @@ export function disposeTourViewer(): void {
   currentApp = null;
   try {
     entry.unsubscribeSettings();
+    entry.detachNavigation();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -146,88 +150,80 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
         material.setParameter('uPointSize', settings.pointSizePx);
         material.update();
       }
-      updateCameraTransform();
+      setNavigationModeInternal(settings.navigationMode);
+      if (activeMode === 'orbit') orbit.update();
     }
 
-    // Orbit камерой: drag левой кнопкой — поворот вокруг target, колесо —
-    // зум. target — точка "плотности" модели (см. loadSplatFiles/loadLasFiles),
-    // не геометрический центр bounding box.
-    const target = new pc.Vec3(0, 0, 0);
-    let distance = 5;
-    let yaw = 45;
-    let pitch = -20;
-
+    // Модуль 1 ("Навигация") — штурвал переиспользуется обоими режимами
+    // (принимает простые числа yaw/pitch, не завязан на конкретный
+    // контроллер — это и есть его "переиспользуемость", см. gizmo.ts).
     const gizmo = createNavCubeGizmo(pc, app);
+    const orbit = new OrbitController(pc, camera, gizmo);
+    const fly = new FlyController(pc, camera, gizmo);
 
-    function updateCameraTransform(): void {
-      const yawQ = new pc.Quat().setFromEulerAngles(0, yaw, 0);
-      const pitchQ = new pc.Quat().setFromEulerAngles(pitch, 0, 0);
-      const rot = yawQ.clone().mul(pitchQ);
-      const offset = rot.transformVector(new pc.Vec3(0, 0, distance));
-      camera.setPosition(target.x + offset.x, target.y + offset.y, target.z + offset.z);
-      camera.lookAt(target);
-      // В ортографической проекции "зум" колесом не двигает камеру ближе
-      // (расстояние не влияет на видимый размер), поэтому привязываем
-      // orthoHeight к той же distance — иначе колесо мыши перестаёт
-      // визуально работать как зум в ortho-режиме.
-      (camera as any).camera.orthoHeight = distance * 0.5;
-      gizmo.updateTransform(yaw, pitch);
+    // 'walk' зарезервирован под PR5 (коллизии через -K-коллайдер из
+    // splat-transform) — пока молча работает как 'fly' (см. cameraSettings.ts).
+    let activeMode: 'orbit' | 'fly' = cameraSettings.navigationMode === 'orbit' ? 'orbit' : 'fly';
+
+    function syncFlyFromOrbit(): void {
+      fly.syncFrom(camera.getPosition(), orbit.yaw, orbit.pitch);
     }
 
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    canvas.addEventListener('pointerdown', (e) => {
-      const hit = gizmo.handlePointerDown(e, canvas);
-      if (hit) {
-        yaw = hit.yaw;
-        pitch = hit.pitch;
-        updateCameraTransform();
-        return;
+    function setNavigationModeInternal(mode: 'orbit' | 'fly' | 'walk'): void {
+      const next = mode === 'orbit' ? 'orbit' : 'fly';
+      if (next === activeMode) return;
+      if (activeMode === 'orbit') orbit.detach();
+      else fly.detach();
+      activeMode = next;
+      if (activeMode === 'orbit') {
+        orbit.attach(canvas);
+        orbit.update();
+      } else {
+        syncFlyFromOrbit();
+        fly.attach(canvas);
       }
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
+    }
+
+    if (activeMode === 'orbit') orbit.attach(canvas);
+    else {
+      syncFlyFromOrbit();
+      fly.attach(canvas);
+    }
+
+    /** "Центрировать" — независимо от текущего режима возвращает камеру к
+     * виду по умолчанию (target/distance/yaw/pitch орбиты для этой модели);
+     * если активен полёт — синхронизирует его состояние с этим видом, чтобы
+     * WASD продолжил движение от свежей позиции, а не от старой. */
+    function recenter(): void {
+      orbit.update();
+      if (activeMode === 'fly') syncFlyFromOrbit();
+    }
+
+    app.on('update', (dt: number) => {
+      if (activeMode === 'fly') fly.update(dt);
     });
-    window.addEventListener('pointerup', () => {
-      dragging = false;
-    });
-    window.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const k = 0.3 * cameraSettings.orbitSensitivity;
-      yaw -= (e.clientX - lastX) * k;
-      pitch = Math.max(-89, Math.min(89, pitch - (e.clientY - lastY) * k));
-      lastX = e.clientX;
-      lastY = e.clientY;
-      updateCameraTransform();
-    });
-    canvas.addEventListener(
-      'wheel',
-      (e) => {
-        e.preventDefault();
-        distance = Math.max(0.05, distance * (1 + e.deltaY * 0.001 * cameraSettings.zoomSpeed));
-        updateCameraTransform();
-      },
-      { passive: false }
-    );
 
     applyCameraSettings(cameraSettings);
     const unsubscribeSettings = onCameraSettingsChange(applyCameraSettings);
 
     app.start();
 
-    currentApp = { app, resizeObserver, recenter: updateCameraTransform, unsubscribeSettings };
+    currentApp = {
+      app,
+      resizeObserver,
+      recenter,
+      unsubscribeSettings,
+      detachNavigation: () => (activeMode === 'orbit' ? orbit.detach() : fly.detach()),
+    };
 
     if (modelType === 'pointcloud') {
       await loadLasFiles(
         pc,
         app,
         urls,
-        target,
-        (d) => {
-          distance = d;
-        },
-        updateCameraTransform,
+        orbit.target,
+        (d) => orbit.setDistance(d),
+        () => orbit.update(),
         isCurrent,
         showProgress,
         cameraSettings.pointSizePx,
@@ -238,17 +234,15 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
         pc,
         app,
         urls,
-        target,
-        (d) => {
-          distance = d;
-        },
-        updateCameraTransform,
+        orbit.target,
+        (d) => orbit.setDistance(d),
+        () => orbit.update(),
         isCurrent,
         showProgress
       );
     }
     if (isCurrent()) {
-      updateCameraTransform();
+      recenter();
     }
     hideProgress();
   } catch (e) {

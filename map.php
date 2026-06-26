@@ -179,12 +179,24 @@ require __DIR__ . '/app/views/_head.php';
               </select>
             </div>
             <div class="mb-2">
+              <label class="form-label small mb-0">Режим навигации</label>
+              <select class="form-select form-select-sm" id="tourSettingNavMode">
+                <option value="orbit">Орбита (вокруг модели)</option>
+                <option value="fly">Полёт (свободная камера, WASD)</option>
+              </select>
+              <div class="small text-secondary">Полёт: левая кнопка — поворот, WASD — движение, Space/Shift — вверх/вниз.</div>
+            </div>
+            <div class="mb-2">
               <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
               <input type="range" class="form-range" id="tourSettingSensitivity" min="0.2" max="3" step="0.1">
             </div>
             <div class="mb-2">
               <label class="form-label small mb-0">Скорость зума: <span id="tourSettingZoomSpeedValue"></span></label>
               <input type="range" class="form-range" id="tourSettingZoomSpeed" min="0.2" max="3" step="0.1">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Скорость полёта: <span id="tourSettingMoveSpeedValue"></span></label>
+              <input type="range" class="form-range" id="tourSettingMoveSpeed" min="0.5" max="20" step="0.5">
             </div>
             <div class="mb-2">
               <label class="form-label small mb-0">Размер точки (LAS): <span id="tourSettingPointSizeValue"></span>px</label>
@@ -737,10 +749,14 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingNear').value = s.nearClip;
   document.getElementById('tourSettingFar').value = s.farClip;
   document.getElementById('tourSettingProjection').value = s.projection;
+  // 'walk' пока не предлагается в UI (PR5) — отображаем как 'fly'.
+  document.getElementById('tourSettingNavMode').value = s.navigationMode === 'orbit' ? 'orbit' : 'fly';
   document.getElementById('tourSettingSensitivity').value = s.orbitSensitivity;
   document.getElementById('tourSettingSensitivityValue').textContent = s.orbitSensitivity;
   document.getElementById('tourSettingZoomSpeed').value = s.zoomSpeed;
   document.getElementById('tourSettingZoomSpeedValue').textContent = s.zoomSpeed;
+  document.getElementById('tourSettingMoveSpeed').value = s.moveSpeed;
+  document.getElementById('tourSettingMoveSpeedValue').textContent = s.moveSpeed;
   document.getElementById('tourSettingPointSize').value = s.pointSizePx;
   document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
@@ -763,6 +779,13 @@ document.getElementById('tourSettingFar').addEventListener('change', (e) => {
 });
 document.getElementById('tourSettingProjection').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ projection: e.target.value });
+});
+document.getElementById('tourSettingNavMode').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ navigationMode: e.target.value });
+});
+document.getElementById('tourSettingMoveSpeed').addEventListener('input', (e) => {
+  document.getElementById('tourSettingMoveSpeedValue').textContent = e.target.value;
+  window.TourViewer.setSettings({ moveSpeed: Number(e.target.value) });
 });
 document.getElementById('tourSettingSensitivity').addEventListener('input', (e) => {
   document.getElementById('tourSettingSensitivityValue').textContent = e.target.value;

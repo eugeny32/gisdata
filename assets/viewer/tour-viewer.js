@@ -66,8 +66,8 @@ function createNavCubeGizmo(pc, app) {
     const vh = r.w * ch;
     if (px < vx || px > vx + vw || py < vyTop || py > vyTop + vh) return null;
     const cam = gizmoCamera.camera;
-    const near = cam.screenToWorld(px, py, cam.nearClip, cw, ch);
-    const far = cam.screenToWorld(px, py, cam.farClip, cw, ch);
+    const near = cam.screenToWorld(px, py, cam.nearClip);
+    const far = cam.screenToWorld(px, py, cam.farClip);
     const dir = far.clone().sub(near).normalize();
     let tMin = -Infinity;
     let tMax = Infinity;
@@ -316,7 +316,8 @@ const DEFAULT_CAMERA_SETTINGS = {
   zoomSpeed: 1,
   moveSpeed: 5,
   pointSizePx: 2,
-  edlEnabled: false
+  edlEnabled: false,
+  navigationMode: "orbit"
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -350,6 +351,176 @@ function setCameraSettings(partial) {
 function getCameraSettings() {
   return cameraSettings;
 }
+class OrbitController {
+  constructor(pc, camera, gizmo) {
+    this.distance = 5;
+    this.yaw = 45;
+    this.pitch = -20;
+    this.canvas = null;
+    this.dragging = false;
+    this.lastX = 0;
+    this.lastY = 0;
+    this.onPointerDown = (e) => {
+      if (!this.canvas) return;
+      const hit = this.gizmo.handlePointerDown(e, this.canvas);
+      if (hit) {
+        this.yaw = hit.yaw;
+        this.pitch = hit.pitch;
+        this.update();
+        return;
+      }
+      this.dragging = true;
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+    };
+    this.onPointerUp = () => {
+      this.dragging = false;
+    };
+    this.onPointerMove = (e) => {
+      if (!this.dragging) return;
+      const k = 0.3 * cameraSettings.orbitSensitivity;
+      this.yaw -= (e.clientX - this.lastX) * k;
+      this.pitch = Math.max(-89, Math.min(89, this.pitch - (e.clientY - this.lastY) * k));
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+      this.update();
+    };
+    this.onWheel = (e) => {
+      e.preventDefault();
+      this.distance = Math.max(0.05, this.distance * (1 + e.deltaY * 1e-3 * cameraSettings.zoomSpeed));
+      this.update();
+    };
+    this.pc = pc;
+    this.camera = camera;
+    this.gizmo = gizmo;
+    this.target = new pc.Vec3(0, 0, 0);
+  }
+  attach(canvas) {
+    this.canvas = canvas;
+    canvas.addEventListener("pointerdown", this.onPointerDown);
+    window.addEventListener("pointerup", this.onPointerUp);
+    window.addEventListener("pointermove", this.onPointerMove);
+    canvas.addEventListener("wheel", this.onWheel, { passive: false });
+  }
+  detach() {
+    if (!this.canvas) return;
+    this.canvas.removeEventListener("pointerdown", this.onPointerDown);
+    window.removeEventListener("pointerup", this.onPointerUp);
+    window.removeEventListener("pointermove", this.onPointerMove);
+    this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvas = null;
+  }
+  setDistance(d) {
+    this.distance = d;
+  }
+  /** Пересчитывает позицию камеры из target/distance/yaw/pitch и двигает
+   * штурвал в ту же ориентацию — единая точка входа и для пользовательского
+   * драга, и для внешних вызовов (центрирование, завершение загрузки модели). */
+  update() {
+    const pc = this.pc;
+    const yawQ = new pc.Quat().setFromEulerAngles(0, this.yaw, 0);
+    const pitchQ = new pc.Quat().setFromEulerAngles(this.pitch, 0, 0);
+    const rot = yawQ.clone().mul(pitchQ);
+    const offset = rot.transformVector(new pc.Vec3(0, 0, this.distance));
+    this.camera.setPosition(this.target.x + offset.x, this.target.y + offset.y, this.target.z + offset.z);
+    this.camera.lookAt(this.target);
+    this.camera.camera.orthoHeight = this.distance * 0.5;
+    this.gizmo.updateTransform(this.yaw, this.pitch);
+  }
+}
+const MOVE_KEYS = /* @__PURE__ */ new Set(["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight"]);
+class FlyController {
+  // pc принимается, но не используется напрямую (camera.forward/right/up и
+  // setEulerAngles — обычные методы Entity, без отдельных pc.* вызовов) —
+  // параметр оставлен ради одной сигнатуры конструктора с OrbitController.
+  constructor(_pc, camera, gizmo) {
+    this.yaw = 0;
+    this.pitch = 0;
+    this.canvas = null;
+    this.dragging = false;
+    this.lastX = 0;
+    this.lastY = 0;
+    this.pressedKeys = /* @__PURE__ */ new Set();
+    this.onPointerDown = (e) => {
+      if (!this.canvas) return;
+      const hit = this.gizmo.handlePointerDown(e, this.canvas);
+      if (hit) {
+        this.yaw = hit.yaw;
+        this.pitch = hit.pitch;
+        this.applyRotation();
+        return;
+      }
+      this.dragging = true;
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+    };
+    this.onPointerUp = () => {
+      this.dragging = false;
+    };
+    this.onPointerMove = (e) => {
+      if (!this.dragging) return;
+      const k = 0.3 * cameraSettings.orbitSensitivity;
+      this.yaw -= (e.clientX - this.lastX) * k;
+      this.pitch = Math.max(-89, Math.min(89, this.pitch - (e.clientY - this.lastY) * k));
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+      this.applyRotation();
+    };
+    this.onKeyDown = (e) => {
+      if (MOVE_KEYS.has(e.code)) this.pressedKeys.add(e.code);
+    };
+    this.onKeyUp = (e) => {
+      this.pressedKeys.delete(e.code);
+    };
+    this.camera = camera;
+    this.gizmo = gizmo;
+  }
+  attach(canvas) {
+    this.canvas = canvas;
+    canvas.addEventListener("pointerdown", this.onPointerDown);
+    window.addEventListener("pointerup", this.onPointerUp);
+    window.addEventListener("pointermove", this.onPointerMove);
+    window.addEventListener("keydown", this.onKeyDown);
+    window.addEventListener("keyup", this.onKeyUp);
+  }
+  detach() {
+    this.pressedKeys.clear();
+    if (!this.canvas) return;
+    this.canvas.removeEventListener("pointerdown", this.onPointerDown);
+    window.removeEventListener("pointerup", this.onPointerUp);
+    window.removeEventListener("pointermove", this.onPointerMove);
+    window.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("keyup", this.onKeyUp);
+    this.canvas = null;
+  }
+  /** Перенять текущее положение/ориентацию (например, от OrbitController
+   * при переключении режима или после центрирования модели) — без этого
+   * полёт продолжил бы двигаться от своих старых, уже неактуальных yaw/pitch. */
+  syncFrom(position, yaw, pitch) {
+    this.camera.setPosition(position.x, position.y, position.z);
+    this.yaw = yaw;
+    this.pitch = pitch;
+    this.applyRotation();
+  }
+  applyRotation() {
+    this.camera.setEulerAngles(this.pitch, this.yaw, 0);
+    this.gizmo.updateTransform(this.yaw, this.pitch);
+  }
+  /** Вызывается каждый кадр (app.on('update', dt)), только когда режим
+   * полёта активен — см. tourViewer.ts. */
+  update(dt) {
+    if (this.pressedKeys.size === 0) return;
+    const speed = cameraSettings.moveSpeed * dt;
+    const pos = this.camera.getPosition().clone();
+    if (this.pressedKeys.has("KeyW")) pos.add(this.camera.forward.clone().mulScalar(speed));
+    if (this.pressedKeys.has("KeyS")) pos.add(this.camera.forward.clone().mulScalar(-speed));
+    if (this.pressedKeys.has("KeyD")) pos.add(this.camera.right.clone().mulScalar(speed));
+    if (this.pressedKeys.has("KeyA")) pos.add(this.camera.right.clone().mulScalar(-speed));
+    if (this.pressedKeys.has("Space")) pos.add(this.camera.up.clone().mulScalar(speed));
+    if (this.pressedKeys.has("ShiftLeft") || this.pressedKeys.has("ShiftRight")) pos.add(this.camera.up.clone().mulScalar(-speed));
+    this.camera.setPosition(pos);
+  }
+}
 function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s ?? "";
@@ -379,6 +550,7 @@ function disposeTourViewer() {
   currentApp = null;
   try {
     entry.unsubscribeSettings();
+    entry.detachNavigation();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -432,16 +604,26 @@ async function loadTourScene(urls, modelType) {
         material.setParameter("uPointSize", settings.pointSizePx);
         material.update();
       }
-      updateCameraTransform();
-    }, updateCameraTransform = function() {
-      const yawQ = new pc.Quat().setFromEulerAngles(0, yaw, 0);
-      const pitchQ = new pc.Quat().setFromEulerAngles(pitch, 0, 0);
-      const rot = yawQ.clone().mul(pitchQ);
-      const offset = rot.transformVector(new pc.Vec3(0, 0, distance));
-      camera.setPosition(target.x + offset.x, target.y + offset.y, target.z + offset.z);
-      camera.lookAt(target);
-      camera.camera.orthoHeight = distance * 0.5;
-      gizmo.updateTransform(yaw, pitch);
+      setNavigationModeInternal(settings.navigationMode);
+      if (activeMode === "orbit") orbit.update();
+    }, syncFlyFromOrbit = function() {
+      fly.syncFrom(camera.getPosition(), orbit.yaw, orbit.pitch);
+    }, setNavigationModeInternal = function(mode) {
+      const next = mode === "orbit" ? "orbit" : "fly";
+      if (next === activeMode) return;
+      if (activeMode === "orbit") orbit.detach();
+      else fly.detach();
+      activeMode = next;
+      if (activeMode === "orbit") {
+        orbit.attach(canvas);
+        orbit.update();
+      } else {
+        syncFlyFromOrbit();
+        fly.attach(canvas);
+      }
+    }, recenter = function() {
+      orbit.update();
+      if (activeMode === "fly") syncFlyFromOrbit();
     };
     const pc = await import("playcanvas");
     if (!isCurrent()) {
@@ -468,61 +650,36 @@ async function loadTourScene(urls, modelType) {
     });
     app.root.addChild(camera);
     const lasMaterials = [];
-    const target = new pc.Vec3(0, 0, 0);
-    let distance = 5;
-    let yaw = 45;
-    let pitch = -20;
     const gizmo = createNavCubeGizmo(pc, app);
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    canvas.addEventListener("pointerdown", (e) => {
-      const hit = gizmo.handlePointerDown(e, canvas);
-      if (hit) {
-        yaw = hit.yaw;
-        pitch = hit.pitch;
-        updateCameraTransform();
-        return;
-      }
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
+    const orbit = new OrbitController(pc, camera, gizmo);
+    const fly = new FlyController(pc, camera, gizmo);
+    let activeMode = cameraSettings.navigationMode === "orbit" ? "orbit" : "fly";
+    if (activeMode === "orbit") orbit.attach(canvas);
+    else {
+      syncFlyFromOrbit();
+      fly.attach(canvas);
+    }
+    app.on("update", (dt) => {
+      if (activeMode === "fly") fly.update(dt);
     });
-    window.addEventListener("pointerup", () => {
-      dragging = false;
-    });
-    window.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const k = 0.3 * cameraSettings.orbitSensitivity;
-      yaw -= (e.clientX - lastX) * k;
-      pitch = Math.max(-89, Math.min(89, pitch - (e.clientY - lastY) * k));
-      lastX = e.clientX;
-      lastY = e.clientY;
-      updateCameraTransform();
-    });
-    canvas.addEventListener(
-      "wheel",
-      (e) => {
-        e.preventDefault();
-        distance = Math.max(0.05, distance * (1 + e.deltaY * 1e-3 * cameraSettings.zoomSpeed));
-        updateCameraTransform();
-      },
-      { passive: false }
-    );
     applyCameraSettings(cameraSettings);
     const unsubscribeSettings = onCameraSettingsChange(applyCameraSettings);
     app.start();
-    currentApp = { app, resizeObserver, recenter: updateCameraTransform, unsubscribeSettings };
+    currentApp = {
+      app,
+      resizeObserver,
+      recenter,
+      unsubscribeSettings,
+      detachNavigation: () => activeMode === "orbit" ? orbit.detach() : fly.detach()
+    };
     if (modelType === "pointcloud") {
       await loadLasFiles(
         pc,
         app,
         urls,
-        target,
-        (d) => {
-          distance = d;
-        },
-        updateCameraTransform,
+        orbit.target,
+        (d) => orbit.setDistance(d),
+        () => orbit.update(),
         isCurrent,
         showProgress,
         cameraSettings.pointSizePx,
@@ -533,17 +690,15 @@ async function loadTourScene(urls, modelType) {
         pc,
         app,
         urls,
-        target,
-        (d) => {
-          distance = d;
-        },
-        updateCameraTransform,
+        orbit.target,
+        (d) => orbit.setDistance(d),
+        () => orbit.update(),
         isCurrent,
         showProgress
       );
     }
     if (isCurrent()) {
-      updateCameraTransform();
+      recenter();
     }
     hideProgress();
   } catch (e) {

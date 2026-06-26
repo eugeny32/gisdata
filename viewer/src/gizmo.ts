@@ -108,9 +108,14 @@ export function createNavCubeGizmo(pc: PcModule, app: InstanceType<PcModule['App
     const vh = r.w * ch;
     if (px < vx || px > vx + vw || py < vyTop || py > vyTop + vh) return null;
 
+    // CameraComponent.screenToWorld(x, y, z, worldCoord?) — без cw/ch, сам
+    // берёт размер из device.clientRect; 4-й параметр — опциональный output
+    // Vec3, а не ширина канваса (баг унаследован из исходного кода
+    // map.php, никогда не проверялся реальным кликом по штурвалу — нашёлся
+    // только сейчас, при первом автоматическом тесте клика).
     const cam = (gizmoCamera as any).camera;
-    const near = cam.screenToWorld(px, py, cam.nearClip, cw, ch);
-    const far = cam.screenToWorld(px, py, cam.farClip, cw, ch);
+    const near = cam.screenToWorld(px, py, cam.nearClip);
+    const far = cam.screenToWorld(px, py, cam.farClip);
     const dir = far.clone().sub(near).normalize();
 
     let tMin = -Infinity;
