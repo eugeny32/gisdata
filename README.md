@@ -8,13 +8,15 @@
 - `app/config.php` — настройки приложения (RINEX, параметры опроса NTRIP, сессия); PostgreSQL/mdb подтягиваются из `.env` через `app/lib/env.php`. Локальные переопределения — в `app/config.local.php` (в git не коммитить).
 - `app/lib/db.php` — подключения к PostgreSQL (`db()` — основная БД приложения, `pg()` — внешние профили PostGIS из `pg_connections`) и к исходной Access-базе (`mdb()`).
 - `app/lib/auth.php` — сессии и проверка логина по таблице `users_sync`.
-- `sql/schema.sql` — схема PostgreSQL: `users_sync`, `admins`, `admin_invites`, `pg_connections`, `subscriptions`, `tours`, `stations`, `station_status`, `station_log`.
+- `sql/schema.sql` — схема PostgreSQL: `users_sync`, `admins`, `admin_invites`, `pg_connections`, `subscriptions`, `tours`, `tour_groups`, `stations`, `station_status`, `station_log`, `rinex_requests`.
 - `bin/sync_mdb_users.php` — синхронизация пользователей из `E_Ser190905.mdb` (таблица `NRS_SER_UserDB`) в PostgreSQL. Запускать по расписанию.
 - `bin/poll_stations.php` — опрос всех включённых станций как NTRIP-клиент, запись статуса в `station_status`/`station_log`. Запускать по расписанию (например, раз в минуту).
+- `bin/poll_stations_ftp.php` — резервная проверка статуса по наличию свежих файлов станции на `ftp://gnss.host` (см. `app/lib/gnss_ftp.php`). Только повышает offline/unknown → online, никогда не понижает — NTRIP-опрос (выше) обновляется чаще и сам ловит реальные обрывы. Запускать по расписанию раз в час.
 - `login.php`, `logout.php` — вход/выход.
 - `stations.php` — администрирование станций (добавление NTRIP-подключения, lat/lon).
 - `map.php` + `api/stations_status.php` — карта Leaflet с автообновлением статуса станций.
-- `rinex.php`, `rinex_download.php` — просмотр и скачивание RINEX-файлов из `E:\Ftp\RINEX\RINEX\2026` (путь только для чтения, без изменений на диске).
+- `rinex.php`, `rinex_download_zip.php` — поиск RINEX-файлов на `ftp://gnss.host` по станциям/периоду (UTC, с точностью до часа)/типу (наблюдения/навигация) и мгновенное скачивание выбранных файлов одним ZIP-архивом. Креды — `GNSS_FTP_HOST`/`GNSS_FTP_USER`/`GNSS_FTP_PASSWORD` в `.env`.
+- `rinex_requests.php`, `rinex_request_download.php`, `bin/process_rinex_requests.php` — фоновые запросы RINEX (та же страница `rinex.php`, кнопка «Сформировать фоновый запрос»): сборка и объединение смежных часовых файлов в файл за сутки происходит на сервере в фоне (см. `app/lib/rinex_merge.php` — склейка только идущих подряд файлов, разрыв в несколько минут начинает новый файл), результат — в разделе «Готовые данные». Запускать `bin/process_rinex_requests.php` по расписанию раз в 1–2 минуты.
 
 ## Источники данных по базовым станциям
 
@@ -41,9 +43,11 @@ php bin\import_net_stations.php "C:\path\to\E_Net20220422.mdb"
 3. Включить в `php.ini` расширение `pdo_odbc` (нужно для синхронизации с mdb). Разрядность PHP должна совпадать с разрядностью установленного Microsoft Access Database Engine (Access Database Engine Redistributable).
 4. Положить проект в `htdocs\gisdata` (или настроить VirtualHost на корень репозитория).
 5. Выполнить разово: `php bin\sync_mdb_users.php` — проверить, что пользователи подгрузились.
-6. Настроить в Планировщике заданий Windows два задания:
+6. Настроить в Планировщике заданий Windows четыре задания:
    - `php bin\sync_mdb_users.php` — каждые 5–15 минут;
-   - `php bin\poll_stations.php` — каждую 1 минуту.
+   - `php bin\poll_stations.php` — каждую 1 минуту;
+   - `php bin\poll_stations_ftp.php` — раз в час;
+   - `php bin\process_rinex_requests.php` — каждую 1–2 минуты.
 
    Если на хостинге нет CLI и cron дёргает URL (как на shared-хостинге типа
    ispmanager/cPanel), задайте `CRON_TOKEN` в `.env` и вызывайте:

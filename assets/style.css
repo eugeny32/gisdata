@@ -164,10 +164,12 @@ body {
    "Container" (контейнеры/подложка — это spinnerOuterContainerN,
    spinnerContainerPrimaryN, spinnerContainerMinN), поэтому переопределяем
    по этому признаку, специфичность выше, чем у их .spinnerN { ... }.
-   Видна и при загрузке point cloud, т.к. GaussianSplats3D.Viewer не
-   используется, но в map.php переиспользуется тот же импортированный THREE.
-*/
-[class^="spinner"]:not([class*="Container"]) {
+   ВАЖНО: ":not([class*='-'])" — у классов Bootstrap (spinner-border,
+   spinner-grow, используются в LAS-вьювере) есть дефис, а у
+   GaussianSplats3D — нет (просто "spinnerN"); без этого исключения
+   правило ниже заливало бы Bootstrap-спиннер сплошным фоном вместо
+   вращающегося кольца (был виден просто залитый круг без анимации). */
+[class^="spinner"]:not([class*="Container"]):not([class*="-"]) {
   background: var(--brand) !important;
 }
 

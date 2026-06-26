@@ -78,7 +78,27 @@ function check_ntrip_station(array $station, array $ntripCfg): array
         $bytes += strlen($chunk);
         if (!$headerSeen && (str_contains($chunk, 'SOURCETABLE') || str_contains($chunk, '401') || str_contains($chunk, 'ERROR'))) {
             fclose($sock);
-            return ['status' => 'offline', 'bytes' => $bytes, 'error' => 'Mountpoint недоступен или нужна авторизация'];
+            // Реальный текст ответа кастера куда полезнее общей фразы для
+            // диагностики — разные кастеры этим же 401/ERROR сигналят
+            // разные проблемы (не только "нужен логин/пароль", встречается
+            // и "ERROR - License expires" — истёкшая лицензия NTRIP-сервера
+            // на стороне станции, например). WWW-Authenticate, если есть,
+            // обычно содержит самую конкретную причину.
+            $detail = '';
+            foreach (preg_split('/\r\n/', $chunk) as $line) {
+                if (stripos($line, 'WWW-Authenticate') === 0) {
+                    $detail = trim($line);
+                    break;
+                }
+            }
+            if ($detail === '') {
+                $detail = trim(strtok($chunk, "\r\n") ?: $chunk);
+            }
+            return [
+                'status' => 'offline',
+                'bytes' => $bytes,
+                'error' => ntrip_safe_utf8('Mountpoint недоступен или нужна авторизация: ' . substr($detail, 0, 200)),
+            ];
         }
         $headerSeen = true;
         if ($bytes >= (int)$ntripCfg['min_bytes_online']) {
@@ -118,6 +138,18 @@ function poll_stations(PDO $pdo, array $stations, array $ntripCfg): array
     $counts = ['online' => 0, 'offline' => 0];
     foreach ($stations as $station) {
         $result = check_ntrip_station($station, $ntripCfg);
+        // Один повторный опрос при первой неудаче — на практике некоторые
+        // кастеры изредка отвечают 401/обрывом на ОДНУ попытку подряд
+        // (например конкуренция подключений с тем же логином), хотя
+        // станция реально работает — подтверждено вручную на станции ZRCH:
+        // ручной повторный запрос с теми же сохранёнными логином/паролем
+        // сразу получил 200 OK и поток данных. Полное отключение проверки
+        // (offline) только после второй неудачи подряд снижает число
+        // ложных срабатываний без риска замаскировать реально лежащую
+        // станцию (та не оживёт и при второй попытке).
+        if ($result['status'] !== 'online') {
+            $result = check_ntrip_station($station, $ntripCfg);
+        }
         $lastDataAt = $result['status'] === 'online' ? date('Y-m-d H:i:s') : null;
 
         $updateStatus->execute([

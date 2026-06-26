@@ -46,5 +46,8 @@ function nav_active(string $page, string $current): string
     <a class="sidebar-link<?= nav_active('rinex.php', $__current) ?>" href="/rinex.php">
       <i class="bi bi-folder2-open"></i><span>RINEX</span>
     </a>
+    <a class="sidebar-link sidebar-sublink<?= nav_active('rinex_requests.php', $__current) ?>" href="/rinex_requests.php">
+      <i class="bi bi-clock-history"></i><span>Готовые данные</span>
+    </a>
   </nav>
 </aside>

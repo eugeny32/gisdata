@@ -188,6 +188,24 @@ CREATE INDEX IF NOT EXISTS idx_tour_files_tour ON tour_files (tour_id, sort_orde
 ALTER TABLE tours DROP CONSTRAINT IF EXISTS tours_file_format_check;
 ALTER TABLE tours ADD CONSTRAINT tours_file_format_check CHECK (file_format IN ('ply', 'splat', 'ksplat', 'las'));
 
+-- Группы туров — ручной выбор при создании/редактировании тура (не
+-- автоматическая категоризация). Нужны по двум причинам: (1) список туров
+-- предполагается растущим до десятков/сотен крупных облаков, плоский
+-- список перестаёт быть удобным; (2) файлы на диске организуются по той же
+-- группе (подпапка uploads/tours/<group-slug>/...), чтобы хранилище не
+-- превращалось в одну гигантскую плоскую папку.
+CREATE TABLE IF NOT EXISTS tour_groups (
+  id          SERIAL PRIMARY KEY,
+  name        VARCHAR(128) NOT NULL UNIQUE,
+  description VARCHAR(255) NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE tours ADD COLUMN IF NOT EXISTS group_id INT NULL;
+ALTER TABLE tours DROP CONSTRAINT IF EXISTS fk_tour_group;
+ALTER TABLE tours ADD CONSTRAINT fk_tour_group FOREIGN KEY (group_id) REFERENCES tour_groups(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tours_group ON tours (group_id);
+
 -- ---------------------------------------------------------------------------
 -- Слои и аннотации (точки/линии/полигоны), нарисованные пользователем прямо
 -- на 3D-модели тура в map.php. Координаты — в локальном пространстве модели
@@ -260,6 +278,16 @@ CREATE TABLE IF NOT EXISTS station_status (
   CONSTRAINT fk_status_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
 );
 
+-- Резервный канал определения статуса — по наличию свежих файлов в
+-- каталоге станции на ftp://gnss.host (см. bin/poll_stations_ftp.php,
+-- запускается раз в час, в отличие от NTRIP-опроса раз в минуту).
+-- Нужен потому, что часть станций недоступна для прямого NTRIP-опроса
+-- по сети с этого сервера (см. историю — некоторые касты блокируют сам
+-- TCP-порт), но данные от них всё равно реально доходят до gnss.host
+-- через отдельный, не подверженный той же проблеме канал передачи.
+ALTER TABLE station_status ADD COLUMN IF NOT EXISTS ftp_checked_at TIMESTAMP NULL;
+ALTER TABLE station_status ADD COLUMN IF NOT EXISTS ftp_last_data_at TIMESTAMP NULL;
+
 -- ---------------------------------------------------------------------------
 -- История проверок (для графиков/диагностики, можно чистить по cron)
 -- ---------------------------------------------------------------------------
@@ -273,3 +301,31 @@ CREATE TABLE IF NOT EXISTS station_log (
   CONSTRAINT fk_log_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_station_time ON station_log (station_id, checked_at);
+
+-- ---------------------------------------------------------------------------
+-- Фоновые запросы RINEX-данных с gnss.host (rinex.php -> rinex_requests.php,
+-- сборка в bin/process_rinex_requests.php). Пользователь описывает, что
+-- хочет (станции/диапазон дат-часов UTC/типы файлов/объединять ли часы в
+-- сутки) — сборка и слияние файлов происходит в фоне, готовый архив
+-- появляется в разделе "Готовые данные".
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rinex_requests (
+  id            SERIAL PRIMARY KEY,
+  created_by    INT NULL,
+  stations      VARCHAR(500) NOT NULL,        -- через запятую, коды станций
+  date_from_utc TIMESTAMP NOT NULL,           -- включительно, UTC, с точностью до часа
+  date_to_utc   TIMESTAMP NOT NULL,           -- включительно, UTC
+  want_obs      SMALLINT NOT NULL DEFAULT 1,  -- наблюдения (_MO)
+  want_nav      SMALLINT NOT NULL DEFAULT 1,  -- навигация (_MN)
+  merge_by_day  SMALLINT NOT NULL DEFAULT 1,  -- объединять часы в один файл за сутки
+  status        VARCHAR(12) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'done', 'error')),
+  result_path   VARCHAR(255) NULL,            -- относительный путь готового .zip внутри uploads/rinex_results/
+  file_count    INT NULL,                     -- сколько файлов попало в архив (для отображения в списке)
+  error_message VARCHAR(500) NULL,
+  created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  started_at    TIMESTAMP NULL,
+  completed_at  TIMESTAMP NULL,
+  CONSTRAINT fk_rinex_request_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rinex_requests_status ON rinex_requests (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_rinex_requests_creator ON rinex_requests (created_by, created_at);

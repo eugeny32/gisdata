@@ -77,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $stations = $pdo->query(
-    'SELECT s.*, st.status, st.last_check_at, st.last_data_at
+    'SELECT s.*, st.status, st.last_check_at, st.last_data_at, st.ftp_checked_at, st.ftp_last_data_at
      FROM stations s LEFT JOIN station_status st ON st.station_id = s.id
      ORDER BY s.name'
 )->fetchAll();
@@ -138,7 +138,14 @@ require __DIR__ . '/app/views/_head.php';
               <td><?= htmlspecialchars($s['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($s['host'] . ':' . $s['port'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($s['mountpoint'], ENT_QUOTES, 'UTF-8') ?></td>
-              <td><span class="status-pill status-<?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?></span></td>
+              <td>
+                <span class="status-pill status-<?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($s['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8') ?></span>
+                <?php if ($s['ftp_last_data_at']): ?>
+                  <span class="badge text-bg-secondary" title="Резервная проверка по ftp://gnss.host (раз в час) — последние данные станции там от этого момента">
+                    <i class="bi bi-hdd-network"></i> FTP: <?= htmlspecialchars(substr($s['ftp_last_data_at'], 5, 11), ENT_QUOTES, 'UTF-8') ?>
+                  </span>
+                <?php endif; ?>
+              </td>
               <td><?= htmlspecialchars($s['last_check_at'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
             </tr>
           <?php endforeach; ?>
