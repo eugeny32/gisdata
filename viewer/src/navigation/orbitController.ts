@@ -24,9 +24,24 @@ export class OrbitController {
   private dragButton: number | null = null;
   private lastX = 0;
   private lastY = 0;
+  /** Активные касания (PR8, мобильный проход) — id -> последняя позиция;
+   * 2 одновременных касания = pinch-zoom вместо вращения/панорамирования
+   * (на тач-экране нет колеса мыши для зума). */
+  private touchPoints = new Map<number, { x: number; y: number }>();
+  private pinchStartDistance = 0;
+  private pinchStartCameraDistance = 0;
 
   private onPointerDown = (e: PointerEvent) => {
     if (!this.canvas) return;
+    if (e.pointerType === 'touch') {
+      this.touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touchPoints.size === 2) {
+        this.dragButton = null;
+        this.pinchStartDistance = this.touchDistance();
+        this.pinchStartCameraDistance = this.distance;
+        return;
+      }
+    }
     if (e.button === 0) {
       const hit = this.gizmo.handlePointerDown(e, this.canvas);
       if (hit) {
@@ -42,7 +57,8 @@ export class OrbitController {
     this.lastY = e.clientY;
   };
 
-  private onPointerUp = () => {
+  private onPointerUp = (e: PointerEvent) => {
+    this.touchPoints.delete(e.pointerId);
     this.dragButton = null;
   };
 
@@ -52,7 +68,24 @@ export class OrbitController {
     e.preventDefault();
   };
 
+  private touchDistance(): number {
+    const points = Array.from(this.touchPoints.values());
+    if (points.length < 2) return 0;
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  }
+
   private onPointerMove = (e: PointerEvent) => {
+    if (e.pointerType === 'touch' && this.touchPoints.has(e.pointerId)) {
+      this.touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touchPoints.size === 2) {
+        const dist = this.touchDistance();
+        if (this.pinchStartDistance > 1e-3) {
+          this.distance = Math.max(0.05, this.pinchStartCameraDistance * (this.pinchStartDistance / dist));
+          this.update();
+        }
+        return;
+      }
+    }
     if (this.dragButton === null) return;
     const dx = e.clientX - this.lastX;
     const dy = e.clientY - this.lastY;
@@ -103,6 +136,7 @@ export class OrbitController {
 
   detach(): void {
     this.dragButton = null;
+    this.touchPoints.clear();
     if (!this.canvas) return;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     window.removeEventListener('pointerup', this.onPointerUp);

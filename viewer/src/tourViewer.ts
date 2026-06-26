@@ -97,6 +97,10 @@ export async function loadTourScene(
   canvas.style.width = '100%';
   canvas.style.height = '100%';
   canvas.style.display = 'block';
+  // Без этого браузер на тач-устройствах сам обрабатывает свайп/pinch как
+  // скролл/масштаб страницы — конкурирует с нашими pointer-обработчиками
+  // (PR8, мобильный проход, см. OrbitController.touchPoints).
+  canvas.style.touchAction = 'none';
   container.appendChild(canvas);
 
   const progressWrap = document.createElement('div');
@@ -118,6 +122,22 @@ export async function loadTourScene(
   function hideProgress(): void {
     progressWrap.remove();
   }
+
+  // Индикатор FPS/памяти/стриминга (PR8) — создаём элемент сразу, прячем
+  // через CSS (cameraSettings.showStats), а не condicional-рендер, чтобы
+  // не плодить лишний DOM-код на каждое включение/выключение.
+  const statsOverlay = document.createElement('div');
+  statsOverlay.className = 'position-absolute bottom-0 end-0 m-2 p-2 rounded';
+  statsOverlay.style.zIndex = '1090';
+  statsOverlay.style.background = 'rgba(0,0,0,.6)';
+  statsOverlay.style.color = '#bbb';
+  statsOverlay.style.fontSize = '11px';
+  statsOverlay.style.fontFamily = 'monospace';
+  statsOverlay.style.lineHeight = '1.4';
+  statsOverlay.style.pointerEvents = 'none';
+  statsOverlay.style.whiteSpace = 'pre';
+  statsOverlay.style.display = cameraSettings.showStats ? 'block' : 'none';
+  container.appendChild(statsOverlay);
 
   try {
     // Динамический import — ленивая загрузка движка, только когда
@@ -170,6 +190,7 @@ export async function loadTourScene(
         setPointCloudColorMode(material, settings.colorMode);
         setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
       }
+      statsOverlay.style.display = settings.showStats ? 'block' : 'none';
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === 'orbit') orbit.update();
     }
@@ -230,9 +251,26 @@ export async function loadTourScene(
     }
 
     const copcHandles: CopcStreamHandle[] = [];
+    let lastStatsAt = 0;
     app.on('update', (dt: number) => {
       if (activeMode === 'fly') fly.update(dt);
       for (const handle of copcHandles) handle.refresh(camera);
+
+      // Раз в полсекунды — обновление текста индикатора достаточно частое
+      // для "живого" ощущения, но не нагружает DOM каждый кадр.
+      const now = performance.now();
+      if (statsOverlay.style.display !== 'none' && now - lastStatsAt > 500) {
+        lastStatsAt = now;
+        const fps = Math.round((app as any).stats.frame.fps);
+        const vram = (app as any).stats.vram;
+        const vramMb = ((vram.vb + vram.ib + vram.tex) / (1024 * 1024)).toFixed(1);
+        const lines = [`FPS: ${fps}`, `VRAM: ${vramMb} МБ`];
+        for (let i = 0; i < copcHandles.length; i++) {
+          const s = copcHandles[i].getStats();
+          lines.push(`COPC ${i + 1}: ${s.loadedNodes} узлов, ${s.loadedPoints.toLocaleString('ru-RU')} точек`);
+        }
+        statsOverlay.textContent = lines.join('\n');
+      }
     });
 
     applyCameraSettings(cameraSettings);

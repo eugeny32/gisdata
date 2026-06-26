@@ -41,6 +41,8 @@ export interface CameraSettings {
   clipEnabled: boolean;
   clipMin: [number, number, number];
   clipMax: [number, number, number];
+  /** Индикатор FPS/VRAM/стриминга в углу канваса (PR8). */
+  showStats: boolean;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -58,6 +60,7 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   clipEnabled: false,
   clipMin: [0, 0, 0],
   clipMax: [1, 1, 1],
+  showStats: false,
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

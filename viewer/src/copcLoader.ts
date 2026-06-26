@@ -64,6 +64,9 @@ export interface CopcStreamHandle {
   /** Пересчитать видимые узлы под текущую камеру — звать из app.on('update'),
    * сам бросает лишние вызовы внутри (не чаще REFRESH_INTERVAL_MS). */
   refresh(camera: InstanceType<PcModule['Entity']>): void;
+  /** Для индикатора стриминга (PR8) — текущее число загруженных узлов/точек,
+   * без дополнительных вычислений (просто читает уже посчитанные суммы). */
+  getStats(): { loadedNodes: number; loadedPoints: number };
   dispose(): void;
 }
 
@@ -89,7 +92,7 @@ export async function loadCopcPointCloud(
   const absoluteUrl = new URL(url, window.location.origin).toString();
   showProgress('Загрузка заголовка COPC...', 0);
   const copc = await Copc.create(absoluteUrl);
-  if (!isCurrent()) return { refresh: () => {}, dispose: () => {} };
+  if (!isCurrent()) return { refresh: () => {}, dispose: () => {}, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
 
   const cube = copc.info.cube as Cube;
   // ВАЖНО: copc.info.cube — это корень octree, ДОПОЛНЕННЫЙ до правильного
@@ -143,7 +146,7 @@ export async function loadCopcPointCloud(
   const rootPage = await Copc.loadHierarchyPage(absoluteUrl, copc.info.rootHierarchyPage);
   nodes = { ...nodes, ...rootPage.nodes };
   pages = { ...pages, ...rootPage.pages };
-  if (!isCurrent()) return { refresh: () => {}, dispose: () => {} };
+  if (!isCurrent()) return { refresh: () => {}, dispose: () => {}, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
 
   const loaded = new Map<string, LoadedNode>();
   const pendingKeys = new Set<string>();
@@ -315,6 +318,12 @@ export async function loadCopcPointCloud(
     root.destroy();
   }
 
+  function getStats(): { loadedNodes: number; loadedPoints: number } {
+    let loadedPoints = 0;
+    for (const entry of loaded.values()) loadedPoints += entry.pointCount;
+    return { loadedNodes: loaded.size, loadedPoints };
+  }
+
   showProgress('COPC: подгрузка по области видимости...', 100);
-  return { refresh, dispose };
+  return { refresh, dispose, getStats };
 }

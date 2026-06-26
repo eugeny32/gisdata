@@ -211,6 +211,19 @@ body {
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid rgba(255, 255, 255, .06);
 }
+/* PR8, мобильный проход — на узких экранах 75vw/75vh из десктопной версии
+   выше слишком тесно для 3D-вьювера + панели настроек (Settings Panel и
+   так адаптивна, см. map.php, но самой модалке тоже нужно больше места).
+   "Стеклянная" эстетика (не было раньше при modal-fullscreen) сохраняется
+   — просто увеличиваем долю экрана, а не убираем эффект. */
+@media (max-width: 576px) {
+  .tour-viewer-dialog {
+    width: 98vw;
+    max-width: 98vw;
+    height: 92vh;
+    margin: 4vh auto;
+  }
+}
 
 /* --- Map --- */
 .map-card { border: none; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }

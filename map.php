@@ -153,89 +153,135 @@ require __DIR__ . '/app/views/_head.php';
             <?php endif; ?>
           </div>
 
-          <div id="tourSettingsPanel" class="position-absolute top-0 end-0 m-3 p-3 rounded d-none" style="z-index: 1100; background: rgba(20,20,20,.92); color: #fff; width: 300px; max-height: 70vh; overflow-y: auto; font-size: 14px;">
+          <div id="tourSettingsPanel" class="position-absolute top-0 end-0 m-3 p-3 rounded d-none" style="z-index: 1100; background: rgba(20,20,20,.92); color: #fff; width: min(320px, 92vw); max-height: 80vh; overflow-y: auto; font-size: 14px;">
             <div class="d-flex justify-content-between align-items-center mb-2">
               <b>Настройки</b>
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Угол обзора (FOV): <span id="tourSettingFovValue"></span>°</label>
-              <input type="range" class="form-range" id="tourSettingFov" min="20" max="100" step="1">
-            </div>
-            <div class="row g-2 mb-2">
-              <div class="col-6">
-                <label class="form-label small mb-0">Near</label>
-                <input type="number" class="form-control form-control-sm" id="tourSettingNear" min="0.001" step="0.01">
-              </div>
-              <div class="col-6">
-                <label class="form-label small mb-0">Far</label>
-                <input type="number" class="form-control form-control-sm" id="tourSettingFar" min="1" step="1">
+              <div class="form-check form-switch mb-0" title="Индикатор FPS/памяти/стриминга">
+                <input class="form-check-input" type="checkbox" id="tourSettingShowStats">
+                <label class="form-check-label small" for="tourSettingShowStats">статистика</label>
               </div>
             </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Проекция</label>
-              <select class="form-select form-select-sm" id="tourSettingProjection">
-                <option value="perspective">Перспективная</option>
-                <option value="orthographic">Ортографическая</option>
-              </select>
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Режим навигации</label>
-              <select class="form-select form-select-sm" id="tourSettingNavMode">
-                <option value="orbit">Орбита (вокруг модели)</option>
-                <option value="fly">Полёт (свободная камера, WASD)</option>
-                <option value="walk">Прогулка (со столкновениями)</option>
-              </select>
-              <div class="small text-secondary">Полёт/прогулка: левая кнопка — поворот, правая кнопка — сдвиг в стороны (как мышью, так и WASD), Space/Shift — вверх/вниз. Прогулка останавливается перед препятствием — доступна только для сплат-туров с готовым коллайдером, иначе работает как обычный полёт.</div>
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
-              <input type="range" class="form-range" id="tourSettingSensitivity" min="0.2" max="3" step="0.1">
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Скорость зума: <span id="tourSettingZoomSpeedValue"></span></label>
-              <input type="range" class="form-range" id="tourSettingZoomSpeed" min="0.2" max="3" step="0.1">
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Скорость полёта: <span id="tourSettingMoveSpeedValue"></span></label>
-              <input type="range" class="form-range" id="tourSettingMoveSpeed" min="0.5" max="20" step="0.5">
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Размер точки (LAS): <span id="tourSettingPointSizeValue"></span>px</label>
-              <input type="range" class="form-range" id="tourSettingPointSize" min="1" max="10" step="1">
-            </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">Раскраска (LAS/COPC)</label>
-              <select class="form-select form-select-sm" id="tourSettingColorMode">
-                <option value="rgb">Реальный цвет (RGB)</option>
-                <option value="height">По высоте</option>
-                <option value="intensity">Интенсивность</option>
-                <option value="classification">Классификация</option>
-              </select>
-              <div class="small text-secondary">Переключается без перезагрузки файла. Для 3DGS-сплатов не действует — только для облаков точек.</div>
-            </div>
-            <div class="form-check form-switch mb-1">
-              <input class="form-check-input" type="checkbox" id="tourSettingEdl">
-              <label class="form-check-label small" for="tourSettingEdl">Eye-Dome Lighting (EDL)</label>
-            </div>
-            <div class="small text-secondary">EDL пока без визуального эффекта — флаг сохраняется, сам шейдер появится позже.</div>
+            <div class="accordion accordion-flush" id="tourSettingsAccordion">
 
-            <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
-            <div class="form-check form-switch mb-1">
-              <input class="form-check-input" type="checkbox" id="tourSettingClipEnabled">
-              <label class="form-check-label small" for="tourSettingClipEnabled">Сечение (обрезка по осям)</label>
-            </div>
-            <div class="small text-secondary mb-2">Доли от размера КАЖДОГО облака точек (0 — начало, 1 — конец) — только для LAS/COPC.</div>
-            <?php foreach (['X' => 'x', 'Y' => 'y', 'Z' => 'z'] as $axisLabel => $axisKey): ?>
-            <div class="mb-2">
-              <label class="form-label small mb-0">
-                <?= $axisLabel ?>: <span id="tourSettingClip<?= $axisLabel ?>MinValue"></span> – <span id="tourSettingClip<?= $axisLabel ?>MaxValue"></span>
-              </label>
-              <div class="d-flex gap-2">
-                <input type="range" class="form-range" id="tourSettingClip<?= $axisLabel ?>Min" min="0" max="1" step="0.01">
-                <input type="range" class="form-range" id="tourSettingClip<?= $axisLabel ?>Max" min="0" max="1" step="0.01">
+              <div class="accordion-item" style="background: transparent;">
+                <h2 class="accordion-header">
+                  <button class="accordion-button btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsCamera">Камера</button>
+                </h2>
+                <div id="tourSettingsCamera" class="accordion-collapse collapse show">
+                  <div class="accordion-body px-1 py-2">
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Угол обзора (FOV): <span id="tourSettingFovValue"></span>°</label>
+                      <input type="range" class="form-range" id="tourSettingFov" min="20" max="100" step="1">
+                    </div>
+                    <div class="row g-2 mb-2">
+                      <div class="col-6">
+                        <label class="form-label small mb-0">Near</label>
+                        <input type="number" class="form-control form-control-sm" id="tourSettingNear" min="0.001" step="0.01">
+                      </div>
+                      <div class="col-6">
+                        <label class="form-label small mb-0">Far</label>
+                        <input type="number" class="form-control form-control-sm" id="tourSettingFar" min="1" step="1">
+                      </div>
+                    </div>
+                    <div class="mb-0">
+                      <label class="form-label small mb-0">Проекция</label>
+                      <select class="form-select form-select-sm" id="tourSettingProjection">
+                        <option value="perspective">Перспективная</option>
+                        <option value="orthographic">Ортографическая</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
+
+              <div class="accordion-item" style="background: transparent;">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsNav">Навигация</button>
+                </h2>
+                <div id="tourSettingsNav" class="accordion-collapse collapse">
+                  <div class="accordion-body px-1 py-2">
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Режим навигации</label>
+                      <select class="form-select form-select-sm" id="tourSettingNavMode">
+                        <option value="orbit">Орбита (вокруг модели)</option>
+                        <option value="fly">Полёт (свободная камера, WASD)</option>
+                        <option value="walk">Прогулка (со столкновениями)</option>
+                      </select>
+                      <div class="small text-secondary">Полёт/прогулка: левая кнопка — поворот, правая кнопка — сдвиг в стороны (как мышью, так и WASD), Space/Shift — вверх/вниз. На сенсорном экране — одним пальцем вращение, двумя пальцами — масштаб. Прогулка останавливается перед препятствием — доступна только для сплат-туров с готовым коллайдером, иначе работает как обычный полёт.</div>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
+                      <input type="range" class="form-range" id="tourSettingSensitivity" min="0.2" max="3" step="0.1">
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Скорость зума: <span id="tourSettingZoomSpeedValue"></span></label>
+                      <input type="range" class="form-range" id="tourSettingZoomSpeed" min="0.2" max="3" step="0.1">
+                    </div>
+                    <div class="mb-0">
+                      <label class="form-label small mb-0">Скорость полёта: <span id="tourSettingMoveSpeedValue"></span></label>
+                      <input type="range" class="form-range" id="tourSettingMoveSpeed" min="0.5" max="20" step="0.5">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="accordion-item" style="background: transparent;">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsPoints">Точки (LAS/COPC)</button>
+                </h2>
+                <div id="tourSettingsPoints" class="accordion-collapse collapse">
+                  <div class="accordion-body px-1 py-2">
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Размер точки: <span id="tourSettingPointSizeValue"></span>px</label>
+                      <input type="range" class="form-range" id="tourSettingPointSize" min="1" max="10" step="1">
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Раскраска</label>
+                      <select class="form-select form-select-sm" id="tourSettingColorMode">
+                        <option value="rgb">Реальный цвет (RGB)</option>
+                        <option value="height">По высоте</option>
+                        <option value="intensity">Интенсивность</option>
+                        <option value="classification">Классификация</option>
+                      </select>
+                      <div class="small text-secondary">Переключается без перезагрузки файла. Для 3DGS-сплатов не действует.</div>
+                    </div>
+                    <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
+                    <div class="form-check form-switch mb-1">
+                      <input class="form-check-input" type="checkbox" id="tourSettingClipEnabled">
+                      <label class="form-check-label small" for="tourSettingClipEnabled">Сечение (обрезка по осям)</label>
+                    </div>
+                    <div class="small text-secondary mb-2">Доли от размера КАЖДОГО облака точек (0 — начало, 1 — конец).</div>
+                    <?php foreach (['X', 'Y', 'Z'] as $axisLabel): ?>
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">
+                        <?= $axisLabel ?>: <span id="tourSettingClip<?= $axisLabel ?>MinValue"></span> – <span id="tourSettingClip<?= $axisLabel ?>MaxValue"></span>
+                      </label>
+                      <div class="d-flex gap-2">
+                        <input type="range" class="form-range" id="tourSettingClip<?= $axisLabel ?>Min" min="0" max="1" step="0.01">
+                        <input type="range" class="form-range" id="tourSettingClip<?= $axisLabel ?>Max" min="0" max="1" step="0.01">
+                      </div>
+                    </div>
+                    <?php endforeach; ?>
+                  </div>
+                </div>
+              </div>
+
+              <div class="accordion-item" style="background: transparent;">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsMisc">Прочее</button>
+                </h2>
+                <div id="tourSettingsMisc" class="accordion-collapse collapse">
+                  <div class="accordion-body px-1 py-2">
+                    <div class="form-check form-switch mb-1">
+                      <input class="form-check-input" type="checkbox" id="tourSettingEdl">
+                      <label class="form-check-label small" for="tourSettingEdl">Eye-Dome Lighting (EDL)</label>
+                    </div>
+                    <div class="small text-secondary">EDL пока без визуального эффекта — флаг сохраняется, сам шейдер появится позже.</div>
+                  </div>
+                </div>
+              </div>
+
             </div>
-            <?php endforeach; ?>
           </div>
 
           <?php if ($isAdmin): ?>
@@ -799,6 +845,7 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
   document.getElementById('tourSettingColorMode').value = s.colorMode;
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
+  document.getElementById('tourSettingShowStats').checked = s.showStats;
   document.getElementById('tourSettingClipEnabled').checked = s.clipEnabled;
   const axisKeys = ['X', 'Y', 'Z'];
   for (let i = 0; i < 3; i++) {
@@ -856,6 +903,9 @@ document.getElementById('tourSettingColorMode').addEventListener('change', (e) =
 });
 document.getElementById('tourSettingEdl').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ edlEnabled: e.target.checked });
+});
+document.getElementById('tourSettingShowStats').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ showStats: e.target.checked });
 });
 
 document.getElementById('tourSettingClipEnabled').addEventListener('change', (e) => {

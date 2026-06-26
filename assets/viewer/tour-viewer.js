@@ -4730,7 +4730,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const copc2 = await lib.Copc.create(absoluteUrl);
   if (!isCurrent()) return { refresh: () => {
   }, dispose: () => {
-  } };
+  }, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
   const cube2 = copc2.info.cube;
   const dataMin = copc2.header.min;
   const dataMax = copc2.header.max;
@@ -4767,7 +4767,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   pages = { ...pages, ...rootPage.pages };
   if (!isCurrent()) return { refresh: () => {
   }, dispose: () => {
-  } };
+  }, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
   const loaded = /* @__PURE__ */ new Map();
   const pendingKeys = /* @__PURE__ */ new Set();
   let hasColorDecided = null;
@@ -4901,8 +4901,13 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     for (const key2 of Array.from(loaded.keys())) disposeNode(key2);
     root.destroy();
   }
+  function getStats() {
+    let loadedPoints = 0;
+    for (const entry of loaded.values()) loadedPoints += entry.pointCount;
+    return { loadedNodes: loaded.size, loadedPoints };
+  }
   showProgress("COPC: подгрузка по области видимости...", 100);
-  return { refresh, dispose };
+  return { refresh, dispose, getStats };
 }
 async function loadCollisionMesh(pc, app, url) {
   var _a;
@@ -4992,7 +4997,8 @@ const DEFAULT_CAMERA_SETTINGS = {
   colorMode: "rgb",
   clipEnabled: false,
   clipMin: [0, 0, 0],
-  clipMax: [1, 1, 1]
+  clipMax: [1, 1, 1],
+  showStats: false
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -5035,8 +5041,20 @@ class OrbitController {
     this.dragButton = null;
     this.lastX = 0;
     this.lastY = 0;
+    this.touchPoints = /* @__PURE__ */ new Map();
+    this.pinchStartDistance = 0;
+    this.pinchStartCameraDistance = 0;
     this.onPointerDown = (e) => {
       if (!this.canvas) return;
+      if (e.pointerType === "touch") {
+        this.touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.touchPoints.size === 2) {
+          this.dragButton = null;
+          this.pinchStartDistance = this.touchDistance();
+          this.pinchStartCameraDistance = this.distance;
+          return;
+        }
+      }
       if (e.button === 0) {
         const hit = this.gizmo.handlePointerDown(e, this.canvas);
         if (hit) {
@@ -5051,13 +5069,25 @@ class OrbitController {
       this.lastX = e.clientX;
       this.lastY = e.clientY;
     };
-    this.onPointerUp = () => {
+    this.onPointerUp = (e) => {
+      this.touchPoints.delete(e.pointerId);
       this.dragButton = null;
     };
     this.onContextMenu = (e) => {
       e.preventDefault();
     };
     this.onPointerMove = (e) => {
+      if (e.pointerType === "touch" && this.touchPoints.has(e.pointerId)) {
+        this.touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.touchPoints.size === 2) {
+          const dist = this.touchDistance();
+          if (this.pinchStartDistance > 1e-3) {
+            this.distance = Math.max(0.05, this.pinchStartCameraDistance * (this.pinchStartDistance / dist));
+            this.update();
+          }
+          return;
+        }
+      }
       if (this.dragButton === null) return;
       const dx = e.clientX - this.lastX;
       const dy = e.clientY - this.lastY;
@@ -5082,6 +5112,11 @@ class OrbitController {
     this.gizmo = gizmo;
     this.target = new pc.Vec3(0, 0, 0);
   }
+  touchDistance() {
+    const points = Array.from(this.touchPoints.values());
+    if (points.length < 2) return 0;
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  }
   /** Панорамирование правой кнопкой — двигает target (а с ним и всю
    * орбиту) в плоскости экрана камеры. Масштаб смещения привязан к
    * distance — иначе на сильном зуме панорамирование было бы либо
@@ -5102,6 +5137,7 @@ class OrbitController {
   }
   detach() {
     this.dragButton = null;
+    this.touchPoints.clear();
     if (!this.canvas) return;
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointerup", this.onPointerUp);
@@ -5315,6 +5351,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
   canvas.style.width = "100%";
   canvas.style.height = "100%";
   canvas.style.display = "block";
+  canvas.style.touchAction = "none";
   container.appendChild(canvas);
   const progressWrap = document.createElement("div");
   progressWrap.className = "position-absolute top-50 start-50 translate-middle p-3 rounded text-center";
@@ -5332,6 +5369,18 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
   function hideProgress() {
     progressWrap.remove();
   }
+  const statsOverlay = document.createElement("div");
+  statsOverlay.className = "position-absolute bottom-0 end-0 m-2 p-2 rounded";
+  statsOverlay.style.zIndex = "1090";
+  statsOverlay.style.background = "rgba(0,0,0,.6)";
+  statsOverlay.style.color = "#bbb";
+  statsOverlay.style.fontSize = "11px";
+  statsOverlay.style.fontFamily = "monospace";
+  statsOverlay.style.lineHeight = "1.4";
+  statsOverlay.style.pointerEvents = "none";
+  statsOverlay.style.whiteSpace = "pre";
+  statsOverlay.style.display = cameraSettings.showStats ? "block" : "none";
+  container.appendChild(statsOverlay);
   try {
     let resizeCanvasToContainer = function() {
       app.resizeCanvas(container.clientWidth || 300, container.clientHeight || 300);
@@ -5346,6 +5395,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
         setPointCloudColorMode(material, settings.colorMode);
         setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
       }
+      statsOverlay.style.display = settings.showStats ? "block" : "none";
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === "orbit") orbit.update();
     }, updateFlyCollision = function() {
@@ -5408,9 +5458,23 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       fly.attach(canvas);
     }
     const copcHandles = [];
+    let lastStatsAt = 0;
     app.on("update", (dt) => {
       if (activeMode === "fly") fly.update(dt);
       for (const handle of copcHandles) handle.refresh(camera);
+      const now = performance.now();
+      if (statsOverlay.style.display !== "none" && now - lastStatsAt > 500) {
+        lastStatsAt = now;
+        const fps = Math.round(app.stats.frame.fps);
+        const vram = app.stats.vram;
+        const vramMb = ((vram.vb + vram.ib + vram.tex) / (1024 * 1024)).toFixed(1);
+        const lines = [`FPS: ${fps}`, `VRAM: ${vramMb} МБ`];
+        for (let i = 0; i < copcHandles.length; i++) {
+          const s = copcHandles[i].getStats();
+          lines.push(`COPC ${i + 1}: ${s.loadedNodes} узлов, ${s.loadedPoints.toLocaleString("ru-RU")} точек`);
+        }
+        statsOverlay.textContent = lines.join("\n");
+      }
     });
     applyCameraSettings(cameraSettings);
     const unsubscribeSettings = onCameraSettingsChange(applyCameraSettings);
