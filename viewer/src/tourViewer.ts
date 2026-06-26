@@ -4,7 +4,7 @@ import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
 import { loadCopcPointCloud, type CopcStreamHandle } from './copcLoader';
 import { loadCollisionMesh, type CollisionMesh } from './collisionMesh';
-import { setPointCloudColorMode } from './pointCloudMaterial';
+import { setPointCloudColorMode, setPointCloudClip } from './pointCloudMaterial';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
@@ -168,6 +168,7 @@ export async function loadTourScene(
       for (const material of lasMaterials) {
         material.setParameter('uPointSize', settings.pointSizePx);
         setPointCloudColorMode(material, settings.colorMode);
+        setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
       }
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === 'orbit') orbit.update();

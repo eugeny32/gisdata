@@ -21,6 +21,10 @@ const COLOR_MODE_INDEX: Record<ColorMode, number> = {
   classification: 3,
 };
 
+/** AABB в локальных (нероtированных, до AXIS_FIX_ROTATION) координатах
+ * меша — единицы для height-режима (PR6) и box-crop сечений (PR7). */
+export type LocalBounds = { min: [number, number, number]; max: [number, number, number] };
+
 /**
  * Точечное облако (LAS/COPC) рисуется собственным шейдером — стандартный
  * материал PlayCanvas не выставляет gl_PointSize для PRIMITIVE_POINTS.
@@ -29,15 +33,16 @@ const COLOR_MODE_INDEX: Record<ColorMode, number> = {
  * не наша придумка. Общий и для полной загрузки (lasLoader.ts), и для
  * потоковой по octree (copcLoader.ts) — один и тот же визуальный результат.
  *
- * heightRange — диапазон Z ЭТОГО конкретного меша/узла (в локальных,
- * нероtированных координатах, до AXIS_FIX_ROTATION) для нормировки
- * height-режима; у каждого материала свой, в отличие от uColorMode
- * (общий, переключается из Settings Panel на все материалы сразу).
+ * bounds — AABB ЭТОГО конкретного меша/узла, нужен и для нормировки
+ * height-режима (PR6), и для перевода относительных (0..1) границ сечения
+ * (PR7) в локальные единицы — см. setPointCloudClip. У каждого материала
+ * свой, в отличие от uColorMode/сечения (общие настройки, переключаются
+ * из Settings Panel на все материалы сразу, но с учётом СВОИХ bounds).
  */
 export function createPointCloudMaterial(
   pc: PcModule,
   pointSizePx: number,
-  heightRange: [number, number] = [0, 1]
+  bounds: LocalBounds = { min: [0, 0, 0], max: [1, 1, 1] }
 ) {
   const material = new pc.ShaderMaterial({
     uniqueName: 'GisdataLasPointCloudShader',
@@ -55,11 +60,11 @@ export function createPointCloudMaterial(
       uniform float uPointSize;
       varying vec4 vColor;
       varying vec2 vIntensityClass;
-      varying float vHeight;
+      varying vec3 vLocalPos;
       void main(void) {
         vColor = aColor;
         vIntensityClass = aTexCoord0;
-        vHeight = aPosition.z;
+        vLocalPos = aPosition;
         vec4 worldPos = matrix_model * vec4(aPosition, 1.0);
         gl_Position = matrix_viewProjection * worldPos;
         gl_PointSize = uPointSize;
@@ -69,9 +74,12 @@ export function createPointCloudMaterial(
       precision mediump float;
       varying vec4 vColor;
       varying vec2 vIntensityClass;
-      varying float vHeight;
+      varying vec3 vLocalPos;
       uniform float uColorMode;
       uniform vec2 uHeightRange;
+      uniform float uClipActive;
+      uniform vec3 uClipMin;
+      uniform vec3 uClipMax;
 
       vec3 hslToRgb(float h, float s, float l) {
         float k0 = mod(0.0 + h * 12.0, 12.0);
@@ -99,12 +107,19 @@ export function createPointCloudMaterial(
       }
 
       void main(void) {
+        if (uClipActive > 0.5) {
+          if (vLocalPos.x < uClipMin.x || vLocalPos.x > uClipMax.x ||
+              vLocalPos.y < uClipMin.y || vLocalPos.y > uClipMax.y ||
+              vLocalPos.z < uClipMin.z || vLocalPos.z > uClipMax.z) {
+            discard;
+          }
+        }
         vec3 color;
         if (uColorMode < 0.5) {
           color = vColor.rgb;
         } else if (uColorMode < 1.5) {
           float extent = max(uHeightRange.y - uHeightRange.x, 0.0001);
-          float t = clamp((vHeight - uHeightRange.x) / extent, 0.0, 1.0);
+          float t = clamp((vLocalPos.z - uHeightRange.x) / extent, 0.0, 1.0);
           color = hslToRgb((1.0 - t) * 0.66, 0.8, 0.5);
         } else if (uColorMode < 2.5) {
           color = vec3(clamp(vIntensityClass.x, 0.0, 1.0));
@@ -117,12 +132,45 @@ export function createPointCloudMaterial(
   });
   material.setParameter('uPointSize', pointSizePx);
   material.setParameter('uColorMode', 0);
-  material.setParameter('uHeightRange', new Float32Array(heightRange));
+  material.setParameter('uHeightRange', new Float32Array([bounds.min[2], bounds.max[2]]));
+  material.setParameter('uClipActive', 0);
+  material.setParameter('uClipMin', new Float32Array(bounds.min));
+  material.setParameter('uClipMax', new Float32Array(bounds.max));
   material.update();
+  (material as any).gisdataBounds = bounds;
   return material;
 }
 
 export function setPointCloudColorMode(material: InstanceType<PcModule['ShaderMaterial']>, mode: ColorMode): void {
   material.setParameter('uColorMode', COLOR_MODE_INDEX[mode]);
+  material.update();
+}
+
+/**
+ * box — относительные (0..1) границы сечения по каждой оси, общие для всех
+ * материалов тура; переводятся в локальные единицы ЭТОГО материала через
+ * его собственный bounds (см. gisdataBounds, проставлен в createPointCloudMaterial).
+ */
+export function setPointCloudClip(
+  material: InstanceType<PcModule['ShaderMaterial']>,
+  active: boolean,
+  box: { min: [number, number, number]; max: [number, number, number] }
+): void {
+  const bounds: LocalBounds | undefined = (material as any).gisdataBounds;
+  if (!bounds) return;
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const clipMin: [number, number, number] = [
+    lerp(bounds.min[0], bounds.max[0], box.min[0]),
+    lerp(bounds.min[1], bounds.max[1], box.min[1]),
+    lerp(bounds.min[2], bounds.max[2], box.min[2]),
+  ];
+  const clipMax: [number, number, number] = [
+    lerp(bounds.min[0], bounds.max[0], box.max[0]),
+    lerp(bounds.min[1], bounds.max[1], box.max[1]),
+    lerp(bounds.min[2], bounds.max[2], box.max[2]),
+  ];
+  material.setParameter('uClipActive', active ? 1 : 0);
+  material.setParameter('uClipMin', new Float32Array(clipMin));
+  material.setParameter('uClipMax', new Float32Array(clipMax));
   material.update();
 }

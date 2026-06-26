@@ -32,6 +32,15 @@ export interface CameraSettings {
    * файла (см. pointCloudMaterial.ts). Для 3DGS-сплатов не действует —
    * см. ограничение в pointCloudMaterial.ts. */
   colorMode: 'rgb' | 'height' | 'intensity' | 'classification';
+  /** Сечения (PR7, модуль 5) — box-crop LAS/COPC. clipMin/clipMax — доли
+   * (0..1) по каждой оси, ОБЩИЕ для всех материалов тура; каждый материал
+   * переводит их в свои локальные единицы по собственному AABB (см.
+   * pointCloudMaterial.ts/setPointCloudClip) — "обрезать нижние 30%"
+   * означает нижние 30% КАЖДОГО облака, а не абсолютные координаты. Для
+   * 3DGS не действует (та же причина, что height-режим, см. раздел 13). */
+  clipEnabled: boolean;
+  clipMin: [number, number, number];
+  clipMax: [number, number, number];
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -46,6 +55,9 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   edlEnabled: false,
   navigationMode: 'orbit',
   colorMode: 'rgb',
+  clipEnabled: false,
+  clipMin: [0, 0, 0],
+  clipMax: [1, 1, 1],
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

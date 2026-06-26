@@ -218,6 +218,24 @@ require __DIR__ . '/app/views/_head.php';
               <label class="form-check-label small" for="tourSettingEdl">Eye-Dome Lighting (EDL)</label>
             </div>
             <div class="small text-secondary">EDL пока без визуального эффекта — флаг сохраняется, сам шейдер появится позже.</div>
+
+            <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
+            <div class="form-check form-switch mb-1">
+              <input class="form-check-input" type="checkbox" id="tourSettingClipEnabled">
+              <label class="form-check-label small" for="tourSettingClipEnabled">Сечение (обрезка по осям)</label>
+            </div>
+            <div class="small text-secondary mb-2">Доли от размера КАЖДОГО облака точек (0 — начало, 1 — конец) — только для LAS/COPC.</div>
+            <?php foreach (['X' => 'x', 'Y' => 'y', 'Z' => 'z'] as $axisLabel => $axisKey): ?>
+            <div class="mb-2">
+              <label class="form-label small mb-0">
+                <?= $axisLabel ?>: <span id="tourSettingClip<?= $axisLabel ?>MinValue"></span> – <span id="tourSettingClip<?= $axisLabel ?>MaxValue"></span>
+              </label>
+              <div class="d-flex gap-2">
+                <input type="range" class="form-range" id="tourSettingClip<?= $axisLabel ?>Min" min="0" max="1" step="0.01">
+                <input type="range" class="form-range" id="tourSettingClip<?= $axisLabel ?>Max" min="0" max="1" step="0.01">
+              </div>
+            </div>
+            <?php endforeach; ?>
           </div>
 
           <?php if ($isAdmin): ?>
@@ -781,6 +799,15 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
   document.getElementById('tourSettingColorMode').value = s.colorMode;
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
+  document.getElementById('tourSettingClipEnabled').checked = s.clipEnabled;
+  const axisKeys = ['X', 'Y', 'Z'];
+  for (let i = 0; i < 3; i++) {
+    const a = axisKeys[i];
+    document.getElementById('tourSettingClip' + a + 'Min').value = s.clipMin[i];
+    document.getElementById('tourSettingClip' + a + 'MinValue').textContent = s.clipMin[i];
+    document.getElementById('tourSettingClip' + a + 'Max').value = s.clipMax[i];
+    document.getElementById('tourSettingClip' + a + 'MaxValue').textContent = s.clipMax[i];
+  }
 }
 
 document.getElementById('tourSettingsBtn').addEventListener('click', () => {
@@ -829,6 +856,26 @@ document.getElementById('tourSettingColorMode').addEventListener('change', (e) =
 });
 document.getElementById('tourSettingEdl').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ edlEnabled: e.target.checked });
+});
+
+document.getElementById('tourSettingClipEnabled').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ clipEnabled: e.target.checked });
+});
+['X', 'Y', 'Z'].forEach((a, i) => {
+  document.getElementById('tourSettingClip' + a + 'Min').addEventListener('input', (e) => {
+    const v = Number(e.target.value);
+    document.getElementById('tourSettingClip' + a + 'MinValue').textContent = v;
+    const clipMin = window.TourViewer.getSettings().clipMin.slice();
+    clipMin[i] = Math.min(v, window.TourViewer.getSettings().clipMax[i]);
+    window.TourViewer.setSettings({ clipMin });
+  });
+  document.getElementById('tourSettingClip' + a + 'Max').addEventListener('input', (e) => {
+    const v = Number(e.target.value);
+    document.getElementById('tourSettingClip' + a + 'MaxValue').textContent = v;
+    const clipMax = window.TourViewer.getSettings().clipMax.slice();
+    clipMax[i] = Math.max(v, window.TourViewer.getSettings().clipMin[i]);
+    window.TourViewer.setSettings({ clipMax });
+  });
 });
 
 document.getElementById('tourNewLayerForm')?.addEventListener('submit', async (e) => {

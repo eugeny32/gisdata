@@ -125,10 +125,15 @@ export async function loadCopcPointCloud(
   root.setLocalRotation(...(AXIS_FIX_ROTATION as [number, number, number, number]));
   app.root.addChild(root);
 
-  // Реальный диапазон Z данных (не растянутого куба) — для height-режима
-  // (PR6) тот же диапазон, что и для HSL-заливки без реального RGB ниже.
-  const heightRange: [number, number] = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
-  const material = createPointCloudMaterial(pc, pointSizePx, heightRange);
+  // Реальный AABB данных (центрированный) — для height-режима (PR6) и
+  // box-crop сечений (PR7); та же пара min/max, что и для HSL-заливки без
+  // реального RGB в воркере (zRange ниже — только её Z-компонента).
+  const bounds = {
+    min: [dataMin[0] - centerOffset[0], dataMin[1] - centerOffset[1], dataMin[2] - centerOffset[2]] as [number, number, number],
+    max: [dataMax[0] - centerOffset[0], dataMax[1] - centerOffset[1], dataMax[2] - centerOffset[2]] as [number, number, number],
+  };
+  const heightRange: [number, number] = [bounds.min[2], bounds.max[2]];
+  const material = createPointCloudMaterial(pc, pointSizePx, bounds);
   outMaterials.push(material);
 
   // nodes/pages накапливаются по мере того, как мы спускаемся глубже —

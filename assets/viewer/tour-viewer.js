@@ -153,7 +153,7 @@ const COLOR_MODE_INDEX = {
   intensity: 2,
   classification: 3
 };
-function createPointCloudMaterial(pc, pointSizePx, heightRange = [0, 1]) {
+function createPointCloudMaterial(pc, pointSizePx, bounds2 = { min: [0, 0, 0], max: [1, 1, 1] }) {
   const material = new pc.ShaderMaterial({
     uniqueName: "GisdataLasPointCloudShader",
     attributes: {
@@ -170,11 +170,11 @@ function createPointCloudMaterial(pc, pointSizePx, heightRange = [0, 1]) {
       uniform float uPointSize;
       varying vec4 vColor;
       varying vec2 vIntensityClass;
-      varying float vHeight;
+      varying vec3 vLocalPos;
       void main(void) {
         vColor = aColor;
         vIntensityClass = aTexCoord0;
-        vHeight = aPosition.z;
+        vLocalPos = aPosition;
         vec4 worldPos = matrix_model * vec4(aPosition, 1.0);
         gl_Position = matrix_viewProjection * worldPos;
         gl_PointSize = uPointSize;
@@ -184,9 +184,12 @@ function createPointCloudMaterial(pc, pointSizePx, heightRange = [0, 1]) {
       precision mediump float;
       varying vec4 vColor;
       varying vec2 vIntensityClass;
-      varying float vHeight;
+      varying vec3 vLocalPos;
       uniform float uColorMode;
       uniform vec2 uHeightRange;
+      uniform float uClipActive;
+      uniform vec3 uClipMin;
+      uniform vec3 uClipMax;
 
       vec3 hslToRgb(float h, float s, float l) {
         float k0 = mod(0.0 + h * 12.0, 12.0);
@@ -214,12 +217,19 @@ function createPointCloudMaterial(pc, pointSizePx, heightRange = [0, 1]) {
       }
 
       void main(void) {
+        if (uClipActive > 0.5) {
+          if (vLocalPos.x < uClipMin.x || vLocalPos.x > uClipMax.x ||
+              vLocalPos.y < uClipMin.y || vLocalPos.y > uClipMax.y ||
+              vLocalPos.z < uClipMin.z || vLocalPos.z > uClipMax.z) {
+            discard;
+          }
+        }
         vec3 color;
         if (uColorMode < 0.5) {
           color = vColor.rgb;
         } else if (uColorMode < 1.5) {
           float extent = max(uHeightRange.y - uHeightRange.x, 0.0001);
-          float t = clamp((vHeight - uHeightRange.x) / extent, 0.0, 1.0);
+          float t = clamp((vLocalPos.z - uHeightRange.x) / extent, 0.0, 1.0);
           color = hslToRgb((1.0 - t) * 0.66, 0.8, 0.5);
         } else if (uColorMode < 2.5) {
           color = vec3(clamp(vIntensityClass.x, 0.0, 1.0));
@@ -232,12 +242,35 @@ function createPointCloudMaterial(pc, pointSizePx, heightRange = [0, 1]) {
   });
   material.setParameter("uPointSize", pointSizePx);
   material.setParameter("uColorMode", 0);
-  material.setParameter("uHeightRange", new Float32Array(heightRange));
+  material.setParameter("uHeightRange", new Float32Array([bounds2.min[2], bounds2.max[2]]));
+  material.setParameter("uClipActive", 0);
+  material.setParameter("uClipMin", new Float32Array(bounds2.min));
+  material.setParameter("uClipMax", new Float32Array(bounds2.max));
   material.update();
+  material.gisdataBounds = bounds2;
   return material;
 }
 function setPointCloudColorMode(material, mode) {
   material.setParameter("uColorMode", COLOR_MODE_INDEX[mode]);
+  material.update();
+}
+function setPointCloudClip(material, active, box) {
+  const bounds2 = material.gisdataBounds;
+  if (!bounds2) return;
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clipMin = [
+    lerp(bounds2.min[0], bounds2.max[0], box.min[0]),
+    lerp(bounds2.min[1], bounds2.max[1], box.min[1]),
+    lerp(bounds2.min[2], bounds2.max[2], box.min[2])
+  ];
+  const clipMax = [
+    lerp(bounds2.min[0], bounds2.max[0], box.max[0]),
+    lerp(bounds2.min[1], bounds2.max[1], box.max[1]),
+    lerp(bounds2.min[2], bounds2.max[2], box.max[2])
+  ];
+  material.setParameter("uClipActive", active ? 1 : 0);
+  material.setParameter("uClipMin", new Float32Array(clipMin));
+  material.setParameter("uClipMax", new Float32Array(clipMax));
   material.update();
 }
 function hslToRgb(h, s, l) {
@@ -319,10 +352,20 @@ async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTra
       updateCameraTransform();
     }
     const positions = new Float32Array(count * 3);
+    const bounds2 = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
     for (let i = 0; i < count; i++) {
-      positions[i * 3] = pos[i * 3] - centerOffset.x;
-      positions[i * 3 + 1] = pos[i * 3 + 1] - centerOffset.y;
-      positions[i * 3 + 2] = pos[i * 3 + 2] - centerOffset.z;
+      const x = pos[i * 3] - centerOffset.x;
+      const y = pos[i * 3 + 1] - centerOffset.y;
+      const z = pos[i * 3 + 2] - centerOffset.z;
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = y;
+      positions[i * 3 + 2] = z;
+      if (x < bounds2.min[0]) bounds2.min[0] = x;
+      if (y < bounds2.min[1]) bounds2.min[1] = y;
+      if (z < bounds2.min[2]) bounds2.min[2] = z;
+      if (x > bounds2.max[0]) bounds2.max[0] = x;
+      if (y > bounds2.max[1]) bounds2.max[1] = y;
+      if (z > bounds2.max[2]) bounds2.max[2] = z;
     }
     const colorAttr = data.attributes.COLOR_0 && data.attributes.COLOR_0.value;
     const colors = new Uint8Array(count * 4);
@@ -370,7 +413,7 @@ async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTra
     mesh.setColors32(colors);
     mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, count);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, pointSizePx, [-extent, extent]);
+    const material = createPointCloudMaterial(pc, pointSizePx, bounds2);
     outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity("las-" + fileIndex);
@@ -4710,8 +4753,12 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const root = new pc.Entity("copc-root");
   root.setLocalRotation(...AXIS_FIX_ROTATION);
   app.root.addChild(root);
-  const heightRange = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
-  const material = createPointCloudMaterial(pc, pointSizePx, heightRange);
+  const bounds2 = {
+    min: [dataMin[0] - centerOffset[0], dataMin[1] - centerOffset[1], dataMin[2] - centerOffset[2]],
+    max: [dataMax[0] - centerOffset[0], dataMax[1] - centerOffset[1], dataMax[2] - centerOffset[2]]
+  };
+  const heightRange = [bounds2.min[2], bounds2.max[2]];
+  const material = createPointCloudMaterial(pc, pointSizePx, bounds2);
   outMaterials.push(material);
   let nodes = {};
   let pages = {};
@@ -4800,8 +4847,8 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
       const page = pages[keyStr];
       if (!node && !page) continue;
       const key2 = lib.Key.create(keyStr);
-      const bounds2 = nodeBounds(key2, centeredCube);
-      const sphere = boundsSphere(bounds2);
+      const bounds22 = nodeBounds(key2, centeredCube);
+      const sphere = boundsSphere(bounds22);
       const localCenter = new pc.Vec3(...sphere.center);
       const worldCenter = root.getWorldTransform().transformPoint(localCenter);
       const containment = frustum.containsSphere(new pc.BoundingSphere(worldCenter, sphere.radius));
@@ -4942,7 +4989,10 @@ const DEFAULT_CAMERA_SETTINGS = {
   pointSizePx: 2,
   edlEnabled: false,
   navigationMode: "orbit",
-  colorMode: "rgb"
+  colorMode: "rgb",
+  clipEnabled: false,
+  clipMin: [0, 0, 0],
+  clipMax: [1, 1, 1]
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -5294,6 +5344,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       for (const material of lasMaterials) {
         material.setParameter("uPointSize", settings.pointSizePx);
         setPointCloudColorMode(material, settings.colorMode);
+        setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
       }
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === "orbit") orbit.update();
