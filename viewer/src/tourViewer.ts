@@ -2,6 +2,7 @@ import type { ModelType, PcModule } from './types';
 import { createNavCubeGizmo } from './gizmo';
 import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
+import { loadCopcPointCloud, type CopcStreamHandle } from './copcLoader';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
@@ -39,6 +40,7 @@ interface PcAppWithGisdata {
   recenter: () => void;
   unsubscribeSettings: () => void;
   detachNavigation: () => void;
+  copcHandles: CopcStreamHandle[];
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -51,6 +53,7 @@ export function disposeTourViewer(): void {
   try {
     entry.unsubscribeSettings();
     entry.detachNavigation();
+    for (const handle of entry.copcHandles) handle.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -63,7 +66,14 @@ export function recenterTourCamera(): void {
   currentApp.recenter();
 }
 
-export async function loadTourScene(urls: string[], modelType: ModelType): Promise<void> {
+export async function loadTourScene(
+  urls: string[],
+  modelType: ModelType,
+  /** Параллельный urls массив той же длины — элемент не null, если для
+   * этого файла уже готов потоковый .copc.laz (см. api/tours.php, PR4).
+   * Файлы без готового COPC грузятся старым полным lasLoader.ts. */
+  copcUrls: (string | null)[] = []
+): Promise<void> {
   hideViewerError();
   generation++;
   const myGeneration = generation;
@@ -199,8 +209,10 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
       if (activeMode === 'fly') syncFlyFromOrbit();
     }
 
+    const copcHandles: CopcStreamHandle[] = [];
     app.on('update', (dt: number) => {
       if (activeMode === 'fly') fly.update(dt);
+      for (const handle of copcHandles) handle.refresh(camera);
     });
 
     applyCameraSettings(cameraSettings);
@@ -214,21 +226,51 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
       recenter,
       unsubscribeSettings,
       detachNavigation: () => (activeMode === 'orbit' ? orbit.detach() : fly.detach()),
+      copcHandles,
     };
 
     if (modelType === 'pointcloud') {
-      await loadLasFiles(
-        pc,
-        app,
-        urls,
-        orbit.target,
-        (d) => orbit.setDistance(d),
-        () => orbit.update(),
-        isCurrent,
-        showProgress,
-        cameraSettings.pointSizePx,
-        lasMaterials
-      );
+      // Центрирование/distance выставляет только первый файл (как и раньше
+      // у LAS/сплатов) — независимо от того, идёт ли он через COPC-стриминг
+      // или через старый полный загрузчик.
+      let isFirstFile = true;
+      const legacyUrls: string[] = [];
+      const legacyIsFirst: boolean[] = [];
+      for (let i = 0; i < urls.length; i++) {
+        const copcUrl = copcUrls[i];
+        if (copcUrl) {
+          const setDistance = isFirstFile ? (d: number) => orbit.setDistance(d) : () => {};
+          const updateTransform = isFirstFile ? () => orbit.update() : () => {};
+          const handle = await loadCopcPointCloud(
+            pc, app, copcUrl, orbit.target, setDistance, updateTransform,
+            isCurrent, showProgress, cameraSettings.pointSizePx, lasMaterials
+          );
+          copcHandles.push(handle);
+        } else {
+          legacyUrls.push(urls[i]);
+          legacyIsFirst.push(isFirstFile);
+        }
+        isFirstFile = false;
+      }
+      // loadLasFiles центрирует только по САМОМУ первому файлу внутри своего
+      // цикла (см. lasLoader.ts) — раз так, тут есть смысл вызывать его
+      // отдельно на центрирующий файл, только если это первый файл во всём
+      // туре (legacyIsFirst[0] === true), иначе всегда передавать no-op.
+      if (legacyUrls.length) {
+        const centerThisBatch = legacyIsFirst[0] === true;
+        await loadLasFiles(
+          pc,
+          app,
+          legacyUrls,
+          orbit.target,
+          centerThisBatch ? (d) => orbit.setDistance(d) : () => {},
+          centerThisBatch ? () => orbit.update() : () => {},
+          isCurrent,
+          showProgress,
+          cameraSettings.pointSizePx,
+          lasMaterials
+        );
+      }
     } else {
       await loadSplatFiles(
         pc,

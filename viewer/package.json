@@ -9,6 +9,10 @@
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "copc": "^0.0.8",
+    "laz-perf": "^0.0.7"
+  },
   "devDependencies": {
     "playcanvas": "2.20.0",
     "typescript": "^5.6.0",

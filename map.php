@@ -387,6 +387,7 @@ async function loadTours() {
     tourDataById[t.id] = {
       urls: t.file_urls && t.file_urls.length ? t.file_urls : [t.file_url],
       modelType: t.model_type || 'splat',
+      copcUrls: t.copc_urls || [],
     };
     const typeBadge = t.model_type === 'pointcloud'
       ? '<span class="badge text-bg-info">Point Cloud</span>'
@@ -523,6 +524,7 @@ if (isAdminJs) {
 // PlayCanvas (готового публичного picking API под gsplat в движке нет).
 let pendingTourUrls = null;
 let pendingModelType = 'splat';
+let pendingCopcUrls = [];
 let currentTourUrls = null;
 let currentTourId = null;
 let tourViewer = null; // см. комментарий выше — умышленно всегда null
@@ -532,9 +534,10 @@ const tourModal = new bootstrap.Modal(tourModalEl);
 
 function openTour(tourId, name) {
   document.getElementById('tourViewerTitle').textContent = name;
-  const data = tourDataById[tourId] || { urls: [], modelType: 'splat' };
+  const data = tourDataById[tourId] || { urls: [], modelType: 'splat', copcUrls: [] };
   pendingTourUrls = data.urls;
   pendingModelType = data.modelType;
+  pendingCopcUrls = data.copcUrls || [];
   currentTourId = tourId;
   document.getElementById('tourExportLink').href = '/tour_export.php?tour_id=' + tourId;
   tourModal.show();
@@ -849,8 +852,9 @@ tourModalEl.addEventListener('shown.bs.modal', () => {
   if (!pendingTourUrls) return;
   currentTourUrls = pendingTourUrls;
   const modelType = pendingModelType;
+  const copcUrls = pendingCopcUrls;
   pendingTourUrls = null;
-  window.TourViewer.load(currentTourUrls, modelType);
+  window.TourViewer.load(currentTourUrls, modelType, copcUrls);
 });
 
 document.getElementById('tourCenterBtn').addEventListener('click', () => {

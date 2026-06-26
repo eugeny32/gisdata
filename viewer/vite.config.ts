@@ -9,6 +9,13 @@ import { resolve } from 'path';
 // раздуло бы файл и сломало бы переиспользование между map.php и
 // playcanvas_test.php (та страница пока не переведена на этот бандл).
 export default defineConfig({
+  // По умолчанию Vite генерирует URL воркеров/чанков как абсолютные от
+  // корня сайта ("/assets/..."), но бандл реально лежит в подпапке
+  // /assets/viewer/ — без base воркер COPC (PR4) грузился по неверному
+  // пути и тихо падал (Worker.onerror без message/filename — типичный
+  // признак ошибки загрузки, не ошибки выполнения). base делает все
+  // относительные ссылки внутри бандла корректными для этой подпапки.
+  base: '/assets/viewer/',
   build: {
     lib: {
       entry: resolve(__dirname, 'src/main.ts'),

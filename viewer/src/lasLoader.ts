@@ -1,5 +1,6 @@
 import type { PcModule } from './types';
 import { AXIS_FIX_ROTATION } from './constants';
+import { createPointCloudMaterial } from './pointCloudMaterial';
 
 /** pc.Color не умеет HSL — конвертируем сами (стандартная формула), нужно
  * для окраски LAS-точек по высоте, когда в файле нет реального RGB. */
@@ -8,44 +9,6 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const a = s * Math.min(l, 1 - l);
   const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
   return [f(0), f(8), f(4)];
-}
-
-/**
- * Точечное облако (LAS) рисуется собственным шейдером — стандартный
- * материал PlayCanvas не выставляет gl_PointSize для PRIMITIVE_POINTS.
- * matrix_model/matrix_viewProjection — встроенные имена uniform'ов движка
- * (engine/src/scene/renderer/renderer.js, scope.resolve('matrix_model')),
- * не наша придумка.
- */
-function createPointCloudMaterial(pc: PcModule, pointSizePx: number) {
-  const material = new pc.ShaderMaterial({
-    uniqueName: 'GisdataLasPointCloudShader',
-    attributes: { aPosition: pc.SEMANTIC_POSITION, aColor: pc.SEMANTIC_COLOR },
-    vertexGLSL: `
-      attribute vec3 aPosition;
-      attribute vec4 aColor;
-      uniform mat4 matrix_model;
-      uniform mat4 matrix_viewProjection;
-      uniform float uPointSize;
-      varying vec4 vColor;
-      void main(void) {
-        vColor = aColor;
-        vec4 worldPos = matrix_model * vec4(aPosition, 1.0);
-        gl_Position = matrix_viewProjection * worldPos;
-        gl_PointSize = uPointSize;
-      }
-    `,
-    fragmentGLSL: `
-      precision mediump float;
-      varying vec4 vColor;
-      void main(void) {
-        gl_FragColor = vColor;
-      }
-    `,
-  });
-  material.setParameter('uPointSize', pointSizePx);
-  material.update();
-  return material;
 }
 
 /**
