@@ -15,6 +15,17 @@ export class OrbitController {
   yaw = 45;
   pitch = -20;
 
+  // "Домашний" вид — снимок target/distance/yaw/pitch на момент, когда
+  // загрузчик модели только закончил центрирование (см. captureHome() и
+  // tourViewer.ts). До этого кнопка "Центрировать" просто пересчитывала
+  // ТЕКУЩЕЕ состояние (которое уже могло быть смещено панорамированием/
+  // зумом пользователя) — то есть фактически ничего не возвращала на
+  // место, хотя называлась "центрировать"/Home.
+  private homeTarget: InstanceType<PcModule['Vec3']>;
+  private homeDistance = 5;
+  private homeYaw = 45;
+  private homePitch = -20;
+
   private pc: PcModule;
   private camera: InstanceType<PcModule['Entity']>;
   private gizmo: NavCubeGizmo;
@@ -123,6 +134,7 @@ export class OrbitController {
     this.camera = camera;
     this.gizmo = gizmo;
     this.target = new pc.Vec3(0, 0, 0);
+    this.homeTarget = new pc.Vec3(0, 0, 0);
   }
 
   attach(canvas: HTMLCanvasElement): void {
@@ -148,6 +160,28 @@ export class OrbitController {
 
   setDistance(d: number): void {
     this.distance = d;
+  }
+
+  /** Зовётся загрузчиком модели ОДИН раз сразу после того, как он
+   * посчитал target/distance для свежезагруженной модели (см.
+   * tourViewer.ts) — это и есть тот самый "начальный вид", к которому
+   * должна возвращать кнопка "Центрировать". */
+  captureHome(): void {
+    this.homeTarget.copy(this.target);
+    this.homeDistance = this.distance;
+    this.homeYaw = this.yaw;
+    this.homePitch = this.pitch;
+  }
+
+  /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
+   * ТЕКУЩЕЕ состояние, а сначала восстанавливает target/distance/yaw/pitch
+   * из снимка captureHome(), и только потом пересчитывает камеру. */
+  resetToHome(): void {
+    this.target.copy(this.homeTarget);
+    this.distance = this.homeDistance;
+    this.yaw = this.homeYaw;
+    this.pitch = this.homePitch;
+    this.update();
   }
 
   /** Пересчитывает позицию камеры из target/distance/yaw/pitch и двигает

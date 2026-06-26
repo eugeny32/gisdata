@@ -37,8 +37,17 @@ function createNavCubeGizmo(pc, app) {
   }
   const gizmoCamera = new pc.Entity("gizmoCamera");
   gizmoCamera.addComponent("camera", {
-    clearColor: new pc.Color(0, 0, 0, 0),
-    clearColorBuffer: true,
+    // clearColorBuffer: true (как было) ЗАТИРАЛ пиксели модели в области
+    // вьюпорта штурвала своим clearColor ПЕРЕД отрисовкой кубика — отсюда
+    // сплошной чёрный квадрат в углу вместо прозрачного оверлея прямо на
+    // модели (alpha 0 у clearColor не помогает: канвас всё равно физически
+    // перезатирается, а не компонуется по альфе). Не очищаем цвет вообще —
+    // кубик рисуется НАД уже отрендеренной картинкой основной камеры, а не
+    // в "обнулённом" прямоугольнике. Глубину чистим (clearDepthBuffer),
+    // иначе кубик мог бы некорректно перекрываться остатками depth-буфера
+    // основной камеры в этой же области экрана.
+    clearColorBuffer: false,
+    clearDepthBuffer: true,
     layers: [gizmoLayer.id],
     priority: 1,
     // рисуется после основной камеры — поверх неё
@@ -102,16 +111,61 @@ function createNavCubeGizmo(pc, app) {
   return { updateTransform, handlePointerDown };
 }
 const AXIS_FIX_ROTATION = [-0.7071, 0, 0, 0.7071];
-async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTransform, isCurrent, showProgress, sogUrls = []) {
+const CACHE_NAME = "gisdata-splat-cache-v1";
+async function resolveSplatUrl(url, onProgress) {
+  if (typeof caches === "undefined" || typeof fetch === "undefined") return url;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(url);
+    if (cached) {
+      const blob2 = await cached.blob();
+      onProgress(blob2.size, blob2.size);
+      return URL.createObjectURL(blob2);
+    }
+    const response = await fetch(url);
+    if (!response.ok || !response.body) return url;
+    const total = Number(response.headers.get("content-length")) || 0;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      onProgress(received, total || received);
+    }
+    const blob = new Blob(chunks);
+    await cache.put(url, new Response(blob)).catch(() => {
+    });
+    return URL.createObjectURL(blob);
+  } catch {
+    return url;
+  }
+}
+async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTransform, isCurrent, showProgress, sogUrls = [], outObjectUrls = []) {
   let fileIndex = 0;
   for (const rawUrl of urls) {
     if (!isCurrent()) return;
-    const url = sogUrls[fileIndex] || rawUrl;
+    const networkUrl = sogUrls[fileIndex] || rawUrl;
     fileIndex++;
     const filePrefix = urls.length > 1 ? `Файл ${fileIndex} из ${urls.length}: ` : "";
     showProgress(`${filePrefix}Загрузка модели...`, 0);
+    const resolvedUrl = await resolveSplatUrl(networkUrl, (received, total) => {
+      const pct = total ? received / total * 100 : 0;
+      showProgress(`${filePrefix}Загрузка модели... ${Math.round(pct)}%`, pct);
+    });
+    if (!isCurrent()) return;
+    if (resolvedUrl.startsWith("blob:")) outObjectUrls.push(resolvedUrl);
     await new Promise((resolve, reject) => {
-      const asset = new pc.Asset("splat-" + fileIndex, "gsplat", { url, filename: url.split("/").pop() });
+      const asset = new pc.Asset("splat-" + fileIndex, "gsplat", {
+        url: resolvedUrl,
+        // filename (а не url) определяет выбор парсера по расширению
+        // (PlyParser/SogBundleParser/...) — см. ResourceLoader.load в
+        // движке: url.original = asset.file.filename. blob:-URL у
+        // расширения не имеет, поэтому имя берём из ИСХОДНОГО сетевого URL.
+        filename: networkUrl.split("/").pop()
+      });
       app.assets.add(asset);
       asset.on("progress", (received, total) => {
         const pct = total ? received / total * 100 : 0;
@@ -1062,8 +1116,8 @@ var browserPonyfill = { exports: {} };
         return headers;
       }
       Body.call(Request.prototype);
-      function Response(bodyInit, options) {
-        if (!(this instanceof Response)) {
+      function Response2(bodyInit, options) {
+        if (!(this instanceof Response2)) {
           throw new TypeError('Please use the "new" operator, this DOM object constructor cannot be called as a function.');
         }
         if (!options) {
@@ -1080,28 +1134,28 @@ var browserPonyfill = { exports: {} };
         this.url = options.url || "";
         this._initBody(bodyInit);
       }
-      Body.call(Response.prototype);
-      Response.prototype.clone = function() {
-        return new Response(this._bodyInit, {
+      Body.call(Response2.prototype);
+      Response2.prototype.clone = function() {
+        return new Response2(this._bodyInit, {
           status: this.status,
           statusText: this.statusText,
           headers: new Headers(this.headers),
           url: this.url
         });
       };
-      Response.error = function() {
-        var response = new Response(null, { status: 200, statusText: "" });
+      Response2.error = function() {
+        var response = new Response2(null, { status: 200, statusText: "" });
         response.ok = false;
         response.status = 0;
         response.type = "error";
         return response;
       };
       var redirectStatuses = [301, 302, 303, 307, 308];
-      Response.redirect = function(url, status) {
+      Response2.redirect = function(url, status) {
         if (redirectStatuses.indexOf(status) === -1) {
           throw new RangeError("Invalid status code");
         }
-        return new Response(null, { status, headers: { location: url } });
+        return new Response2(null, { status, headers: { location: url } });
       };
       exports2.DOMException = g.DOMException;
       try {
@@ -1139,7 +1193,7 @@ var browserPonyfill = { exports: {} };
             options.url = "responseURL" in xhr ? xhr.responseURL : options.headers.get("X-Request-URL");
             var body = "response" in xhr ? xhr.response : xhr.responseText;
             setTimeout(function() {
-              resolve(new Response(body, options));
+              resolve(new Response2(body, options));
             }, 0);
           };
           xhr.onerror = function() {
@@ -1209,11 +1263,11 @@ var browserPonyfill = { exports: {} };
         g.fetch = fetch2;
         g.Headers = Headers;
         g.Request = Request;
-        g.Response = Response;
+        g.Response = Response2;
       }
       exports2.Headers = Headers;
       exports2.Request = Request;
-      exports2.Response = Response;
+      exports2.Response = Response2;
       exports2.fetch = fetch2;
       Object.defineProperty(exports2, "__esModule", { value: true });
       return exports2;
@@ -5186,6 +5240,9 @@ class OrbitController {
     this.distance = 5;
     this.yaw = 45;
     this.pitch = -20;
+    this.homeDistance = 5;
+    this.homeYaw = 45;
+    this.homePitch = -20;
     this.canvas = null;
     this.dragButton = null;
     this.lastX = 0;
@@ -5260,6 +5317,7 @@ class OrbitController {
     this.camera = camera;
     this.gizmo = gizmo;
     this.target = new pc.Vec3(0, 0, 0);
+    this.homeTarget = new pc.Vec3(0, 0, 0);
   }
   touchDistance() {
     const points = Array.from(this.touchPoints.values());
@@ -5297,6 +5355,26 @@ class OrbitController {
   }
   setDistance(d) {
     this.distance = d;
+  }
+  /** Зовётся загрузчиком модели ОДИН раз сразу после того, как он
+   * посчитал target/distance для свежезагруженной модели (см.
+   * tourViewer.ts) — это и есть тот самый "начальный вид", к которому
+   * должна возвращать кнопка "Центрировать". */
+  captureHome() {
+    this.homeTarget.copy(this.target);
+    this.homeDistance = this.distance;
+    this.homeYaw = this.yaw;
+    this.homePitch = this.pitch;
+  }
+  /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
+   * ТЕКУЩЕЕ состояние, а сначала восстанавливает target/distance/yaw/pitch
+   * из снимка captureHome(), и только потом пересчитывает камеру. */
+  resetToHome() {
+    this.target.copy(this.homeTarget);
+    this.distance = this.homeDistance;
+    this.yaw = this.homeYaw;
+    this.pitch = this.homePitch;
+    this.update();
   }
   /** Пересчитывает позицию камеры из target/distance/yaw/pitch и двигает
    * штурвал в ту же ориентацию — единая точка входа и для пользовательского
@@ -5477,6 +5555,7 @@ function disposeTourViewer() {
     entry.detachNavigation();
     for (const handle of entry.copcHandles) handle.dispose();
     (_a = entry.collisionMesh) == null ? void 0 : _a.dispose();
+    for (const url of entry.splatObjectUrls) URL.revokeObjectURL(url);
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -5567,7 +5646,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
         fly.attach(canvas);
       }
     }, recenter = function() {
-      orbit.update();
+      orbit.resetToHome();
       if (activeMode === "fly") syncFlyFromOrbit();
     };
     const pc = await import("playcanvas");
@@ -5607,6 +5686,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       fly.attach(canvas);
     }
     const copcHandles = [];
+    const splatObjectUrls = [];
     let lastStatsAt = 0;
     app.on("update", (dt) => {
       if (activeMode === "fly") fly.update(dt);
@@ -5635,6 +5715,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       unsubscribeSettings,
       detachNavigation: () => activeMode === "orbit" ? orbit.detach() : fly.detach(),
       copcHandles,
+      splatObjectUrls,
       get collisionMesh() {
         return collisionMesh;
       }
@@ -5706,10 +5787,12 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
         () => orbit.update(),
         isCurrent,
         showProgress,
-        sogUrls
+        sogUrls,
+        splatObjectUrls
       );
     }
     if (isCurrent()) {
+      orbit.captureHome();
       recenter();
     }
     hideProgress();

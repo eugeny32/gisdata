@@ -44,6 +44,7 @@ interface PcAppWithGisdata {
   detachNavigation: () => void;
   copcHandles: CopcStreamHandle[];
   collisionMesh: CollisionMesh | null;
+  splatObjectUrls: string[];
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -58,6 +59,10 @@ export function disposeTourViewer(): void {
     entry.detachNavigation();
     for (const handle of entry.copcHandles) handle.dispose();
     entry.collisionMesh?.dispose();
+    // blob:-URL из splatCache.ts (resolveSplatUrl) — данные уже отдельно
+    // лежат в Cache Storage, эти объекты — просто временная ручка
+    // браузерной памяти на время жизни ЭТОГО pc.Application.
+    for (const url of entry.splatObjectUrls) URL.revokeObjectURL(url);
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -241,16 +246,20 @@ export async function loadTourScene(
       fly.attach(canvas);
     }
 
-    /** "Центрировать" — независимо от текущего режима возвращает камеру к
-     * виду по умолчанию (target/distance/yaw/pitch орбиты для этой модели);
-     * если активен полёт — синхронизирует его состояние с этим видом, чтобы
-     * WASD продолжил движение от свежей позиции, а не от старой. */
+    /** "Центрировать" (Home) — независимо от текущего режима возвращает
+     * камеру к ИСХОДНОМУ виду модели (см. OrbitController.resetToHome —
+     * раньше здесь был orbit.update(), который просто пересчитывал ТЕКУЩЕЕ,
+     * уже смещённое панорамированием/зумом состояние, то есть кнопка
+     * фактически никуда не "центрировала"). Если активен полёт —
+     * синхронизирует его состояние с этим видом, чтобы WASD продолжил
+     * движение от свежей позиции, а не от старой. */
     function recenter(): void {
-      orbit.update();
+      orbit.resetToHome();
       if (activeMode === 'fly') syncFlyFromOrbit();
     }
 
     const copcHandles: CopcStreamHandle[] = [];
+    const splatObjectUrls: string[] = [];
     let lastStatsAt = 0;
     app.on('update', (dt: number) => {
       if (activeMode === 'fly') fly.update(dt);
@@ -285,6 +294,7 @@ export async function loadTourScene(
       unsubscribeSettings,
       detachNavigation: () => (activeMode === 'orbit' ? orbit.detach() : fly.detach()),
       copcHandles,
+      splatObjectUrls,
       get collisionMesh() {
         return collisionMesh;
       },
@@ -358,10 +368,15 @@ export async function loadTourScene(
         () => orbit.update(),
         isCurrent,
         showProgress,
-        sogUrls
+        sogUrls,
+        splatObjectUrls
       );
     }
     if (isCurrent()) {
+      // Снимок "домашнего" вида делаем ПОСЛЕ того, как загрузчик
+      // отработал и выставил итоговые target/distance — это и есть тот
+      // вид, к которому дальше будет возвращать кнопка "Центрировать".
+      orbit.captureHome();
       recenter();
     }
     hideProgress();

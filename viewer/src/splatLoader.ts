@@ -1,5 +1,6 @@
 import type { PcModule } from './types';
 import { AXIS_FIX_ROTATION } from './constants';
+import { resolveSplatUrl } from './splatCache';
 
 /**
  * Загрузка 3DGS-сплат-файлов через нативный gsplat-пайплайн PlayCanvas.
@@ -18,20 +19,45 @@ export async function loadSplatFiles(
   updateCameraTransform: () => void,
   isCurrent: () => boolean,
   showProgress: (text: string, pct: number) => void,
-  sogUrls: (string | null)[] = []
+  sogUrls: (string | null)[] = [],
+  /** blob:-URL уже созданных через resolveSplatUrl кэш-объектов — вызывающий
+   * код (tourViewer.ts) обязан звать URL.revokeObjectURL для каждого при
+   * закрытии тура, иначе они копятся в памяти страницы до перезагрузки. */
+  outObjectUrls: string[] = []
 ): Promise<void> {
   let fileIndex = 0;
   for (const rawUrl of urls) {
     if (!isCurrent()) return;
-    const url = sogUrls[fileIndex] || rawUrl;
+    const networkUrl = sogUrls[fileIndex] || rawUrl;
     fileIndex++;
     const filePrefix = urls.length > 1 ? `Файл ${fileIndex} из ${urls.length}: ` : '';
     showProgress(`${filePrefix}Загрузка модели...`, 0);
 
+    // Кэш на устройстве (Cache Storage) — при повторном открытии того же
+    // тура файл сплата подгружается мгновенно из кэша, без сети (тот же
+    // принцип, что и у COPC-кэша в copcCache.ts, см. memory unify-viewer-ux).
+    const resolvedUrl = await resolveSplatUrl(networkUrl, (received, total) => {
+      const pct = total ? (received / total) * 100 : 0;
+      showProgress(`${filePrefix}Загрузка модели... ${Math.round(pct)}%`, pct);
+    });
+    if (!isCurrent()) return;
+    if (resolvedUrl.startsWith('blob:')) outObjectUrls.push(resolvedUrl);
+
     await new Promise<void>((resolve, reject) => {
-      const asset = new pc.Asset('splat-' + fileIndex, 'gsplat', { url, filename: url.split('/').pop() });
+      const asset = new pc.Asset('splat-' + fileIndex, 'gsplat', {
+        url: resolvedUrl,
+        // filename (а не url) определяет выбор парсера по расширению
+        // (PlyParser/SogBundleParser/...) — см. ResourceLoader.load в
+        // движке: url.original = asset.file.filename. blob:-URL у
+        // расширения не имеет, поэтому имя берём из ИСХОДНОГО сетевого URL.
+        filename: networkUrl.split('/').pop(),
+      });
       app.assets.add(asset);
       asset.on('progress', (received: number, total: number) => {
+        // Реальный прогресс сети уже отрисован в resolveSplatUrl выше —
+        // эта загрузка идёт из blob:/кэша и почти всегда мгновенная, но
+        // событие оставляем для случая, когда resolveSplatUrl вернул
+        // исходный url как fallback (Cache API недоступен).
         const pct = total ? (received / total) * 100 : 0;
         showProgress(`${filePrefix}Загрузка модели... ${Math.round(pct)}%`, pct);
       });
