@@ -2,6 +2,7 @@ import type { ModelType, PcModule } from './types';
 import { createNavCubeGizmo } from './gizmo';
 import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
+import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 
 /** Минимальный HTML-escape для сообщения об ошибке — дублирует
  * escapeHtml() из map.php намеренно: модуль не должен тянуться в global
@@ -34,6 +35,7 @@ interface PcAppWithGisdata {
   app: InstanceType<PcModule['Application']>;
   resizeObserver: ResizeObserver;
   recenter: () => void;
+  unsubscribeSettings: () => void;
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -44,6 +46,7 @@ export function disposeTourViewer(): void {
   const entry = currentApp;
   currentApp = null;
   try {
+    entry.unsubscribeSettings();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -128,6 +131,24 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
     });
     app.root.addChild(camera);
 
+    const lasMaterials: InstanceType<PcModule['ShaderMaterial']>[] = [];
+
+    // Модуль 4 ("Камера + настройки") — применяем сохранённые/дефолтные
+    // настройки сразу при создании камеры, и повторно при каждом их
+    // изменении из Settings Panel (см. подписку ниже).
+    function applyCameraSettings(settings: CameraSettings): void {
+      const camComp: any = (camera as any).camera;
+      camComp.fov = settings.fov;
+      camComp.nearClip = settings.nearClip;
+      camComp.farClip = settings.farClip;
+      camComp.projection = settings.projection === 'orthographic' ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
+      for (const material of lasMaterials) {
+        material.setParameter('uPointSize', settings.pointSizePx);
+        material.update();
+      }
+      updateCameraTransform();
+    }
+
     // Orbit камерой: drag левой кнопкой — поворот вокруг target, колесо —
     // зум. target — точка "плотности" модели (см. loadSplatFiles/loadLasFiles),
     // не геометрический центр bounding box.
@@ -145,6 +166,11 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
       const offset = rot.transformVector(new pc.Vec3(0, 0, distance));
       camera.setPosition(target.x + offset.x, target.y + offset.y, target.z + offset.z);
       camera.lookAt(target);
+      // В ортографической проекции "зум" колесом не двигает камеру ближе
+      // (расстояние не влияет на видимый размер), поэтому привязываем
+      // orthoHeight к той же distance — иначе колесо мыши перестаёт
+      // визуально работать как зум в ortho-режиме.
+      (camera as any).camera.orthoHeight = distance * 0.5;
       gizmo.updateTransform(yaw, pitch);
     }
 
@@ -168,8 +194,9 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
     });
     window.addEventListener('pointermove', (e) => {
       if (!dragging) return;
-      yaw -= (e.clientX - lastX) * 0.3;
-      pitch = Math.max(-89, Math.min(89, pitch - (e.clientY - lastY) * 0.3));
+      const k = 0.3 * cameraSettings.orbitSensitivity;
+      yaw -= (e.clientX - lastX) * k;
+      pitch = Math.max(-89, Math.min(89, pitch - (e.clientY - lastY) * k));
       lastX = e.clientX;
       lastY = e.clientY;
       updateCameraTransform();
@@ -178,15 +205,18 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
       'wheel',
       (e) => {
         e.preventDefault();
-        distance = Math.max(0.05, distance * (1 + e.deltaY * 0.001));
+        distance = Math.max(0.05, distance * (1 + e.deltaY * 0.001 * cameraSettings.zoomSpeed));
         updateCameraTransform();
       },
       { passive: false }
     );
 
+    applyCameraSettings(cameraSettings);
+    const unsubscribeSettings = onCameraSettingsChange(applyCameraSettings);
+
     app.start();
 
-    currentApp = { app, resizeObserver, recenter: updateCameraTransform };
+    currentApp = { app, resizeObserver, recenter: updateCameraTransform, unsubscribeSettings };
 
     if (modelType === 'pointcloud') {
       await loadLasFiles(
@@ -199,7 +229,9 @@ export async function loadTourScene(urls: string[], modelType: ModelType): Promi
         },
         updateCameraTransform,
         isCurrent,
-        showProgress
+        showProgress,
+        cameraSettings.pointSizePx,
+        lasMaterials
       );
     } else {
       await loadSplatFiles(

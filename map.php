@@ -119,6 +119,9 @@ require __DIR__ . '/app/views/_head.php';
             <button type="button" class="btn btn-sm btn-outline-secondary" id="tourLayersBtn" title="Слои">
               <i class="bi bi-layers"></i>
             </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="tourSettingsBtn" title="Настройки">
+              <i class="bi bi-gear"></i>
+            </button>
             <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="tourCenterBtn" title="Центрировать">
               <i class="bi bi-crosshair"></i>
             </button>
@@ -148,6 +151,50 @@ require __DIR__ . '/app/views/_head.php';
               <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus"></i></button>
             </form>
             <?php endif; ?>
+          </div>
+
+          <div id="tourSettingsPanel" class="position-absolute top-0 end-0 m-3 p-3 rounded d-none" style="z-index: 1100; background: rgba(20,20,20,.92); color: #fff; width: 300px; max-height: 70vh; overflow-y: auto; font-size: 14px;">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <b>Настройки</b>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Угол обзора (FOV): <span id="tourSettingFovValue"></span>°</label>
+              <input type="range" class="form-range" id="tourSettingFov" min="20" max="100" step="1">
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label small mb-0">Near</label>
+                <input type="number" class="form-control form-control-sm" id="tourSettingNear" min="0.001" step="0.01">
+              </div>
+              <div class="col-6">
+                <label class="form-label small mb-0">Far</label>
+                <input type="number" class="form-control form-control-sm" id="tourSettingFar" min="1" step="1">
+              </div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Проекция</label>
+              <select class="form-select form-select-sm" id="tourSettingProjection">
+                <option value="perspective">Перспективная</option>
+                <option value="orthographic">Ортографическая</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
+              <input type="range" class="form-range" id="tourSettingSensitivity" min="0.2" max="3" step="0.1">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Скорость зума: <span id="tourSettingZoomSpeedValue"></span></label>
+              <input type="range" class="form-range" id="tourSettingZoomSpeed" min="0.2" max="3" step="0.1">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Размер точки (LAS): <span id="tourSettingPointSizeValue"></span>px</label>
+              <input type="range" class="form-range" id="tourSettingPointSize" min="1" max="10" step="1">
+            </div>
+            <div class="form-check form-switch mb-1">
+              <input class="form-check-input" type="checkbox" id="tourSettingEdl">
+              <label class="form-check-label small" for="tourSettingEdl">Eye-Dome Lighting (EDL)</label>
+            </div>
+            <div class="small text-secondary">EDL пока без визуального эффекта — флаг сохраняется, сам шейдер появится позже.</div>
           </div>
 
           <?php if ($isAdmin): ?>
@@ -680,6 +727,59 @@ document.getElementById('tourLayersBtn').addEventListener('click', () => {
   document.getElementById('tourLayersPanel').classList.toggle('d-none');
 });
 
+// --- Панель настроек камеры (модуль 4/6) — управляет общим объектом
+// window.TourViewer.{get,set}Settings(), который читает сама сцена
+// (viewer/src/tourViewer.ts) и применяет на лету, без перезагрузки тура.
+function syncSettingsPanelFromViewer() {
+  const s = window.TourViewer.getSettings();
+  document.getElementById('tourSettingFov').value = s.fov;
+  document.getElementById('tourSettingFovValue').textContent = s.fov;
+  document.getElementById('tourSettingNear').value = s.nearClip;
+  document.getElementById('tourSettingFar').value = s.farClip;
+  document.getElementById('tourSettingProjection').value = s.projection;
+  document.getElementById('tourSettingSensitivity').value = s.orbitSensitivity;
+  document.getElementById('tourSettingSensitivityValue').textContent = s.orbitSensitivity;
+  document.getElementById('tourSettingZoomSpeed').value = s.zoomSpeed;
+  document.getElementById('tourSettingZoomSpeedValue').textContent = s.zoomSpeed;
+  document.getElementById('tourSettingPointSize').value = s.pointSizePx;
+  document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
+  document.getElementById('tourSettingEdl').checked = s.edlEnabled;
+}
+
+document.getElementById('tourSettingsBtn').addEventListener('click', () => {
+  syncSettingsPanelFromViewer();
+  document.getElementById('tourSettingsPanel').classList.toggle('d-none');
+});
+
+document.getElementById('tourSettingFov').addEventListener('input', (e) => {
+  document.getElementById('tourSettingFovValue').textContent = e.target.value;
+  window.TourViewer.setSettings({ fov: Number(e.target.value) });
+});
+document.getElementById('tourSettingNear').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ nearClip: Number(e.target.value) });
+});
+document.getElementById('tourSettingFar').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ farClip: Number(e.target.value) });
+});
+document.getElementById('tourSettingProjection').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ projection: e.target.value });
+});
+document.getElementById('tourSettingSensitivity').addEventListener('input', (e) => {
+  document.getElementById('tourSettingSensitivityValue').textContent = e.target.value;
+  window.TourViewer.setSettings({ orbitSensitivity: Number(e.target.value) });
+});
+document.getElementById('tourSettingZoomSpeed').addEventListener('input', (e) => {
+  document.getElementById('tourSettingZoomSpeedValue').textContent = e.target.value;
+  window.TourViewer.setSettings({ zoomSpeed: Number(e.target.value) });
+});
+document.getElementById('tourSettingPointSize').addEventListener('input', (e) => {
+  document.getElementById('tourSettingPointSizeValue').textContent = e.target.value;
+  window.TourViewer.setSettings({ pointSizePx: Number(e.target.value) });
+});
+document.getElementById('tourSettingEdl').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ edlEnabled: e.target.checked });
+});
+
 document.getElementById('tourNewLayerForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = document.getElementById('tourNewLayerName').value.trim();
@@ -708,14 +808,16 @@ tourModalEl.addEventListener('shown.bs.modal', () => {
   // пользователь увидел её без лишнего клика — скрыть можно той же кнопкой.
   document.getElementById('tourMouseHelp').classList.remove('d-none');
   document.getElementById('tourLayersPanel').classList.add('d-none');
+  document.getElementById('tourSettingsPanel').classList.add('d-none');
   setDrawingTool(null);
   // Рисование/слои поверх модели сделаны под рейкастинг GaussianSplats3D,
   // которого в PlayCanvas нет (см. комментарий у движка выше) — прячем
   // тулбар для ОБОИХ типов моделей, пока не перенесён picking. Кнопка
-  // центрирования, наоборот, теперь полезна для обоих типов.
+  // центрирования и настроек, наоборот, теперь полезны для обоих типов.
   const toolbar = document.getElementById('tourDrawToolbar');
   if (toolbar) toolbar.classList.add('d-none');
   document.getElementById('tourCenterBtn').classList.remove('d-none');
+  document.getElementById('tourSettingsBtn').classList.remove('d-none');
   fetchLayers();
   if (!pendingTourUrls) return;
   currentTourUrls = pendingTourUrls;

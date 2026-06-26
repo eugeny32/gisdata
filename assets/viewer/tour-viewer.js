@@ -204,7 +204,7 @@ async function fetchWithProgress(url, onProgress) {
   }
   return buf.buffer;
 }
-async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTransform, isCurrent, showProgress) {
+async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTransform, isCurrent, showProgress, pointSizePx, outMaterials) {
   const { parse } = await import("@loaders.gl/core");
   const { LASLoader } = await import("@loaders.gl/las");
   let centerOffset = null;
@@ -298,13 +298,57 @@ async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTra
     mesh.setPositions(positions);
     mesh.setColors32(colors);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, 2);
+    const material = createPointCloudMaterial(pc, pointSizePx);
+    outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity("las-" + fileIndex);
     entity.setLocalRotation(...AXIS_FIX_ROTATION);
     entity.addComponent("render", { meshInstances: [meshInstance] });
     app.root.addChild(entity);
   }
+}
+const DEFAULT_CAMERA_SETTINGS = {
+  fov: 45,
+  nearClip: 0.05,
+  farClip: 5e3,
+  projection: "perspective",
+  orbitSensitivity: 1,
+  zoomSpeed: 1,
+  moveSpeed: 5,
+  pointSizePx: 2,
+  edlEnabled: false
+};
+const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_CAMERA_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_CAMERA_SETTINGS, ...parsed };
+  } catch (e) {
+    return { ...DEFAULT_CAMERA_SETTINGS };
+  }
+}
+const cameraSettings = loadFromStorage();
+const listeners = [];
+function onCameraSettingsChange(listener) {
+  listeners.push(listener);
+  return () => {
+    const i = listeners.indexOf(listener);
+    if (i !== -1) listeners.splice(i, 1);
+  };
+}
+function setCameraSettings(partial) {
+  Object.assign(cameraSettings, partial);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cameraSettings));
+  } catch (e) {
+  }
+  for (const listener of listeners) listener(cameraSettings);
+  return cameraSettings;
+}
+function getCameraSettings() {
+  return cameraSettings;
 }
 function escapeHtml(s) {
   const div = document.createElement("div");
@@ -334,6 +378,7 @@ function disposeTourViewer() {
   const entry = currentApp;
   currentApp = null;
   try {
+    entry.unsubscribeSettings();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -377,6 +422,17 @@ async function loadTourScene(urls, modelType) {
   try {
     let resizeCanvasToContainer = function() {
       app.resizeCanvas(container.clientWidth || 300, container.clientHeight || 300);
+    }, applyCameraSettings = function(settings) {
+      const camComp = camera.camera;
+      camComp.fov = settings.fov;
+      camComp.nearClip = settings.nearClip;
+      camComp.farClip = settings.farClip;
+      camComp.projection = settings.projection === "orthographic" ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
+      for (const material of lasMaterials) {
+        material.setParameter("uPointSize", settings.pointSizePx);
+        material.update();
+      }
+      updateCameraTransform();
     }, updateCameraTransform = function() {
       const yawQ = new pc.Quat().setFromEulerAngles(0, yaw, 0);
       const pitchQ = new pc.Quat().setFromEulerAngles(pitch, 0, 0);
@@ -384,6 +440,7 @@ async function loadTourScene(urls, modelType) {
       const offset = rot.transformVector(new pc.Vec3(0, 0, distance));
       camera.setPosition(target.x + offset.x, target.y + offset.y, target.z + offset.z);
       camera.lookAt(target);
+      camera.camera.orthoHeight = distance * 0.5;
       gizmo.updateTransform(yaw, pitch);
     };
     const pc = await import("playcanvas");
@@ -410,6 +467,7 @@ async function loadTourScene(urls, modelType) {
       priority: 0
     });
     app.root.addChild(camera);
+    const lasMaterials = [];
     const target = new pc.Vec3(0, 0, 0);
     let distance = 5;
     let yaw = 45;
@@ -435,8 +493,9 @@ async function loadTourScene(urls, modelType) {
     });
     window.addEventListener("pointermove", (e) => {
       if (!dragging) return;
-      yaw -= (e.clientX - lastX) * 0.3;
-      pitch = Math.max(-89, Math.min(89, pitch - (e.clientY - lastY) * 0.3));
+      const k = 0.3 * cameraSettings.orbitSensitivity;
+      yaw -= (e.clientX - lastX) * k;
+      pitch = Math.max(-89, Math.min(89, pitch - (e.clientY - lastY) * k));
       lastX = e.clientX;
       lastY = e.clientY;
       updateCameraTransform();
@@ -445,13 +504,15 @@ async function loadTourScene(urls, modelType) {
       "wheel",
       (e) => {
         e.preventDefault();
-        distance = Math.max(0.05, distance * (1 + e.deltaY * 1e-3));
+        distance = Math.max(0.05, distance * (1 + e.deltaY * 1e-3 * cameraSettings.zoomSpeed));
         updateCameraTransform();
       },
       { passive: false }
     );
+    applyCameraSettings(cameraSettings);
+    const unsubscribeSettings = onCameraSettingsChange(applyCameraSettings);
     app.start();
-    currentApp = { app, resizeObserver, recenter: updateCameraTransform };
+    currentApp = { app, resizeObserver, recenter: updateCameraTransform, unsubscribeSettings };
     if (modelType === "pointcloud") {
       await loadLasFiles(
         pc,
@@ -463,7 +524,9 @@ async function loadTourScene(urls, modelType) {
         },
         updateCameraTransform,
         isCurrent,
-        showProgress
+        showProgress,
+        cameraSettings.pointSizePx,
+        lasMaterials
       );
     } else {
       await loadSplatFiles(
@@ -493,6 +556,8 @@ const api = {
   dispose: disposeTourViewer,
   recenter: recenterTourCamera,
   showError: showViewerError,
-  hideError: hideViewerError
+  hideError: hideViewerError,
+  getSettings: getCameraSettings,
+  setSettings: setCameraSettings
 };
 window.TourViewer = api;

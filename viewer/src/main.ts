@@ -1,4 +1,5 @@
 import { loadTourScene, disposeTourViewer, recenterTourCamera, showViewerError, hideViewerError } from './tourViewer';
+import { getCameraSettings, setCameraSettings, type CameraSettings } from './cameraSettings';
 import type { ModelType } from './types';
 
 /**
@@ -15,6 +16,8 @@ export interface TourViewerApi {
   recenter(): void;
   showError(message: string): void;
   hideError(): void;
+  getSettings(): CameraSettings;
+  setSettings(partial: Partial<CameraSettings>): CameraSettings;
 }
 
 const api: TourViewerApi = {
@@ -23,6 +26,8 @@ const api: TourViewerApi = {
   recenter: recenterTourCamera,
   showError: showViewerError,
   hideError: hideViewerError,
+  getSettings: getCameraSettings,
+  setSettings: setCameraSettings,
 };
 
 declare global {

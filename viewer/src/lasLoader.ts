@@ -97,7 +97,12 @@ export async function loadLasFiles(
   setDistance: (d: number) => void,
   updateCameraTransform: () => void,
   isCurrent: () => boolean,
-  showProgress: (text: string, pct: number) => void
+  showProgress: (text: string, pct: number) => void,
+  pointSizePx: number,
+  /** Материалы складываются сюда, чтобы Settings Panel (PR1) могла менять
+   * размер точки на лету (setParameter('uPointSize', ...)) без перезагрузки
+   * файла — см. tourViewer.ts. */
+  outMaterials: InstanceType<PcModule['ShaderMaterial']>[]
 ): Promise<void> {
   const { parse } = await import('@loaders.gl/core');
   const { LASLoader } = await import('@loaders.gl/las');
@@ -208,7 +213,8 @@ export async function loadLasFiles(
     mesh.setPositions(positions);
     mesh.setColors32(colors);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, 2);
+    const material = createPointCloudMaterial(pc, pointSizePx);
+    outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity('las-' + fileIndex);
     entity.setLocalRotation(...(AXIS_FIX_ROTATION as [number, number, number, number]));
