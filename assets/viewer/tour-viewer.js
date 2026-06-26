@@ -4696,10 +4696,109 @@ async function loadPointDataView(filename, copc2, node, { lazPerf: lazPerf2, inc
   exports.Las = __importStar2(las);
   __exportStar(utils$1, exports);
 })(lib);
-const POINT_BUDGET = 4e6;
+const DB_NAME = "gisdata-copc-cache";
+const STORE_NAME = "nodes";
+const DB_VERSION = 1;
+const MAX_CACHED_NODES = 8e3;
+const PRUNE_BATCH = 500;
+let dbPromise = null;
+function openDb() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve) => {
+    if (typeof indexedDB === "undefined") {
+      resolve(null);
+      return;
+    }
+    let req;
+    try {
+      req = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch {
+      resolve(null);
+      return;
+    }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        const store = db.createObjectStore(STORE_NAME, { keyPath: ["url", "key"] });
+        store.createIndex("lastAccess", "lastAccess");
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+  return dbPromise;
+}
+async function getCachedNode(url, key2) {
+  const db = await openDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get([url, key2]);
+      req.onsuccess = () => {
+        const row = req.result;
+        if (!row) {
+          resolve(null);
+          return;
+        }
+        store.put({ ...row, lastAccess: Date.now() });
+        resolve({
+          positions: row.positions,
+          colors: row.colors,
+          intensityClass: row.intensityClass,
+          pointCount: row.pointCount,
+          hasColor: row.hasColor
+        });
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+let putCount = 0;
+async function putCachedNode(url, key2, data) {
+  const db = await openDb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put({ url, key: key2, ...data, lastAccess: Date.now() });
+  } catch {
+    return;
+  }
+  putCount++;
+  if (putCount % 200 === 0) {
+    void pruneIfNeeded(db);
+  }
+}
+async function pruneIfNeeded(db) {
+  try {
+    const count = await new Promise((resolve) => {
+      const req = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).count();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(0);
+    });
+    if (count <= MAX_CACHED_NODES) return;
+    const toDelete = Math.min(PRUNE_BATCH, count - MAX_CACHED_NODES);
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const index = tx.objectStore(STORE_NAME).index("lastAccess");
+    let deleted = 0;
+    const cursorReq = index.openCursor();
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result;
+      if (!cursor || deleted >= toDelete) return;
+      cursor.delete();
+      deleted++;
+      cursor.continue();
+    };
+  } catch {
+  }
+}
+const POINT_BUDGET = 8e6;
 const WORKER_POOL_SIZE = 3;
 const REFRESH_INTERVAL_MS = 300;
-const SCREEN_SIZE_THRESHOLD = 0.2;
+const SCREEN_SIZE_THRESHOLD = 0.08;
 function nodeBounds(key2, cube2) {
   const [d, x, y, z] = key2;
   const cells = 2 ** d;
@@ -4773,6 +4872,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   let hasColorDecided = null;
   const missCounts = /* @__PURE__ */ new Map();
   const MISS_THRESHOLD = 4;
+  const dataCache = /* @__PURE__ */ new Map();
   const workers = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
     const worker = new Worker(new URL(
@@ -4805,14 +4905,37 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     root.addChild(entity);
     loaded.set(key2, { entity, pointCount: node.pointCount });
   }
-  function requestNode(key2, node) {
-    if (loaded.has(key2) || pendingKeys.has(key2)) return;
-    pendingKeys.add(key2);
+  function dispatchToWorker(key2, node) {
     const id = nextRequestId++;
     pendingRequests.set(id, { key: key2, node });
     const request = { id, url: absoluteUrl, copc: copc2, node, hasColor: hasColorDecided, zRange: heightRange, centerOffset };
     workers[nextWorker].postMessage(request);
     nextWorker = (nextWorker + 1) % workers.length;
+  }
+  function requestNode(key2, node) {
+    if (loaded.has(key2) || pendingKeys.has(key2)) return;
+    pendingKeys.add(key2);
+    const cachedInMemory = dataCache.get(key2);
+    if (cachedInMemory) {
+      pendingKeys.delete(key2);
+      if (hasColorDecided === null) hasColorDecided = cachedInMemory.hasColor;
+      buildEntity(key2, node, cachedInMemory.positions, cachedInMemory.colors, cachedInMemory.intensityClass);
+      return;
+    }
+    getCachedNode(absoluteUrl, key2).then((cached) => {
+      if (!isCurrent()) {
+        pendingKeys.delete(key2);
+        return;
+      }
+      if (cached) {
+        dataCache.set(key2, cached);
+        pendingKeys.delete(key2);
+        if (hasColorDecided === null) hasColorDecided = cached.hasColor;
+        buildEntity(key2, node, cached.positions, cached.colors, cached.intensityClass);
+        return;
+      }
+      dispatchToWorker(key2, node);
+    });
   }
   for (const worker of workers) {
     worker.onmessage = (e) => {
@@ -4826,6 +4949,10 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         return;
       }
       if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
+      const resolvedHasColor = hasColor ?? false;
+      const cacheEntry = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };
+      dataCache.set(pending.key, cacheEntry);
+      void putCachedNode(absoluteUrl, pending.key, cacheEntry);
       buildEntity(pending.key, pending.node, positions, colors, intensityClass);
     };
   }

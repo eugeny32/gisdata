@@ -3,6 +3,7 @@ import type { PcModule } from './types';
 import { AXIS_FIX_ROTATION } from './constants';
 import { createPointCloudMaterial } from './pointCloudMaterial';
 import type { CopcWorkerRequest, CopcWorkerResponse } from './copcWorker';
+import { getCachedNode, putCachedNode, type CachedNodeData } from './copcCache';
 
 /**
  * Потоковая загрузка LAS, заранее сконвертированного в COPC (PR3/PR4) —
@@ -18,14 +19,20 @@ import type { CopcWorkerRequest, CopcWorkerResponse } from './copcWorker';
  * на 2^d частей по каждой оси от copc.info.cube.
  */
 
-const POINT_BUDGET = 4_000_000;
+// Поднято с 4М по итогам живого теста (пользователь сообщил о мерцании на
+// большом файле, оборудование держало 19-107 FPS даже на ~4М точках — есть
+// запас). Часть "не выгружать вообще" решается кэшем (см. dataCache/
+// copcCache.ts ниже) — бюджет всё равно нужен, иначе сцена росла бы
+// неограниченно при облёте всего облака.
+const POINT_BUDGET = 8_000_000;
 const WORKER_POOL_SIZE = 3;
 const REFRESH_INTERVAL_MS = 300;
 // Доля высоты экрана, ниже которой узел считается "достаточно мелким" и
 // дальше не разбивается на детей — чем больше, тем грубее (меньше точек,
-// быстрее), чем меньше — тем подробнее (больше точек, медленнее). Подобрано
-// эмпирически, не из формального стандарта SSE (упрощённая метрика).
-const SCREEN_SIZE_THRESHOLD = 0.2;
+// быстрее), чем меньше — тем подробнее (больше точек, медленнее). Понижено
+// с 0.2 по запросу пользователя — мельче узлы (= мельче "квадраты"),
+// равномернее распределённые по кадру, не несколько огромных кусков.
+const SCREEN_SIZE_THRESHOLD = 0.08;
 
 type Cube = [number, number, number, number, number, number];
 
@@ -158,6 +165,13 @@ export async function loadCopcPointCloud(
   // до предела, часть узлов мерцала каждые ~300-600мс.
   const missCounts = new Map<string, number>();
   const MISS_THRESHOLD = 4;
+  // Кэш расшифрованных узлов — по запросу пользователя: "не выгружать их
+  // из плеера, а кэшировать". disposeNode ниже выгружает только СУЩНОСТЬ
+  // (освобождает GPU-память), а не запись здесь — данные узла остаются
+  // доступными на весь сеанс, повторное появление в кадре не требует ни
+  // сети, ни повторной распаковки LAZ. copcCache.ts — тот же набор данных,
+  // но в IndexedDB, переживает закрытие браузера (между открытиями тура).
+  const dataCache = new Map<string, CachedNodeData>();
 
   const workers: Worker[] = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
@@ -196,14 +210,43 @@ export async function loadCopcPointCloud(
     loaded.set(key, { entity, pointCount: node.pointCount });
   }
 
-  function requestNode(key: string, node: Hierarchy.Node): void {
-    if (loaded.has(key) || pendingKeys.has(key)) return;
-    pendingKeys.add(key);
+  function dispatchToWorker(key: string, node: Hierarchy.Node): void {
     const id = nextRequestId++;
     pendingRequests.set(id, { key, node });
     const request: CopcWorkerRequest = { id, url: absoluteUrl, copc, node, hasColor: hasColorDecided, zRange: heightRange, centerOffset };
     workers[nextWorker].postMessage(request);
     nextWorker = (nextWorker + 1) % workers.length;
+  }
+
+  function requestNode(key: string, node: Hierarchy.Node): void {
+    if (loaded.has(key) || pendingKeys.has(key)) return;
+    pendingKeys.add(key);
+
+    // 1) уже расшифровывали в этом сеансе — мгновенно, без сети/воркера.
+    const cachedInMemory = dataCache.get(key);
+    if (cachedInMemory) {
+      pendingKeys.delete(key);
+      if (hasColorDecided === null) hasColorDecided = cachedInMemory.hasColor;
+      buildEntity(key, node, cachedInMemory.positions, cachedInMemory.colors, cachedInMemory.intensityClass);
+      return;
+    }
+
+    // 2) не в памяти — пробуем IndexedDB (мог остаться с прошлого открытия
+    // этого же тура). Если и там нет — обычная загрузка через воркер.
+    getCachedNode(absoluteUrl, key).then((cached) => {
+      if (!isCurrent()) {
+        pendingKeys.delete(key);
+        return;
+      }
+      if (cached) {
+        dataCache.set(key, cached);
+        pendingKeys.delete(key);
+        if (hasColorDecided === null) hasColorDecided = cached.hasColor;
+        buildEntity(key, node, cached.positions, cached.colors, cached.intensityClass);
+        return;
+      }
+      dispatchToWorker(key, node);
+    });
   }
 
   for (const worker of workers) {
@@ -218,6 +261,10 @@ export async function loadCopcPointCloud(
         return;
       }
       if (hasColorDecided === null && hasColor !== undefined) hasColorDecided = hasColor;
+      const resolvedHasColor = hasColor ?? false;
+      const cacheEntry: CachedNodeData = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };
+      dataCache.set(pending.key, cacheEntry);
+      void putCachedNode(absoluteUrl, pending.key, cacheEntry);
       buildEntity(pending.key, pending.node, positions, colors, intensityClass);
     };
   }
