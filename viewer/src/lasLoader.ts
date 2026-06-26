@@ -172,11 +172,26 @@ export async function loadLasFiles(
       }
     }
 
+    // intensity/classification (PR6, режимы раскраски) — отдельные сырые
+    // атрибуты, не баковка в цвет: переключение режима в Settings Panel
+    // не требует перезагрузки/пересборки буфера, см. pointCloudMaterial.ts.
+    // Точные имена полей — реальные ключи @loaders.gl/las (lowercase,
+    // подтверждено по исходнику modules/las/src/lib/typescript/parse-las.ts),
+    // не предположение.
+    const intensityAttr = data.attributes.intensity && data.attributes.intensity.value;
+    const classAttr = data.attributes.classification && data.attributes.classification.value;
+    const intensityClass = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      intensityClass[i * 2] = intensityAttr ? intensityAttr[i] / 65535 : 0;
+      intensityClass[i * 2 + 1] = classAttr ? classAttr[i] : 0;
+    }
+
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, count);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, pointSizePx);
+    const material = createPointCloudMaterial(pc, pointSizePx, [-extent, extent]);
     outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity('las-' + fileIndex);

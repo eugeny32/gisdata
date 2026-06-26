@@ -147,19 +147,34 @@ async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTr
     });
   }
 }
-function createPointCloudMaterial(pc, pointSizePx) {
+const COLOR_MODE_INDEX = {
+  rgb: 0,
+  height: 1,
+  intensity: 2,
+  classification: 3
+};
+function createPointCloudMaterial(pc, pointSizePx, heightRange = [0, 1]) {
   const material = new pc.ShaderMaterial({
     uniqueName: "GisdataLasPointCloudShader",
-    attributes: { aPosition: pc.SEMANTIC_POSITION, aColor: pc.SEMANTIC_COLOR },
+    attributes: {
+      aPosition: pc.SEMANTIC_POSITION,
+      aColor: pc.SEMANTIC_COLOR,
+      aTexCoord0: pc.SEMANTIC_TEXCOORD0
+    },
     vertexGLSL: `
       attribute vec3 aPosition;
       attribute vec4 aColor;
+      attribute vec2 aTexCoord0;
       uniform mat4 matrix_model;
       uniform mat4 matrix_viewProjection;
       uniform float uPointSize;
       varying vec4 vColor;
+      varying vec2 vIntensityClass;
+      varying float vHeight;
       void main(void) {
         vColor = aColor;
+        vIntensityClass = aTexCoord0;
+        vHeight = aPosition.z;
         vec4 worldPos = matrix_model * vec4(aPosition, 1.0);
         gl_Position = matrix_viewProjection * worldPos;
         gl_PointSize = uPointSize;
@@ -168,14 +183,62 @@ function createPointCloudMaterial(pc, pointSizePx) {
     fragmentGLSL: `
       precision mediump float;
       varying vec4 vColor;
+      varying vec2 vIntensityClass;
+      varying float vHeight;
+      uniform float uColorMode;
+      uniform vec2 uHeightRange;
+
+      vec3 hslToRgb(float h, float s, float l) {
+        float k0 = mod(0.0 + h * 12.0, 12.0);
+        float k8 = mod(8.0 + h * 12.0, 12.0);
+        float k4 = mod(4.0 + h * 12.0, 12.0);
+        float a = s * min(l, 1.0 - l);
+        float r = l - a * max(-1.0, min(min(k0 - 3.0, 9.0 - k0), 1.0));
+        float g = l - a * max(-1.0, min(min(k8 - 3.0, 9.0 - k8), 1.0));
+        float b = l - a * max(-1.0, min(min(k4 - 3.0, 9.0 - k4), 1.0));
+        return vec3(r, g, b);
+      }
+
+      // ASPRS LAS classification codes — упрощённая палитра под самые
+      // частые классы; всё неперечисленное — серый (как "unclassified").
+      vec3 classificationColor(float c) {
+        int cls = int(c + 0.5);
+        if (cls == 2) return vec3(0.55, 0.40, 0.20); // ground
+        if (cls == 3) return vec3(0.55, 0.85, 0.35); // low vegetation
+        if (cls == 4) return vec3(0.30, 0.65, 0.25); // medium vegetation
+        if (cls == 5) return vec3(0.10, 0.45, 0.15); // high vegetation
+        if (cls == 6) return vec3(0.90, 0.55, 0.20); // building
+        if (cls == 7) return vec3(0.90, 0.10, 0.80); // noise
+        if (cls == 9) return vec3(0.20, 0.50, 0.95); // water
+        return vec3(0.6, 0.6, 0.6); // 0/1/unclassified/прочее
+      }
+
       void main(void) {
-        gl_FragColor = vColor;
+        vec3 color;
+        if (uColorMode < 0.5) {
+          color = vColor.rgb;
+        } else if (uColorMode < 1.5) {
+          float extent = max(uHeightRange.y - uHeightRange.x, 0.0001);
+          float t = clamp((vHeight - uHeightRange.x) / extent, 0.0, 1.0);
+          color = hslToRgb((1.0 - t) * 0.66, 0.8, 0.5);
+        } else if (uColorMode < 2.5) {
+          color = vec3(clamp(vIntensityClass.x, 0.0, 1.0));
+        } else {
+          color = classificationColor(vIntensityClass.y);
+        }
+        gl_FragColor = vec4(color, 1.0);
       }
     `
   });
   material.setParameter("uPointSize", pointSizePx);
+  material.setParameter("uColorMode", 0);
+  material.setParameter("uHeightRange", new Float32Array(heightRange));
   material.update();
   return material;
+}
+function setPointCloudColorMode(material, mode) {
+  material.setParameter("uColorMode", COLOR_MODE_INDEX[mode]);
+  material.update();
 }
 function hslToRgb(h, s, l) {
   const k = (n) => (n + h * 12) % 12;
@@ -295,11 +358,19 @@ async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTra
         colors[i * 4 + 3] = 255;
       }
     }
+    const intensityAttr = data.attributes.intensity && data.attributes.intensity.value;
+    const classAttr = data.attributes.classification && data.attributes.classification.value;
+    const intensityClass = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      intensityClass[i * 2] = intensityAttr ? intensityAttr[i] / 65535 : 0;
+      intensityClass[i * 2 + 1] = classAttr ? classAttr[i] : 0;
+    }
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, count);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, pointSizePx);
+    const material = createPointCloudMaterial(pc, pointSizePx, [-extent, extent]);
     outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity("las-" + fileIndex);
@@ -4639,7 +4710,8 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const root = new pc.Entity("copc-root");
   root.setLocalRotation(...AXIS_FIX_ROTATION);
   app.root.addChild(root);
-  const material = createPointCloudMaterial(pc, pointSizePx);
+  const heightRange = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
+  const material = createPointCloudMaterial(pc, pointSizePx, heightRange);
   outMaterials.push(material);
   let nodes = {};
   let pages = {};
@@ -4652,12 +4724,11 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const loaded = /* @__PURE__ */ new Map();
   const pendingKeys = /* @__PURE__ */ new Set();
   let hasColorDecided = null;
-  const zRange = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
   const workers = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
     const worker = new Worker(new URL(
       /* @vite-ignore */
-      "/assets/viewer/assets/copcWorker-yHYaF0eo.js",
+      "/assets/viewer/assets/copcWorker-DMw_CXjC.js",
       import.meta.url
     ), { type: "module" });
     worker.onerror = (e) => console.error("COPC: ошибка воркера:", e.message || e);
@@ -4672,11 +4743,12 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     entry.entity.destroy();
     loaded.delete(key2);
   }
-  function buildEntity(key2, node, positions, colors) {
+  function buildEntity(key2, node, positions, colors, intensityClass) {
     if (!isCurrent()) return;
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, node.pointCount);
     mesh.update(pc.PRIMITIVE_POINTS, true);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity("copc-node-" + key2);
@@ -4689,23 +4761,23 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     pendingKeys.add(key2);
     const id = nextRequestId++;
     pendingRequests.set(id, { key: key2, node });
-    const request = { id, url: absoluteUrl, copc: copc2, node, hasColor: hasColorDecided, zRange, centerOffset };
+    const request = { id, url: absoluteUrl, copc: copc2, node, hasColor: hasColorDecided, zRange: heightRange, centerOffset };
     workers[nextWorker].postMessage(request);
     nextWorker = (nextWorker + 1) % workers.length;
   }
   for (const worker of workers) {
     worker.onmessage = (e) => {
-      const { id, positions, colors, pointCount, hasColor, error } = e.data;
+      const { id, positions, colors, intensityClass, pointCount, hasColor, error } = e.data;
       const pending = pendingRequests.get(id);
       pendingRequests.delete(id);
       if (!pending) return;
       pendingKeys.delete(pending.key);
-      if (error || !positions || !colors || pointCount === void 0) {
+      if (error || !positions || !colors || !intensityClass || pointCount === void 0) {
         console.error("COPC: не удалось загрузить узел", pending.key, error);
         return;
       }
       if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
-      buildEntity(pending.key, pending.node, positions, colors);
+      buildEntity(pending.key, pending.node, positions, colors, intensityClass);
     };
   }
   let lastRefreshAt = 0;
@@ -4869,7 +4941,8 @@ const DEFAULT_CAMERA_SETTINGS = {
   moveSpeed: 5,
   pointSizePx: 2,
   edlEnabled: false,
-  navigationMode: "orbit"
+  navigationMode: "orbit",
+  colorMode: "rgb"
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -5220,7 +5293,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       camComp.projection = settings.projection === "orthographic" ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
       for (const material of lasMaterials) {
         material.setParameter("uPointSize", settings.pointSizePx);
-        material.update();
+        setPointCloudColorMode(material, settings.colorMode);
       }
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === "orbit") orbit.update();

@@ -203,6 +203,16 @@ require __DIR__ . '/app/views/_head.php';
               <label class="form-label small mb-0">Размер точки (LAS): <span id="tourSettingPointSizeValue"></span>px</label>
               <input type="range" class="form-range" id="tourSettingPointSize" min="1" max="10" step="1">
             </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Раскраска (LAS/COPC)</label>
+              <select class="form-select form-select-sm" id="tourSettingColorMode">
+                <option value="rgb">Реальный цвет (RGB)</option>
+                <option value="height">По высоте</option>
+                <option value="intensity">Интенсивность</option>
+                <option value="classification">Классификация</option>
+              </select>
+              <div class="small text-secondary">Переключается без перезагрузки файла. Для 3DGS-сплатов не действует — только для облаков точек.</div>
+            </div>
             <div class="form-check form-switch mb-1">
               <input class="form-check-input" type="checkbox" id="tourSettingEdl">
               <label class="form-check-label small" for="tourSettingEdl">Eye-Dome Lighting (EDL)</label>
@@ -769,6 +779,7 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingMoveSpeedValue').textContent = s.moveSpeed;
   document.getElementById('tourSettingPointSize').value = s.pointSizePx;
   document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
+  document.getElementById('tourSettingColorMode').value = s.colorMode;
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
 }
 
@@ -812,6 +823,9 @@ document.getElementById('tourSettingZoomSpeed').addEventListener('input', (e) =>
 document.getElementById('tourSettingPointSize').addEventListener('input', (e) => {
   document.getElementById('tourSettingPointSizeValue').textContent = e.target.value;
   window.TourViewer.setSettings({ pointSizePx: Number(e.target.value) });
+});
+document.getElementById('tourSettingColorMode').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ colorMode: e.target.value });
 });
 document.getElementById('tourSettingEdl').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ edlEnabled: e.target.checked });

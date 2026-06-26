@@ -28,6 +28,10 @@ export interface CameraSettings {
    * конвертация ещё не завершилась), молча работает как 'fly' — см.
    * tourViewer.ts/updateFlyCollision. */
   navigationMode: 'orbit' | 'fly' | 'walk';
+  /** Режим раскраски LAS/COPC (PR6) — переключается без перезагрузки
+   * файла (см. pointCloudMaterial.ts). Для 3DGS-сплатов не действует —
+   * см. ограничение в pointCloudMaterial.ts. */
+  colorMode: 'rgb' | 'height' | 'intensity' | 'classification';
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -41,6 +45,7 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   pointSizePx: 2,
   edlEnabled: false,
   navigationMode: 'orbit',
+  colorMode: 'rgb',
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

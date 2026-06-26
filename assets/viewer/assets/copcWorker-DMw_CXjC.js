@@ -6653,8 +6653,17 @@
           colors[i * 4 + 3] = 255;
         }
       }
-      const response = { id, positions, colors, pointCount: count, hasColor };
-      self.postMessage(response, [positions.buffer, colors.buffer]);
+      const intensityClass = new Float32Array(count * 2);
+      if (view2.dimensions.Intensity) {
+        const getI = view2.getter("Intensity");
+        for (let i = 0; i < count; i++) intensityClass[i * 2] = getI(i) / 65535;
+      }
+      if (view2.dimensions.Classification) {
+        const getC = view2.getter("Classification");
+        for (let i = 0; i < count; i++) intensityClass[i * 2 + 1] = getC(i);
+      }
+      const response = { id, positions, colors, intensityClass, pointCount: count, hasColor };
+      self.postMessage(response, [positions.buffer, colors.buffer, intensityClass.buffer]);
     } catch (err) {
       const response = { id, error: String(err) };
       self.postMessage(response);

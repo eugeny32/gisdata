@@ -125,7 +125,10 @@ export async function loadCopcPointCloud(
   root.setLocalRotation(...(AXIS_FIX_ROTATION as [number, number, number, number]));
   app.root.addChild(root);
 
-  const material = createPointCloudMaterial(pc, pointSizePx);
+  // Реальный диапазон Z данных (не растянутого куба) — для height-режима
+  // (PR6) тот же диапазон, что и для HSL-заливки без реального RGB ниже.
+  const heightRange: [number, number] = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
+  const material = createPointCloudMaterial(pc, pointSizePx, heightRange);
   outMaterials.push(material);
 
   // nodes/pages накапливаются по мере того, как мы спускаемся глубже —
@@ -140,9 +143,6 @@ export async function loadCopcPointCloud(
   const loaded = new Map<string, LoadedNode>();
   const pendingKeys = new Set<string>();
   let hasColorDecided: boolean | null = null;
-  // Реальный диапазон Z данных (не растянутого куба) — иначе HSL-заливка
-  // по высоте сжалась бы в узкую полоску одного цвета на тонких объектах.
-  const zRange: [number, number] = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
 
   const workers: Worker[] = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
@@ -161,11 +161,18 @@ export async function loadCopcPointCloud(
     loaded.delete(key);
   }
 
-  function buildEntity(key: string, node: Hierarchy.Node, positions: Float32Array, colors: Uint8Array): void {
+  function buildEntity(
+    key: string,
+    node: Hierarchy.Node,
+    positions: Float32Array,
+    colors: Uint8Array,
+    intensityClass: Float32Array
+  ): void {
     if (!isCurrent()) return;
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, node.pointCount);
     mesh.update(pc.PRIMITIVE_POINTS, true);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity('copc-node-' + key);
@@ -179,24 +186,24 @@ export async function loadCopcPointCloud(
     pendingKeys.add(key);
     const id = nextRequestId++;
     pendingRequests.set(id, { key, node });
-    const request: CopcWorkerRequest = { id, url: absoluteUrl, copc, node, hasColor: hasColorDecided, zRange, centerOffset };
+    const request: CopcWorkerRequest = { id, url: absoluteUrl, copc, node, hasColor: hasColorDecided, zRange: heightRange, centerOffset };
     workers[nextWorker].postMessage(request);
     nextWorker = (nextWorker + 1) % workers.length;
   }
 
   for (const worker of workers) {
     worker.onmessage = (e: MessageEvent<CopcWorkerResponse>) => {
-      const { id, positions, colors, pointCount, hasColor, error } = e.data;
+      const { id, positions, colors, intensityClass, pointCount, hasColor, error } = e.data;
       const pending = pendingRequests.get(id);
       pendingRequests.delete(id);
       if (!pending) return;
       pendingKeys.delete(pending.key);
-      if (error || !positions || !colors || pointCount === undefined) {
+      if (error || !positions || !colors || !intensityClass || pointCount === undefined) {
         console.error('COPC: не удалось загрузить узел', pending.key, error);
         return;
       }
       if (hasColorDecided === null && hasColor !== undefined) hasColorDecided = hasColor;
-      buildEntity(pending.key, pending.node, positions, colors);
+      buildEntity(pending.key, pending.node, positions, colors, intensityClass);
     };
   }
 

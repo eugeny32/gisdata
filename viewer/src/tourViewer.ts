@@ -4,6 +4,7 @@ import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
 import { loadCopcPointCloud, type CopcStreamHandle } from './copcLoader';
 import { loadCollisionMesh, type CollisionMesh } from './collisionMesh';
+import { setPointCloudColorMode } from './pointCloudMaterial';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
@@ -166,7 +167,7 @@ export async function loadTourScene(
       camComp.projection = settings.projection === 'orthographic' ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
       for (const material of lasMaterials) {
         material.setParameter('uPointSize', settings.pointSizePx);
-        material.update();
+        setPointCloudColorMode(material, settings.colorMode);
       }
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === 'orbit') orbit.update();
