@@ -151,6 +151,13 @@ export async function loadCopcPointCloud(
   const loaded = new Map<string, LoadedNode>();
   const pendingKeys = new Set<string>();
   let hasColorDecided: boolean | null = null;
+  // Гистерезис против мерцания (узлы на границе бюджета/фрустума то
+  // проходят отбор, то нет на соседних тиках) — выгружаем уже загруженный
+  // узел только после нескольких подряд "промахов", не сразу при первом
+  // выпадении из выборки. Обнаружено живым тестом: при бюджете, забитом
+  // до предела, часть узлов мерцала каждые ~300-600мс.
+  const missCounts = new Map<string, number>();
+  const MISS_THRESHOLD = 4;
 
   const workers: Worker[] = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
@@ -228,7 +235,13 @@ export async function loadCopcPointCloud(
     const screenHeight = app.graphicsDevice.height || 1;
     const fovRad = (camComp.fov * Math.PI) / 180;
 
-    const selected = new Set<string>();
+    // Map, не Set — храним дистанцию до камеры, чтобы при нехватке бюджета
+    // приоритет всегда получали БЛИЖНИЕ узлы, стабильно между тиками
+    // (раньше порядок диспетчеризации зависел от порядка обхода дерева,
+    // который мог чуть отличаться между соседними вызовами — отсюда и
+    // мерцание узлов на границе бюджета, видно на живом скриншоте
+    // пользователя: 4 042 349 точек при бюджете 4 000 000).
+    const selected = new Map<string, number>();
     let budgetUsed = 0;
     const stack: string[] = ['0-0-0-0'];
 
@@ -257,7 +270,7 @@ export async function loadCopcPointCloud(
       const screenSize = screenHeight > 0 ? angularSize / Math.tan(fovRad / 2) : 0;
 
       if (node) {
-        selected.add(keyStr);
+        selected.set(keyStr, distance);
         budgetUsed += node.pointCount;
       }
 
@@ -289,16 +302,45 @@ export async function loadCopcPointCloud(
     // подряд без реального лимита. Считаем отдельно, по факту реальной
     // отправки (уже загруженные узлы продолжают визуально жить, не считая
     // против бюджета новых запросов).
-    let dispatchBudget = Array.from(loaded.values()).reduce((sum, n) => sum + n.pointCount, 0);
-    for (const key of selected) {
+    //
+    // Уже загруженные узлы, ПОПАВШИЕ в выборку этого тика, идут первыми
+    // (сохраняем их вместо новых — иначе пограничный узел мог бы держаться
+    // загруженным, но терять место новым кандидатам и тут же выгружаться
+    // ниже). Среди ОСТАЛЬНЫХ кандидатов (новых) — сортировка по расстоянию,
+    // ближе — выше приоритет, стабильно между тиками.
+    const candidates = Array.from(selected.entries()).sort((a, b) => {
+      const aLoaded = loaded.has(a[0]) ? 0 : 1;
+      const bLoaded = loaded.has(b[0]) ? 0 : 1;
+      if (aLoaded !== bLoaded) return aLoaded - bLoaded;
+      return a[1] - b[1];
+    });
+    let dispatchBudget = 0;
+    for (const [key] of candidates) {
       const node = nodes[key];
-      if (!node || loaded.has(key)) continue;
+      if (!node) continue;
+      if (loaded.has(key)) {
+        dispatchBudget += node.pointCount;
+        continue;
+      }
       if (dispatchBudget + node.pointCount > POINT_BUDGET) continue;
       dispatchBudget += node.pointCount;
       requestNode(key, node);
     }
+
+    // Гистерезис (см. missCounts выше) — узел выгружается только после
+    // нескольких подряд тиков без попадания в выборку, не сразу.
+    for (const key of selected.keys()) {
+      missCounts.delete(key);
+    }
     for (const key of Array.from(loaded.keys())) {
-      if (!selected.has(key)) disposeNode(key);
+      if (selected.has(key)) continue;
+      const misses = (missCounts.get(key) ?? 0) + 1;
+      if (misses >= MISS_THRESHOLD) {
+        missCounts.delete(key);
+        disposeNode(key);
+      } else {
+        missCounts.set(key, misses);
+      }
     }
   }
 

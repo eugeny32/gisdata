@@ -4771,6 +4771,8 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const loaded = /* @__PURE__ */ new Map();
   const pendingKeys = /* @__PURE__ */ new Set();
   let hasColorDecided = null;
+  const missCounts = /* @__PURE__ */ new Map();
+  const MISS_THRESHOLD = 4;
   const workers = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
     const worker = new Worker(new URL(
@@ -4838,7 +4840,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     const camPos = camera.getPosition();
     const screenHeight = app.graphicsDevice.height || 1;
     const fovRad = camComp.fov * Math.PI / 180;
-    const selected = /* @__PURE__ */ new Set();
+    const selected = /* @__PURE__ */ new Map();
     let budgetUsed = 0;
     const stack = ["0-0-0-0"];
     while (stack.length) {
@@ -4857,7 +4859,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
       const angularSize = distance > 1e-6 ? sphere.radius / distance : Infinity;
       const screenSize = screenHeight > 0 ? angularSize / Math.tan(fovRad / 2) : 0;
       if (node) {
-        selected.add(keyStr);
+        selected.set(keyStr, distance);
         budgetUsed += node.pointCount;
       }
       const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < POINT_BUDGET;
@@ -4875,16 +4877,36 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         if (nodes[childKey] || pages[childKey]) stack.push(childKey);
       }
     }
-    let dispatchBudget = Array.from(loaded.values()).reduce((sum, n) => sum + n.pointCount, 0);
-    for (const key2 of selected) {
+    const candidates = Array.from(selected.entries()).sort((a, b) => {
+      const aLoaded = loaded.has(a[0]) ? 0 : 1;
+      const bLoaded = loaded.has(b[0]) ? 0 : 1;
+      if (aLoaded !== bLoaded) return aLoaded - bLoaded;
+      return a[1] - b[1];
+    });
+    let dispatchBudget = 0;
+    for (const [key2] of candidates) {
       const node = nodes[key2];
-      if (!node || loaded.has(key2)) continue;
+      if (!node) continue;
+      if (loaded.has(key2)) {
+        dispatchBudget += node.pointCount;
+        continue;
+      }
       if (dispatchBudget + node.pointCount > POINT_BUDGET) continue;
       dispatchBudget += node.pointCount;
       requestNode(key2, node);
     }
+    for (const key2 of selected.keys()) {
+      missCounts.delete(key2);
+    }
     for (const key2 of Array.from(loaded.keys())) {
-      if (!selected.has(key2)) disposeNode(key2);
+      if (selected.has(key2)) continue;
+      const misses = (missCounts.get(key2) ?? 0) + 1;
+      if (misses >= MISS_THRESHOLD) {
+        missCounts.delete(key2);
+        disposeNode(key2);
+      } else {
+        missCounts.set(key2, misses);
+      }
     }
   }
   function refresh(camera) {
