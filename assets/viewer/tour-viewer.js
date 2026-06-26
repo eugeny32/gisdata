@@ -357,32 +357,44 @@ class OrbitController {
     this.yaw = 45;
     this.pitch = -20;
     this.canvas = null;
-    this.dragging = false;
+    this.dragButton = null;
     this.lastX = 0;
     this.lastY = 0;
     this.onPointerDown = (e) => {
       if (!this.canvas) return;
-      const hit = this.gizmo.handlePointerDown(e, this.canvas);
-      if (hit) {
-        this.yaw = hit.yaw;
-        this.pitch = hit.pitch;
-        this.update();
-        return;
+      if (e.button === 0) {
+        const hit = this.gizmo.handlePointerDown(e, this.canvas);
+        if (hit) {
+          this.yaw = hit.yaw;
+          this.pitch = hit.pitch;
+          this.update();
+          return;
+        }
       }
-      this.dragging = true;
+      if (e.button !== 0 && e.button !== 2) return;
+      this.dragButton = e.button;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
     };
     this.onPointerUp = () => {
-      this.dragging = false;
+      this.dragButton = null;
+    };
+    this.onContextMenu = (e) => {
+      e.preventDefault();
     };
     this.onPointerMove = (e) => {
-      if (!this.dragging) return;
-      const k = 0.3 * cameraSettings.orbitSensitivity;
-      this.yaw -= (e.clientX - this.lastX) * k;
-      this.pitch = Math.max(-89, Math.min(89, this.pitch - (e.clientY - this.lastY) * k));
+      if (this.dragButton === null) return;
+      const dx = e.clientX - this.lastX;
+      const dy = e.clientY - this.lastY;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
+      if (this.dragButton === 2) {
+        this.pan(dx, dy);
+      } else {
+        const k = 0.3 * cameraSettings.orbitSensitivity;
+        this.yaw -= dx * k;
+        this.pitch = Math.max(-89, Math.min(89, this.pitch - dy * k));
+      }
       this.update();
     };
     this.onWheel = (e) => {
@@ -395,19 +407,32 @@ class OrbitController {
     this.gizmo = gizmo;
     this.target = new pc.Vec3(0, 0, 0);
   }
+  /** Панорамирование правой кнопкой — двигает target (а с ним и всю
+   * орбиту) в плоскости экрана камеры. Масштаб смещения привязан к
+   * distance — иначе на сильном зуме панорамирование было бы либо
+   * незаметным, либо слишком резким относительно видимого размера модели. */
+  pan(dxPx, dyPx) {
+    const k = this.distance / 500 * cameraSettings.orbitSensitivity;
+    const right = this.camera.right.clone().mulScalar(-dxPx * k);
+    const up = this.camera.up.clone().mulScalar(dyPx * k);
+    this.target.add(right).add(up);
+  }
   attach(canvas) {
     this.canvas = canvas;
     canvas.addEventListener("pointerdown", this.onPointerDown);
     window.addEventListener("pointerup", this.onPointerUp);
     window.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    canvas.addEventListener("contextmenu", this.onContextMenu);
   }
   detach() {
+    this.dragButton = null;
     if (!this.canvas) return;
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointerup", this.onPointerUp);
     window.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.canvas = null;
   }
   setDistance(d) {
@@ -437,33 +462,49 @@ class FlyController {
     this.yaw = 0;
     this.pitch = 0;
     this.canvas = null;
-    this.dragging = false;
+    this.dragButton = null;
     this.lastX = 0;
     this.lastY = 0;
     this.pressedKeys = /* @__PURE__ */ new Set();
     this.onPointerDown = (e) => {
       if (!this.canvas) return;
-      const hit = this.gizmo.handlePointerDown(e, this.canvas);
-      if (hit) {
-        this.yaw = hit.yaw;
-        this.pitch = hit.pitch;
-        this.applyRotation();
-        return;
+      if (e.button === 0) {
+        const hit = this.gizmo.handlePointerDown(e, this.canvas);
+        if (hit) {
+          this.yaw = hit.yaw;
+          this.pitch = hit.pitch;
+          this.applyRotation();
+          return;
+        }
       }
-      this.dragging = true;
+      if (e.button !== 0 && e.button !== 2) return;
+      this.dragButton = e.button;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
     };
     this.onPointerUp = () => {
-      this.dragging = false;
+      this.dragButton = null;
+    };
+    this.onContextMenu = (e) => {
+      e.preventDefault();
     };
     this.onPointerMove = (e) => {
-      if (!this.dragging) return;
-      const k = 0.3 * cameraSettings.orbitSensitivity;
-      this.yaw -= (e.clientX - this.lastX) * k;
-      this.pitch = Math.max(-89, Math.min(89, this.pitch - (e.clientY - this.lastY) * k));
+      if (this.dragButton === null) return;
+      const dx = e.clientX - this.lastX;
+      const dy = e.clientY - this.lastY;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
+      if (this.dragButton === 2) {
+        const k2 = 0.01 * cameraSettings.orbitSensitivity;
+        const pos = this.camera.getPosition().clone();
+        pos.add(this.camera.right.clone().mulScalar(-dx * k2));
+        pos.add(this.camera.up.clone().mulScalar(dy * k2));
+        this.camera.setPosition(pos);
+        return;
+      }
+      const k = 0.3 * cameraSettings.orbitSensitivity;
+      this.yaw -= dx * k;
+      this.pitch = Math.max(-89, Math.min(89, this.pitch - dy * k));
       this.applyRotation();
     };
     this.onKeyDown = (e) => {
@@ -482,15 +523,18 @@ class FlyController {
     window.addEventListener("pointermove", this.onPointerMove);
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
   }
   detach() {
     this.pressedKeys.clear();
+    this.dragButton = null;
     if (!this.canvas) return;
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointerup", this.onPointerUp);
     window.removeEventListener("pointermove", this.onPointerMove);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.canvas = null;
   }
   /** Перенять текущее положение/ориентацию (например, от OrbitController

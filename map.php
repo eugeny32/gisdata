@@ -184,7 +184,7 @@ require __DIR__ . '/app/views/_head.php';
                 <option value="orbit">Орбита (вокруг модели)</option>
                 <option value="fly">Полёт (свободная камера, WASD)</option>
               </select>
-              <div class="small text-secondary">Полёт: левая кнопка — поворот, WASD — движение, Space/Shift — вверх/вниз.</div>
+              <div class="small text-secondary">Полёт: левая кнопка — поворот, правая кнопка — сдвиг в стороны (как мышью, так и WASD), Space/Shift — вверх/вниз.</div>
             </div>
             <div class="mb-2">
               <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
@@ -782,6 +782,10 @@ document.getElementById('tourSettingProjection').addEventListener('change', (e) 
 });
 document.getElementById('tourSettingNavMode').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ navigationMode: e.target.value });
+  // Иначе фокус остаётся на <select>, и нажатия W/A/S/D в режиме полёта
+  // воспринимаются браузером как переход по опциям списка (стандартное
+  // поведение <select> для буквенных клавиш), а не как движение камеры.
+  e.target.blur();
 });
 document.getElementById('tourSettingMoveSpeed').addEventListener('input', (e) => {
   document.getElementById('tourSettingMoveSpeedValue').textContent = e.target.value;

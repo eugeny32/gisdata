@@ -19,35 +19,52 @@ export class OrbitController {
   private camera: InstanceType<PcModule['Entity']>;
   private gizmo: NavCubeGizmo;
   private canvas: HTMLCanvasElement | null = null;
-  private dragging = false;
+  /** null — нет активного драга; иначе кнопка, с которой он начался (0 —
+   * левая → вращение, 2 — правая → панорамирование). */
+  private dragButton: number | null = null;
   private lastX = 0;
   private lastY = 0;
 
   private onPointerDown = (e: PointerEvent) => {
     if (!this.canvas) return;
-    const hit = this.gizmo.handlePointerDown(e, this.canvas);
-    if (hit) {
-      this.yaw = hit.yaw;
-      this.pitch = hit.pitch;
-      this.update();
-      return;
+    if (e.button === 0) {
+      const hit = this.gizmo.handlePointerDown(e, this.canvas);
+      if (hit) {
+        this.yaw = hit.yaw;
+        this.pitch = hit.pitch;
+        this.update();
+        return;
+      }
     }
-    this.dragging = true;
+    if (e.button !== 0 && e.button !== 2) return;
+    this.dragButton = e.button;
     this.lastX = e.clientX;
     this.lastY = e.clientY;
   };
 
   private onPointerUp = () => {
-    this.dragging = false;
+    this.dragButton = null;
+  };
+
+  private onContextMenu = (e: MouseEvent) => {
+    // Без этого после правого drag всплывало контекстное меню браузера —
+    // прерывало панорамирование на каждое отпускание кнопки.
+    e.preventDefault();
   };
 
   private onPointerMove = (e: PointerEvent) => {
-    if (!this.dragging) return;
-    const k = 0.3 * cameraSettings.orbitSensitivity;
-    this.yaw -= (e.clientX - this.lastX) * k;
-    this.pitch = Math.max(-89, Math.min(89, this.pitch - (e.clientY - this.lastY) * k));
+    if (this.dragButton === null) return;
+    const dx = e.clientX - this.lastX;
+    const dy = e.clientY - this.lastY;
     this.lastX = e.clientX;
     this.lastY = e.clientY;
+    if (this.dragButton === 2) {
+      this.pan(dx, dy);
+    } else {
+      const k = 0.3 * cameraSettings.orbitSensitivity;
+      this.yaw -= dx * k;
+      this.pitch = Math.max(-89, Math.min(89, this.pitch - dy * k));
+    }
     this.update();
   };
 
@@ -56,6 +73,17 @@ export class OrbitController {
     this.distance = Math.max(0.05, this.distance * (1 + e.deltaY * 0.001 * cameraSettings.zoomSpeed));
     this.update();
   };
+
+  /** Панорамирование правой кнопкой — двигает target (а с ним и всю
+   * орбиту) в плоскости экрана камеры. Масштаб смещения привязан к
+   * distance — иначе на сильном зуме панорамирование было бы либо
+   * незаметным, либо слишком резким относительно видимого размера модели. */
+  private pan(dxPx: number, dyPx: number): void {
+    const k = (this.distance / 500) * cameraSettings.orbitSensitivity;
+    const right = this.camera.right.clone().mulScalar(-dxPx * k);
+    const up = this.camera.up.clone().mulScalar(dyPx * k);
+    this.target.add(right).add(up);
+  }
 
   constructor(pc: PcModule, camera: InstanceType<PcModule['Entity']>, gizmo: NavCubeGizmo) {
     this.pc = pc;
@@ -70,14 +98,17 @@ export class OrbitController {
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    canvas.addEventListener('contextmenu', this.onContextMenu);
   }
 
   detach(): void {
+    this.dragButton = null;
     if (!this.canvas) return;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointermove', this.onPointerMove);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     this.canvas = null;
   }
 

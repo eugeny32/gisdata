@@ -17,36 +17,55 @@ export class FlyController {
   private camera: InstanceType<PcModule['Entity']>;
   private gizmo: NavCubeGizmo;
   private canvas: HTMLCanvasElement | null = null;
-  private dragging = false;
+  /** null — нет активного драга; иначе кнопка (0 — левая → поворот взгляда,
+   * 2 — правая → панорамирование/страйф мышью, в дополнение к WASD). */
+  private dragButton: number | null = null;
   private lastX = 0;
   private lastY = 0;
   private pressedKeys = new Set<string>();
 
   private onPointerDown = (e: PointerEvent) => {
     if (!this.canvas) return;
-    const hit = this.gizmo.handlePointerDown(e, this.canvas);
-    if (hit) {
-      this.yaw = hit.yaw;
-      this.pitch = hit.pitch;
-      this.applyRotation();
-      return;
+    if (e.button === 0) {
+      const hit = this.gizmo.handlePointerDown(e, this.canvas);
+      if (hit) {
+        this.yaw = hit.yaw;
+        this.pitch = hit.pitch;
+        this.applyRotation();
+        return;
+      }
     }
-    this.dragging = true;
+    if (e.button !== 0 && e.button !== 2) return;
+    this.dragButton = e.button;
     this.lastX = e.clientX;
     this.lastY = e.clientY;
   };
 
   private onPointerUp = () => {
-    this.dragging = false;
+    this.dragButton = null;
+  };
+
+  private onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
   };
 
   private onPointerMove = (e: PointerEvent) => {
-    if (!this.dragging) return;
-    const k = 0.3 * cameraSettings.orbitSensitivity;
-    this.yaw -= (e.clientX - this.lastX) * k;
-    this.pitch = Math.max(-89, Math.min(89, this.pitch - (e.clientY - this.lastY) * k));
+    if (this.dragButton === null) return;
+    const dx = e.clientX - this.lastX;
+    const dy = e.clientY - this.lastY;
     this.lastX = e.clientX;
     this.lastY = e.clientY;
+    if (this.dragButton === 2) {
+      const k = 0.01 * cameraSettings.orbitSensitivity;
+      const pos = this.camera.getPosition().clone();
+      pos.add(this.camera.right.clone().mulScalar(-dx * k));
+      pos.add(this.camera.up.clone().mulScalar(dy * k));
+      this.camera.setPosition(pos);
+      return;
+    }
+    const k = 0.3 * cameraSettings.orbitSensitivity;
+    this.yaw -= dx * k;
+    this.pitch = Math.max(-89, Math.min(89, this.pitch - dy * k));
     this.applyRotation();
   };
 
@@ -73,16 +92,19 @@ export class FlyController {
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    canvas.addEventListener('contextmenu', this.onContextMenu);
   }
 
   detach(): void {
     this.pressedKeys.clear();
+    this.dragButton = null;
     if (!this.canvas) return;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     this.canvas = null;
   }
 
