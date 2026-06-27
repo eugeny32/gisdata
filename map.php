@@ -245,6 +245,11 @@ require __DIR__ . '/app/views/_head.php';
                       </select>
                       <div class="small text-secondary">Переключается без перезагрузки файла. Для 3DGS-сплатов не действует.</div>
                     </div>
+                    <div class="mb-2">
+                      <label class="form-label small mb-0">Бюджет точек (как в Potree): <span id="tourSettingPointBudgetValue"></span></label>
+                      <input type="range" class="form-range" id="tourSettingPointBudget" min="1000000" max="20000000" step="500000">
+                      <div class="small text-secondary">Сколько точек COPC держать в сцене одновременно. Больше — подробнее картинка, выше нагрузка на GPU/память.</div>
+                    </div>
                     <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
                     <div class="form-check form-switch mb-1">
                       <input class="form-check-input" type="checkbox" id="tourSettingClipEnabled">
@@ -863,6 +868,8 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingPointSize').value = s.pointSizePx;
   document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
   document.getElementById('tourSettingColorMode').value = s.colorMode;
+  document.getElementById('tourSettingPointBudget').value = s.pointBudget;
+  document.getElementById('tourSettingPointBudgetValue').textContent = (s.pointBudget / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн';
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
   document.getElementById('tourSettingShowStats').checked = s.showStats;
   document.getElementById('tourSettingClipEnabled').checked = s.clipEnabled;
@@ -919,6 +926,11 @@ document.getElementById('tourSettingPointSize').addEventListener('input', (e) =>
 });
 document.getElementById('tourSettingColorMode').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ colorMode: e.target.value });
+});
+document.getElementById('tourSettingPointBudget').addEventListener('input', (e) => {
+  const v = Number(e.target.value);
+  document.getElementById('tourSettingPointBudgetValue').textContent = (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн';
+  window.TourViewer.setSettings({ pointBudget: v });
 });
 document.getElementById('tourSettingEdl').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ edlEnabled: e.target.checked });

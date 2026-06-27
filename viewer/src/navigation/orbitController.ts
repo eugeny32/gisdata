@@ -26,6 +26,22 @@ export class OrbitController {
   private homeYaw = 45;
   private homePitch = -20;
 
+  // Плавная анимация перехода (клик по штурвалу, кнопка "Центрировать") —
+  // плавное начало/продолжение/торможение через кубическое ease-in-out, а
+  // не мгновенный прыжок камеры (по запросу пользователя, "как в Potree").
+  private anim: {
+    fromYaw: number;
+    fromPitch: number;
+    fromDistance: number;
+    fromTarget: InstanceType<PcModule['Vec3']>;
+    toYaw: number;
+    toPitch: number;
+    toDistance: number;
+    toTarget: InstanceType<PcModule['Vec3']>;
+    elapsed: number;
+    duration: number;
+  } | null = null;
+
   private pc: PcModule;
   private camera: InstanceType<PcModule['Entity']>;
   private gizmo: NavCubeGizmo;
@@ -56,9 +72,7 @@ export class OrbitController {
     if (e.button === 0) {
       const hit = this.gizmo.handlePointerDown(e, this.canvas);
       if (hit) {
-        this.yaw = hit.yaw;
-        this.pitch = hit.pitch;
-        this.update();
+        this.animateTo(hit.yaw, hit.pitch, this.distance, this.target, 0.6);
         return;
       }
     }
@@ -184,14 +198,60 @@ export class OrbitController {
   }
 
   /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
-   * ТЕКУЩЕЕ состояние, а сначала восстанавливает target/distance/yaw/pitch
-   * из снимка captureHome(), и только потом пересчитывает камеру. */
+   * ТЕКУЩЕЕ состояние, а плавно анимирует переход к снимку captureHome(). */
   resetToHome(): void {
-    this.target.copy(this.homeTarget);
-    this.distance = this.homeDistance;
-    this.yaw = this.homeYaw;
-    this.pitch = this.homePitch;
+    this.animateTo(this.homeYaw, this.homePitch, this.homeDistance, this.homeTarget, 0.7);
+  }
+
+  /** Запускает плавный переход к новому yaw/pitch/distance/target —
+   * see this.anim/tick(). Текущее значение становится точкой отправления,
+   * повторный вызов во время уже идущей анимации просто переопределяет
+   * цель (не складывает анимации друг на друга). */
+  animateTo(
+    toYaw: number,
+    toPitch: number,
+    toDistance: number,
+    toTarget: InstanceType<PcModule['Vec3']>,
+    durationSec: number
+  ): void {
+    // Кратчайший путь по yaw (не через 350°, если можно через -10°) —
+    // считаем разницу здесь, а не в tick(), чтобы fromYaw оставался
+    // "развёрнутым" (может быть не в диапазоне [-180,180]), tick() просто
+    // линейно идёт от fromYaw к fromYaw+delta.
+    let deltaYaw = toYaw - this.yaw;
+    deltaYaw = ((deltaYaw + 180) % 360 + 360) % 360 - 180;
+    this.anim = {
+      fromYaw: this.yaw,
+      fromPitch: this.pitch,
+      fromDistance: this.distance,
+      fromTarget: this.target.clone(),
+      toYaw: this.yaw + deltaYaw,
+      toPitch,
+      toDistance,
+      toTarget: toTarget.clone(),
+      elapsed: 0,
+      duration: Math.max(durationSec, 1e-3),
+    };
+  }
+
+  /** Зовётся каждый кадр из tourViewer.ts, пока активен орбитальный режим —
+   * без активной анимации (this.anim === null) это no-op. dt — секунды
+   * (как у app.on('update', dt), см. FlyController.update). */
+  tick(dt: number): void {
+    if (!this.anim) return;
+    const a = this.anim;
+    a.elapsed += dt;
+    const t = Math.min(1, a.elapsed / a.duration);
+    // Кубическое ease-in-out — плавный старт, плавное продолжение, плавное
+    // торможение (по запросу пользователя, "как в Potree"), а не линейная
+    // интерполяция (которая ощущается как резкий старт/стоп).
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    this.yaw = a.fromYaw + (a.toYaw - a.fromYaw) * eased;
+    this.pitch = a.fromPitch + (a.toPitch - a.fromPitch) * eased;
+    this.distance = a.fromDistance + (a.toDistance - a.fromDistance) * eased;
+    this.target.lerp(a.fromTarget, a.toTarget, eased);
     this.update();
+    if (t >= 1) this.anim = null;
   }
 
   /** Пересчитывает позицию камеры из target/distance/yaw/pitch и двигает

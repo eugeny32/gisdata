@@ -4,6 +4,7 @@ import { AXIS_FIX_ROTATION } from './constants';
 import { createPointCloudMaterial } from './pointCloudMaterial';
 import type { CopcWorkerRequest, CopcWorkerResponse } from './copcWorker';
 import { getCachedNode, putCachedNode, type CachedNodeData } from './copcCache';
+import { cameraSettings } from './cameraSettings';
 
 /**
  * Потоковая загрузка LAS, заранее сконвертированного в COPC (PR3/PR4) —
@@ -19,20 +20,24 @@ import { getCachedNode, putCachedNode, type CachedNodeData } from './copcCache';
  * на 2^d частей по каждой оси от copc.info.cube.
  */
 
-// Поднято с 4М по итогам живого теста (пользователь сообщил о мерцании на
-// большом файле, оборудование держало 19-107 FPS даже на ~4М точках — есть
-// запас). Часть "не выгружать вообще" решается кэшем (см. dataCache/
-// copcCache.ts ниже) — бюджет всё равно нужен, иначе сцена росла бы
-// неограниченно при облёте всего облака.
-const POINT_BUDGET = 8_000_000;
+// Бюджет точек теперь живая настройка (cameraSettings.pointBudget,
+// регулировка в духе Potree "Point Budget" — см. map.php), а не константа.
+// По умолчанию 10М (см. DEFAULT_CAMERA_SETTINGS) — поднято с 4М по итогам
+// живого теста (оборудование держало 19-107 FPS даже на ~4М точках).
 const WORKER_POOL_SIZE = 3;
 const REFRESH_INTERVAL_MS = 300;
 // Доля высоты экрана, ниже которой узел считается "достаточно мелким" и
 // дальше не разбивается на детей — чем больше, тем грубее (меньше точек,
-// быстрее), чем меньше — тем подробнее (больше точек, медленнее). Понижено
-// с 0.2 по запросу пользователя — мельче узлы (= мельче "квадраты"),
-// равномернее распределённые по кадру, не несколько огромных кусков.
-const SCREEN_SIZE_THRESHOLD = 0.08;
+// быстрее), чем меньше — тем подробнее (больше точек, медленнее). Было
+// понижено до 0.08 для мельче нарезки — это вызвало РЕГРЕССИЮ (точки
+// появлялись на мгновение и пропадали при малейшем панорамировании):
+// при такой мелкой нарезке количество узлов-кандидатов резко возрастает,
+// и пул из WORKER_POOL_SIZE воркеров не успевает их декодировать быстрее,
+// чем старые (уже не нужные) узлы проходят гистерезис на выгрузку — кадры
+// "проседают" между выгрузкой старого и подгрузкой нового. Возвращено
+// обратно на 0.2 — "мельче квадраты" теперь даёт регулируемый pointBudget
+// (10М вместо прежних 4М), а не более агрессивный обход дерева.
+const SCREEN_SIZE_THRESHOLD = 0.2;
 
 type Cube = [number, number, number, number, number, number];
 
@@ -281,6 +286,10 @@ export async function loadCopcPointCloud(
     const camPos = camera.getPosition();
     const screenHeight = app.graphicsDevice.height || 1;
     const fovRad = (camComp.fov * Math.PI) / 180;
+    // Снимок один раз на тик — пользователь может двигать слайдер бюджета
+    // (см. map.php) пока этот тик ещё считается, не хотим половинчатой
+    // картины из старого и нового значения в одном проходе.
+    const pointBudget = cameraSettings.pointBudget;
 
     // Map, не Set — храним дистанцию до камеры, чтобы при нехватке бюджета
     // приоритет всегда получали БЛИЖНИЕ узлы, стабильно между тиками
@@ -321,7 +330,7 @@ export async function loadCopcPointCloud(
         budgetUsed += node.pointCount;
       }
 
-      const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < POINT_BUDGET;
+      const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < pointBudget;
       if (!wantsDescend) continue;
 
       if (page && !node) {
@@ -343,8 +352,8 @@ export async function loadCopcPointCloud(
 
     // budgetUsed выше — это СУММА по всем найденным во время обхода узлам,
     // не штука для решения "грузить ли вот этот конкретный узел": при
-    // богатой сцене общая сумма почти всегда больше POINT_BUDGET, и старая
-    // проверка budgetUsed<=POINT_BUDGET на каждой итерации диспетчеризации
+    // богатой сцене общая сумма почти всегда больше pointBudget, и старая
+    // проверка budgetUsed<=pointBudget на каждой итерации диспетчеризации
     // была одним и тем же числом — либо пропускала ВСЕ узлы, либо все
     // подряд без реального лимита. Считаем отдельно, по факту реальной
     // отправки (уже загруженные узлы продолжают визуально жить, не считая
@@ -369,7 +378,7 @@ export async function loadCopcPointCloud(
         dispatchBudget += node.pointCount;
         continue;
       }
-      if (dispatchBudget + node.pointCount > POINT_BUDGET) continue;
+      if (dispatchBudget + node.pointCount > pointBudget) continue;
       dispatchBudget += node.pointCount;
       requestNode(key, node);
     }

@@ -4849,10 +4849,59 @@ async function pruneIfNeeded(db) {
   } catch {
   }
 }
-const POINT_BUDGET = 8e6;
+const DEFAULT_CAMERA_SETTINGS = {
+  fov: 45,
+  nearClip: 0.05,
+  farClip: 5e3,
+  projection: "perspective",
+  orbitSensitivity: 1,
+  zoomSpeed: 1,
+  moveSpeed: 5,
+  pointSizePx: 2,
+  edlEnabled: false,
+  navigationMode: "orbit",
+  colorMode: "rgb",
+  clipEnabled: false,
+  clipMin: [0, 0, 0],
+  clipMax: [1, 1, 1],
+  showStats: false,
+  pointBudget: 1e7
+};
+const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_CAMERA_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_CAMERA_SETTINGS, ...parsed };
+  } catch (e) {
+    return { ...DEFAULT_CAMERA_SETTINGS };
+  }
+}
+const cameraSettings = loadFromStorage();
+const listeners = [];
+function onCameraSettingsChange(listener) {
+  listeners.push(listener);
+  return () => {
+    const i = listeners.indexOf(listener);
+    if (i !== -1) listeners.splice(i, 1);
+  };
+}
+function setCameraSettings(partial) {
+  Object.assign(cameraSettings, partial);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cameraSettings));
+  } catch (e) {
+  }
+  for (const listener of listeners) listener(cameraSettings);
+  return cameraSettings;
+}
+function getCameraSettings() {
+  return cameraSettings;
+}
 const WORKER_POOL_SIZE = 3;
 const REFRESH_INTERVAL_MS = 300;
-const SCREEN_SIZE_THRESHOLD = 0.08;
+const SCREEN_SIZE_THRESHOLD = 0.2;
 function nodeBounds(key2, cube2) {
   const [d, x, y, z] = key2;
   const cells = 2 ** d;
@@ -5021,6 +5070,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     const camPos = camera.getPosition();
     const screenHeight = app.graphicsDevice.height || 1;
     const fovRad = camComp.fov * Math.PI / 180;
+    const pointBudget = cameraSettings.pointBudget;
     const selected = /* @__PURE__ */ new Map();
     let budgetUsed = 0;
     const stack = ["0-0-0-0"];
@@ -5043,7 +5093,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         selected.set(keyStr, distance);
         budgetUsed += node.pointCount;
       }
-      const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < POINT_BUDGET;
+      const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < pointBudget;
       if (!wantsDescend) continue;
       if (page && !node) {
         const subtree = await lib.Copc.loadHierarchyPage(absoluteUrl, page);
@@ -5072,7 +5122,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         dispatchBudget += node.pointCount;
         continue;
       }
-      if (dispatchBudget + node.pointCount > POINT_BUDGET) continue;
+      if (dispatchBudget + node.pointCount > pointBudget) continue;
       dispatchBudget += node.pointCount;
       requestNode(key2, node);
     }
@@ -5186,55 +5236,6 @@ async function loadCollisionMesh(pc, app, url) {
     }
   };
 }
-const DEFAULT_CAMERA_SETTINGS = {
-  fov: 45,
-  nearClip: 0.05,
-  farClip: 5e3,
-  projection: "perspective",
-  orbitSensitivity: 1,
-  zoomSpeed: 1,
-  moveSpeed: 5,
-  pointSizePx: 2,
-  edlEnabled: false,
-  navigationMode: "orbit",
-  colorMode: "rgb",
-  clipEnabled: false,
-  clipMin: [0, 0, 0],
-  clipMax: [1, 1, 1],
-  showStats: false
-};
-const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
-function loadFromStorage() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_CAMERA_SETTINGS };
-    const parsed = JSON.parse(raw);
-    return { ...DEFAULT_CAMERA_SETTINGS, ...parsed };
-  } catch (e) {
-    return { ...DEFAULT_CAMERA_SETTINGS };
-  }
-}
-const cameraSettings = loadFromStorage();
-const listeners = [];
-function onCameraSettingsChange(listener) {
-  listeners.push(listener);
-  return () => {
-    const i = listeners.indexOf(listener);
-    if (i !== -1) listeners.splice(i, 1);
-  };
-}
-function setCameraSettings(partial) {
-  Object.assign(cameraSettings, partial);
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cameraSettings));
-  } catch (e) {
-  }
-  for (const listener of listeners) listener(cameraSettings);
-  return cameraSettings;
-}
-function getCameraSettings() {
-  return cameraSettings;
-}
 class OrbitController {
   constructor(pc, camera, gizmo) {
     this.distance = 5;
@@ -5243,6 +5244,7 @@ class OrbitController {
     this.homeDistance = 5;
     this.homeYaw = 45;
     this.homePitch = -20;
+    this.anim = null;
     this.canvas = null;
     this.dragButton = null;
     this.lastX = 0;
@@ -5264,9 +5266,7 @@ class OrbitController {
       if (e.button === 0) {
         const hit = this.gizmo.handlePointerDown(e, this.canvas);
         if (hit) {
-          this.yaw = hit.yaw;
-          this.pitch = hit.pitch;
-          this.update();
+          this.animateTo(hit.yaw, hit.pitch, this.distance, this.target, 0.6);
           return;
         }
       }
@@ -5376,14 +5376,45 @@ class OrbitController {
     return { center: this.homeTarget.clone(), radius: this.homeDistance };
   }
   /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
-   * ТЕКУЩЕЕ состояние, а сначала восстанавливает target/distance/yaw/pitch
-   * из снимка captureHome(), и только потом пересчитывает камеру. */
+   * ТЕКУЩЕЕ состояние, а плавно анимирует переход к снимку captureHome(). */
   resetToHome() {
-    this.target.copy(this.homeTarget);
-    this.distance = this.homeDistance;
-    this.yaw = this.homeYaw;
-    this.pitch = this.homePitch;
+    this.animateTo(this.homeYaw, this.homePitch, this.homeDistance, this.homeTarget, 0.7);
+  }
+  /** Запускает плавный переход к новому yaw/pitch/distance/target —
+   * see this.anim/tick(). Текущее значение становится точкой отправления,
+   * повторный вызов во время уже идущей анимации просто переопределяет
+   * цель (не складывает анимации друг на друга). */
+  animateTo(toYaw, toPitch, toDistance, toTarget, durationSec) {
+    let deltaYaw = toYaw - this.yaw;
+    deltaYaw = ((deltaYaw + 180) % 360 + 360) % 360 - 180;
+    this.anim = {
+      fromYaw: this.yaw,
+      fromPitch: this.pitch,
+      fromDistance: this.distance,
+      fromTarget: this.target.clone(),
+      toYaw: this.yaw + deltaYaw,
+      toPitch,
+      toDistance,
+      toTarget: toTarget.clone(),
+      elapsed: 0,
+      duration: Math.max(durationSec, 1e-3)
+    };
+  }
+  /** Зовётся каждый кадр из tourViewer.ts, пока активен орбитальный режим —
+   * без активной анимации (this.anim === null) это no-op. dt — секунды
+   * (как у app.on('update', dt), см. FlyController.update). */
+  tick(dt) {
+    if (!this.anim) return;
+    const a = this.anim;
+    a.elapsed += dt;
+    const t = Math.min(1, a.elapsed / a.duration);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    this.yaw = a.fromYaw + (a.toYaw - a.fromYaw) * eased;
+    this.pitch = a.fromPitch + (a.toPitch - a.fromPitch) * eased;
+    this.distance = a.fromDistance + (a.toDistance - a.fromDistance) * eased;
+    this.target.lerp(a.fromTarget, a.toTarget, eased);
     this.update();
+    if (t >= 1) this.anim = null;
   }
   /** Пересчитывает позицию камеры из target/distance/yaw/pitch и двигает
    * штурвал в ту же ориентацию — единая точка входа и для пользовательского
@@ -5835,6 +5866,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
     let lastStatsAt = 0;
     app.on("update", (dt) => {
       if (activeMode === "fly") fly.update(dt);
+      else orbit.tick(dt);
       for (const handle of copcHandles) handle.refresh(camera);
       const now = performance.now();
       if (statsOverlay.style.display !== "none" && now - lastStatsAt > 500) {

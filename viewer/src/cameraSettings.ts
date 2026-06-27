@@ -43,6 +43,11 @@ export interface CameraSettings {
   clipMax: [number, number, number];
   /** Индикатор FPS/VRAM/стриминга в углу канваса (PR8). */
   showStats: boolean;
+  /** Бюджет точек для COPC-стриминга (см. copcLoader.ts) — регулировка в
+   * духе Potree ("Point Budget"): чем выше, тем подробнее картинка и выше
+   * нагрузка на GPU/память. Живой параметр — copcLoader.ts читает его
+   * каждый тик обновления, перезагрузка тура не нужна. */
+  pointBudget: number;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -61,6 +66,7 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   clipMin: [0, 0, 0],
   clipMax: [1, 1, 1],
   showStats: false,
+  pointBudget: 10_000_000,
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

@@ -294,6 +294,7 @@ export async function loadTourScene(
     let lastStatsAt = 0;
     app.on('update', (dt: number) => {
       if (activeMode === 'fly') fly.update(dt);
+      else orbit.tick(dt);
       for (const handle of copcHandles) handle.refresh(camera);
 
       // Раз в полсекунды — обновление текста индикатора достаточно частое
