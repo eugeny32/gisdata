@@ -295,7 +295,8 @@ export async function loadTourScene(
     app.on('update', (dt: number) => {
       if (activeMode === 'fly') fly.update(dt);
       else orbit.tick(dt);
-      for (const handle of copcHandles) handle.refresh(camera);
+      const isMoving = activeMode === 'fly' ? fly.isInteracting() : orbit.isInteracting();
+      for (const handle of copcHandles) handle.refresh(camera, isMoving);
 
       // Раз в полсекунды — обновление текста индикатора достаточно частое
       // для "живого" ощущения, но не нагружает DOM каждый кадр.

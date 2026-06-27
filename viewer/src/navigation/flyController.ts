@@ -95,6 +95,13 @@ export class FlyController {
     this.gizmo = gizmo;
   }
 
+  /** Камера сейчас в движении (драг или зажата клавиша WASD/Space/Shift) —
+   * читается copcLoader.ts через tourViewer.ts (см. OrbitController.
+   * isInteracting() — тот же смысл, для режима полёта/прогулки). */
+  isInteracting(): boolean {
+    return this.dragButton !== null || this.pressedKeys.size > 0;
+  }
+
   attach(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
     canvas.addEventListener('pointerdown', this.onPointerDown);

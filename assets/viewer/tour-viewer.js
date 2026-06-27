@@ -4902,6 +4902,12 @@ function getCameraSettings() {
 const WORKER_POOL_SIZE = 3;
 const REFRESH_INTERVAL_MS = 300;
 const SCREEN_SIZE_THRESHOLD = 0.2;
+const COARSE_ALWAYS_DEPTH = 2;
+const MOVING_THRESHOLD_MULTIPLIER = 2.5;
+const MOVING_BUDGET_DIVISOR = 4;
+const MOVING_RESTORE_DELAY_MS = 400;
+const IDLE_PREFETCH_DELAY_MS = 600;
+const IDLE_PREFETCH_BATCH = 2;
 function nodeBounds(key2, cube2) {
   const [d, x, y, z] = key2;
   const cells = 2 ** d;
@@ -4976,6 +4982,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const missCounts = /* @__PURE__ */ new Map();
   const MISS_THRESHOLD = 4;
   const dataCache = /* @__PURE__ */ new Map();
+  const alwaysKeys = /* @__PURE__ */ new Set();
   const workers = [];
   for (let i = 0; i < WORKER_POOL_SIZE; i++) {
     const worker = new Worker(new URL(
@@ -5008,9 +5015,9 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     root.addChild(entity);
     loaded.set(key2, { entity, pointCount: node.pointCount });
   }
-  function dispatchToWorker(key2, node) {
+  function dispatchToWorker(key2, node, render) {
     const id = nextRequestId++;
-    pendingRequests.set(id, { key: key2, node });
+    pendingRequests.set(id, { key: key2, node, render });
     const request = { id, url: absoluteUrl, copc: copc2, node, hasColor: hasColorDecided, zRange: heightRange, centerOffset };
     workers[nextWorker].postMessage(request);
     nextWorker = (nextWorker + 1) % workers.length;
@@ -5037,7 +5044,23 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         buildEntity(key2, node, cached.positions, cached.colors, cached.intensityClass);
         return;
       }
-      dispatchToWorker(key2, node);
+      dispatchToWorker(key2, node, true);
+    });
+  }
+  function prefetchNode(key2, node) {
+    if (loaded.has(key2) || pendingKeys.has(key2) || dataCache.has(key2)) return;
+    pendingKeys.add(key2);
+    getCachedNode(absoluteUrl, key2).then((cached) => {
+      if (!isCurrent()) {
+        pendingKeys.delete(key2);
+        return;
+      }
+      if (cached) {
+        dataCache.set(key2, cached);
+        pendingKeys.delete(key2);
+        return;
+      }
+      dispatchToWorker(key2, node, false);
     });
   }
   for (const worker of workers) {
@@ -5056,12 +5079,43 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
       const cacheEntry = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };
       dataCache.set(pending.key, cacheEntry);
       void putCachedNode(absoluteUrl, pending.key, cacheEntry);
-      buildEntity(pending.key, pending.node, positions, colors, intensityClass);
+      if (pending.render) buildEntity(pending.key, pending.node, positions, colors, intensityClass);
     };
   }
+  async function loadAlwaysCoarseLayer() {
+    const stack = ["0-0-0-0"];
+    while (stack.length) {
+      if (!isCurrent()) return;
+      const keyStr = stack.pop();
+      const key2 = lib.Key.create(keyStr);
+      if (key2[0] > COARSE_ALWAYS_DEPTH) continue;
+      const node = nodes[keyStr];
+      const page = pages[keyStr];
+      if (!node && !page) continue;
+      if (node) {
+        alwaysKeys.add(keyStr);
+        requestNode(keyStr, node);
+      }
+      if (page && !node) {
+        const subtree = await lib.Copc.loadHierarchyPage(absoluteUrl, page);
+        if (!isCurrent()) return;
+        nodes = { ...nodes, ...subtree.nodes };
+        pages = { ...pages, ...subtree.pages };
+        stack.push(keyStr);
+        continue;
+      }
+      if (key2[0] === COARSE_ALWAYS_DEPTH) continue;
+      for (const step2 of lib.Step.list()) {
+        const childKey = lib.Key.toString(lib.Key.step(key2, step2));
+        if (nodes[childKey] || pages[childKey]) stack.push(childKey);
+      }
+    }
+  }
+  await loadAlwaysCoarseLayer();
   let lastRefreshAt = 0;
   let refreshInFlight = false;
-  async function doRefresh(camera) {
+  let lastMovingAt = 0;
+  async function doRefresh(camera, isMoving) {
     if (!isCurrent()) return;
     const camComp = camera.camera;
     const vp = new pc.Mat4().mul2(camComp.projectionMatrix, camComp.viewMatrix);
@@ -5071,8 +5125,15 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     const screenHeight = app.graphicsDevice.height || 1;
     const fovRad = camComp.fov * Math.PI / 180;
     const pointBudget = cameraSettings.pointBudget;
+    if (isMoving) lastMovingAt = performance.now();
+    const effectivelyMoving = performance.now() - lastMovingAt < MOVING_RESTORE_DELAY_MS;
+    const isIdle = !effectivelyMoving && performance.now() - lastMovingAt > IDLE_PREFETCH_DELAY_MS;
+    const effectiveThreshold = effectivelyMoving ? SCREEN_SIZE_THRESHOLD * MOVING_THRESHOLD_MULTIPLIER : SCREEN_SIZE_THRESHOLD;
+    const effectiveBudget = effectivelyMoving ? Math.max(pointBudget / MOVING_BUDGET_DIVISOR, 2e5) : pointBudget;
     const selected = /* @__PURE__ */ new Map();
     let budgetUsed = 0;
+    const prefetchCandidates = [];
+    const PREFETCH_SCAN_LIMIT = 200;
     const stack = ["0-0-0-0"];
     while (stack.length) {
       const keyStr = stack.pop();
@@ -5080,20 +5141,26 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
       const page = pages[keyStr];
       if (!node && !page) continue;
       const key2 = lib.Key.create(keyStr);
+      const isCoarseAlways = key2[0] <= COARSE_ALWAYS_DEPTH;
       const bounds22 = nodeBounds(key2, centeredCube);
       const sphere = boundsSphere(bounds22);
       const localCenter = new pc.Vec3(...sphere.center);
       const worldCenter = root.getWorldTransform().transformPoint(localCenter);
       const containment = frustum.containsSphere(new pc.BoundingSphere(worldCenter, sphere.radius));
-      if (containment === 0) continue;
+      if (containment === 0 && !isCoarseAlways) {
+        if (isIdle && node && !loaded.has(keyStr) && !dataCache.has(keyStr) && prefetchCandidates.length < PREFETCH_SCAN_LIMIT) {
+          prefetchCandidates.push(keyStr);
+        }
+        continue;
+      }
       const distance = worldCenter.distance(camPos);
       const angularSize = distance > 1e-6 ? sphere.radius / distance : Infinity;
       const screenSize = screenHeight > 0 ? angularSize / Math.tan(fovRad / 2) : 0;
-      if (node) {
+      if (node && !isCoarseAlways) {
         selected.set(keyStr, distance);
         budgetUsed += node.pointCount;
       }
-      const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < pointBudget;
+      const wantsDescend = isCoarseAlways || screenSize > effectiveThreshold && budgetUsed < effectiveBudget;
       if (!wantsDescend) continue;
       if (page && !node) {
         const subtree = await lib.Copc.loadHierarchyPage(absoluteUrl, page);
@@ -5122,15 +5189,21 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         dispatchBudget += node.pointCount;
         continue;
       }
-      if (dispatchBudget + node.pointCount > pointBudget) continue;
+      if (dispatchBudget + node.pointCount > effectiveBudget) continue;
       dispatchBudget += node.pointCount;
       requestNode(key2, node);
+    }
+    if (isIdle) {
+      for (const key2 of prefetchCandidates.slice(0, IDLE_PREFETCH_BATCH)) {
+        const node = nodes[key2];
+        if (node) prefetchNode(key2, node);
+      }
     }
     for (const key2 of selected.keys()) {
       missCounts.delete(key2);
     }
     for (const key2 of Array.from(loaded.keys())) {
-      if (selected.has(key2)) continue;
+      if (selected.has(key2) || alwaysKeys.has(key2)) continue;
       const misses = (missCounts.get(key2) ?? 0) + 1;
       if (misses >= MISS_THRESHOLD) {
         missCounts.delete(key2);
@@ -5140,12 +5213,12 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
       }
     }
   }
-  function refresh(camera) {
+  function refresh(camera, isMoving) {
     const now = performance.now();
     if (refreshInFlight || now - lastRefreshAt < REFRESH_INTERVAL_MS) return;
     lastRefreshAt = now;
     refreshInFlight = true;
-    doRefresh(camera).finally(() => {
+    doRefresh(camera, isMoving).finally(() => {
       refreshInFlight = false;
     });
   }
@@ -5308,9 +5381,11 @@ class OrbitController {
       }
       this.update();
     };
+    this.lastWheelAt = 0;
     this.onWheel = (e) => {
       e.preventDefault();
       this.distance = Math.max(0.05, this.distance * (1 + e.deltaY * 1e-3 * cameraSettings.zoomSpeed));
+      this.lastWheelAt = performance.now();
       this.update();
     };
     this.pc = pc;
@@ -5323,6 +5398,16 @@ class OrbitController {
     const points = Array.from(this.touchPoints.values());
     if (points.length < 2) return 0;
     return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  }
+  /** Камера сейчас в движении (драг/пинч/недавнее колесо/анимация
+   * перехода) — читается copcLoader.ts через tourViewer.ts, чтобы на время
+   * движения снижать требуемую детализацию COPC-стриминга (см.
+   * MOVING_THRESHOLD_MULTIPLIER там). Колесо мыши — мгновенное событие, не
+   * "удержание", поэтому считаем "в движении" ещё немного ПОСЛЕ него
+   * (иначе одиночный скролл не успел бы попасть в окно сниженной
+   * детализации, в которой и есть весь смысл). */
+  isInteracting() {
+    return this.dragButton !== null || this.touchPoints.size > 0 || this.anim !== null || performance.now() - this.lastWheelAt < 250;
   }
   /** Панорамирование правой кнопкой — двигает target (а с ним и всю
    * орбиту) в плоскости экрана камеры. Масштаб смещения привязан к
@@ -5495,6 +5580,12 @@ class FlyController {
     };
     this.camera = camera;
     this.gizmo = gizmo;
+  }
+  /** Камера сейчас в движении (драг или зажата клавиша WASD/Space/Shift) —
+   * читается copcLoader.ts через tourViewer.ts (см. OrbitController.
+   * isInteracting() — тот же смысл, для режима полёта/прогулки). */
+  isInteracting() {
+    return this.dragButton !== null || this.pressedKeys.size > 0;
   }
   attach(canvas) {
     this.canvas = canvas;
@@ -5867,7 +5958,8 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
     app.on("update", (dt) => {
       if (activeMode === "fly") fly.update(dt);
       else orbit.tick(dt);
-      for (const handle of copcHandles) handle.refresh(camera);
+      const isMoving = activeMode === "fly" ? fly.isInteracting() : orbit.isInteracting();
+      for (const handle of copcHandles) handle.refresh(camera, isMoving);
       const now = performance.now();
       if (statsOverlay.style.display !== "none" && now - lastStatsAt > 500) {
         lastStatsAt = now;

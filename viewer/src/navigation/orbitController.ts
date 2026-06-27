@@ -126,11 +126,25 @@ export class OrbitController {
     this.update();
   };
 
+  private lastWheelAt = 0;
+
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     this.distance = Math.max(0.05, this.distance * (1 + e.deltaY * 0.001 * cameraSettings.zoomSpeed));
+    this.lastWheelAt = performance.now();
     this.update();
   };
+
+  /** Камера сейчас в движении (драг/пинч/недавнее колесо/анимация
+   * перехода) — читается copcLoader.ts через tourViewer.ts, чтобы на время
+   * движения снижать требуемую детализацию COPC-стриминга (см.
+   * MOVING_THRESHOLD_MULTIPLIER там). Колесо мыши — мгновенное событие, не
+   * "удержание", поэтому считаем "в движении" ещё немного ПОСЛЕ него
+   * (иначе одиночный скролл не успел бы попасть в окно сниженной
+   * детализации, в которой и есть весь смысл). */
+  isInteracting(): boolean {
+    return this.dragButton !== null || this.touchPoints.size > 0 || this.anim !== null || performance.now() - this.lastWheelAt < 250;
+  }
 
   /** Панорамирование правой кнопкой — двигает target (а с ним и всю
    * орбиту) в плоскости экрана камеры. Масштаб смещения привязан к
