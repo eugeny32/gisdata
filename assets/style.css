@@ -216,10 +216,16 @@ body {
   border: 1px solid rgba(255, 255, 255, .06);
 }
 @media (max-width: 576px) {
+  /* Bootstrap у .modal-dialog по умолчанию даёт margin: .5rem (8px) с
+     каждой стороны ДО применения нашей ширины — 96vw этот зазор не
+     учитывал, отсюда заметная несимметричная "недотяжка" до правого края
+     на скриншоте пользователя. margin: 0 здесь убирает именно это, а не
+     центрирование (центрирование — класс modal-dialog-centered, flex). */
   .tour-viewer-dialog {
-    width: 96vw;
-    max-width: 96vw;
-    height: 90vh;
+    width: 99vw;
+    max-width: 99vw;
+    height: 96vh;
+    margin: 0 auto;
   }
 }
 
