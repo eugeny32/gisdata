@@ -109,6 +109,75 @@ function denoise_splat_ply_if_possible(string $absolutePath): void
     }
 }
 
+/**
+ * Движок PlayCanvas (его встроенный PlyParser, см.
+ * viewer/node_modules/playcanvas/.../parsers/ply.js, parseHeader()) умеет
+ * заголовок PLY ТОЛЬКО из строк ply/format/comment/element/property/
+ * end_header — на любой другой токен первым словом строки бросает
+ * "Unrecognized header value 'X' in ply header" и тур вообще не
+ * открывается. Часть экспортёров (замечено на одном из туров пользователя)
+ * пишут необязательную (по спецификации Stanford PLY) строку "obj_info
+ * ..." — валидный PLY, но непонятный конкретно этому парсеру. Чиним один
+ * раз при загрузке файла на сервер, а не на каждый показ — переписываем
+ * только текстовый заголовок (до "end_header\n"), бинарный/текстовый
+ * хвост с данными копируется потоково, без чтения файла целиком в память
+ * (модели — от десятков МБ до единиц ГБ).
+ */
+function strip_unsupported_ply_header_lines(string $absolutePath): void
+{
+    if (!is_file($absolutePath)) {
+        return;
+    }
+    $src = fopen($absolutePath, 'rb');
+    if (!$src) {
+        return;
+    }
+    $headBuf = fread($src, 65536);
+    if (substr($headBuf, 0, 3) !== 'ply') {
+        fclose($src);
+        return;
+    }
+    $terminator = "end_header\n";
+    $endPos = strpos($headBuf, $terminator);
+    if ($endPos === false) {
+        fclose($src); // заголовок длиннее 64КБ — нетипично, безопаснее не трогать файл
+        return;
+    }
+    $headerLen = $endPos + strlen($terminator);
+    $header = substr($headBuf, 0, $headerLen);
+    $allowed = ['ply', 'format', 'comment', 'element', 'property', 'end_header'];
+    $kept = [];
+    $changed = false;
+    foreach (explode("\n", rtrim($header, "\n")) as $line) {
+        $firstWord = strtok($line, ' ');
+        if (in_array($firstWord, $allowed, true)) {
+            $kept[] = $line;
+        } else {
+            $changed = true; // строка типа "obj_info ..." — выкидываем
+        }
+    }
+    if (!$changed) {
+        fclose($src); // обычный путь для всех "нормальных" файлов — заголовок уже чист
+        return;
+    }
+
+    $tmpPath = $absolutePath . '.headerfix.tmp';
+    $dst = fopen($tmpPath, 'wb');
+    if (!$dst) {
+        fclose($src);
+        return;
+    }
+    fwrite($dst, implode("\n", $kept) . "\n");
+    fwrite($dst, substr($headBuf, $headerLen)); // хвост уже прочитанного 64КБ-буфера
+    while (!feof($src)) {
+        fwrite($dst, fread($src, 4 * 1024 * 1024));
+    }
+    fclose($src);
+    fclose($dst);
+    unlink($absolutePath);
+    rename($tmpPath, $absolutePath);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Если размер запроса превышает post_max_size, PHP молча обнуляет $_POST
     // и $_FILES ещё до старта скрипта (Content-Length при этом известен) —
@@ -235,6 +304,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($newFiles as $f) {
                     if ($f['file_format'] === 'ply') {
                         denoise_splat_ply_if_possible($uploadDir . $f['file_path']);
+                        // После денойза (best-effort, может быть пропущен/не
+                        // удался) — гарантированно чистим заголовок, иначе
+                        // PlayCanvas откажется парсить файл целиком.
+                        strip_unsupported_ply_header_lines($uploadDir . $f['file_path']);
                     }
                 }
 
