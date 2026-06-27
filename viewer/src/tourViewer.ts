@@ -4,7 +4,7 @@ import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
 import { loadCopcPointCloud, type CopcStreamHandle } from './copcLoader';
 import { loadCollisionMesh, type CollisionMesh } from './collisionMesh';
-import { setPointCloudColorMode, setPointCloudClip } from './pointCloudMaterial';
+import { setPointCloudColorMode, setPointCloudClip, setPointCloudSection } from './pointCloudMaterial';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
@@ -86,6 +86,13 @@ export function recenterTourCamera(): void {
 export function pickTourPoint(clientX: number, clientY: number): [number, number, number] | null {
   if (!currentApp) return null;
   return currentApp.annotations.pickPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+
+/** Точная горизонтальная проекция клика (для сечения по линии, см.
+ * annotations.ts/pickGroundPoint) — не зависит от приближения по сфере. */
+export function pickTourGroundPoint(clientX: number, clientY: number): [number, number, number] | null {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickGroundPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
 }
 
 /** Существующая вершина аннотации под курсором (для редактирования) —
@@ -224,6 +231,7 @@ export async function loadTourScene(
         material.setParameter('uPointSize', settings.pointSizePx);
         setPointCloudColorMode(material, settings.colorMode);
         setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
+        setPointCloudSection(material, settings.sectionEnabled, settings.sectionNormal, settings.sectionD);
       }
       statsOverlay.style.display = settings.showStats ? 'block' : 'none';
       setNavigationModeInternal(settings.navigationMode);

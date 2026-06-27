@@ -616,7 +616,7 @@ require __DIR__ . '/app/views/_head.php';
   <div class="card surface-card mb-3">
     <div class="card-body">
       <h3 class="h6 mb-3"><i class="bi bi-folder2"></i> <?= htmlspecialchars($group['name'], ENT_QUOTES, 'UTF-8') ?> <span class="text-secondary small">(<?= count($group['tours']) ?>)</span></h3>
-      <div class="table-responsive">
+      <div class="table-responsive overflow-y-visible">
         <table class="table table-clean align-middle">
           <thead>
             <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>PostGIS</th><th></th></tr>
@@ -670,7 +670,7 @@ require __DIR__ . '/app/views/_head.php';
                      (нужен выбор подключения рядом), у остальных действий
                      такой зависимости нет. -->
                 <div class="dropdown">
-                  <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" aria-expanded="false" title="Действия"><i class="bi bi-three-dots-vertical"></i></button>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false" title="Действия"><i class="bi bi-three-dots-vertical"></i></button>
                   <ul class="dropdown-menu dropdown-menu-end">
                     <?php if ($pgConnections && $t['file_path']): ?>
                     <li><button type="submit" form="syncPgForm<?= (int)$t['id'] ?>" class="dropdown-item"><i class="bi bi-cloud-upload me-2"></i>Выгрузить в PostGIS</button></li>
@@ -778,16 +778,69 @@ require __DIR__ . '/app/views/_head.php';
     </div>
   </div>
 <?php
-$extraScripts = '<script>const tourFormShouldOpen = ' . ($edit ? 'true' : 'false') . ';</script>' . <<<'HTML'
+$extraScripts = '<script>window.tourFormShouldOpen = ' . ($edit ? 'true' : 'false') . ';</script>' . <<<'HTML'
 <script>
+// window.tourFormShouldOpen (не const/let!) — ниже форма перерисовывает
+// саму себя через document.write(xhr.responseText) при сабмите (см.
+// дальше), то есть этот инлайн-скрипт выполняется повторно НА ТОЙ ЖЕ
+// странице без настоящей навигации; let/const тут падали с "Identifier
+// has already been declared", поскольку document.write не создаёт новый
+// JS-контекст — старые лексические объявления остаются. Свойство
+// window можно переприсваивать сколько угодно раз без этой проблемы.
+//
 // Если открыли страницу по ссылке "Изменить" (?edit=ID) — модалка с формой
 // должна сама открыться, а не остаться скрытой за обычной кнопкой
 // "Добавить тур" (раньше форма была всегда видна сверху страницы).
-if (tourFormShouldOpen) {
+if (window.tourFormShouldOpen) {
   document.addEventListener('DOMContentLoaded', () => {
     new bootstrap.Modal(document.getElementById('tourFormModal')).show();
   });
 }
+
+// Контекстное меню действий тура визуально пряталось за карточкой
+// СЛЕДУЮЩЕЙ группы: у каждого блока группы свой backdrop-filter (см.
+// .card в style.css) — а backdrop-filter/filter/transform создают новый
+// containing block для position:absolute/fixed потомков (см. спецификацию
+// CSS Filter Effects), то есть меню, даже с z-index:1000 от Bootstrap,
+// может выигрывать z-index-битву только ВНУТРИ своей карточки — следующая
+// карточка просто рисуется поверх неё как отдельный stacking context,
+// независимо от z-index внутри первой. position:fixed тут не спасает —
+// та же причина (backdrop-filter ловит fixed-потомков точно так же, как
+// и absolute). Рабочее решение — "портал": на время показа переносить сам
+// элемент меню в конец <body>, где он гарантированно красится последним
+// (после всех карточек), и возвращать на место при скрытии.
+(function () {
+  document.querySelectorAll('.dropdown-menu').forEach((menu) => {
+    const toggle = menu.previousElementSibling;
+    if (!toggle || !toggle.matches('[data-bs-toggle="dropdown"]')) return;
+    let placeholder = null;
+    // 'shown.bs.dropdown' (ПОСЛЕ показа), не 'show.bs.dropdown' (до) — на
+    // момент show у меню ещё нет класса .show, значит display:none и
+    // offsetWidth=0; расчёт left по нулевой ширине прижимал бы меню
+    // тонкой полоской к правому краю кнопки (без видимого текста пунктов
+    // — именно это и наблюдалось на первом проходе фикса).
+    toggle.parentElement.addEventListener('shown.bs.dropdown', () => {
+      placeholder = document.createComment('dropdown-portal-placeholder');
+      menu.parentNode.insertBefore(placeholder, menu);
+      document.body.appendChild(menu);
+      const rect = toggle.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.top = rect.bottom + 'px';
+      menu.style.left = (rect.right - menu.offsetWidth) + 'px';
+      menu.style.margin = '0';
+    });
+    toggle.parentElement.addEventListener('hidden.bs.dropdown', () => {
+      if (placeholder && placeholder.parentNode) {
+        placeholder.parentNode.insertBefore(menu, placeholder);
+        placeholder.remove();
+      }
+      menu.style.position = '';
+      menu.style.top = '';
+      menu.style.left = '';
+      menu.style.margin = '';
+    });
+  });
+})();
 
 // Обычная HTML-форма не показывает прогресс загрузки файла вообще — браузер
 // просто "висит" до конца запроса. Перехватываем submit и шлём через XHR,
@@ -833,9 +886,30 @@ if (tourFormShouldOpen) {
       }
     };
     xhr.onload = function () {
-      document.open();
-      document.write(xhr.responseText);
-      document.close();
+      // Ошибка валидации — сервер НЕ делает редирект, просто заново
+      // рендерит ту же страницу с alert-danger внутри; в этом случае
+      // document.write нужен, чтобы показать сообщение без двойной формы.
+      // При УСПЕХЕ сервер отдаёт `Location: /tours.php`, XHR прозрачно
+      // идёт по редиректу — но document.write поверх уже загруженной
+      // страницы НЕ настоящая навигация: старые let/const-объявления из
+      // <script> остаются в JS-контексте (см. window.tourFormShouldOpen
+      // выше) и состояние Bootstrap-модалки (backdrop, класс modal-open)
+      // не сбрасывается корректно — после такого "сохранения" модалка
+      // редактирования открывалась заново пустой. Настоящая навигация
+      // (location.href) полностью пересоздаёт документ и эту проблему не
+      // имеет вообще.
+      // Маркер собран из 2 кусков НЕ случайно: если написать его целиком
+      // одной строкой, эта самая строка кода (она же часть HTML-ответа
+      // любой загрузки этой страницы, включая успешную) сама содержала бы
+      // искомую подстроку — проверка всегда совпадала бы сама с собой.
+      var errorMarker = 'class="alert ' + 'alert-danger"';
+      if (xhr.responseText.indexOf(errorMarker) !== -1) {
+        document.open();
+        document.write(xhr.responseText);
+        document.close();
+      } else {
+        window.location.href = '/tours.php';
+      }
     };
     xhr.onerror = function () {
       submitBtn.disabled = false;

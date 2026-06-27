@@ -80,6 +80,9 @@ export function createPointCloudMaterial(
       uniform float uClipActive;
       uniform vec3 uClipMin;
       uniform vec3 uClipMax;
+      uniform float uSectionActive;
+      uniform vec3 uSectionNormal;
+      uniform float uSectionD;
 
       vec3 hslToRgb(float h, float s, float l) {
         float k0 = mod(0.0 + h * 12.0, 12.0);
@@ -114,6 +117,13 @@ export function createPointCloudMaterial(
             discard;
           }
         }
+        // Сечение по линии (2 клика на модели, см. annotations.ts/map.php)
+        // — вертикальная плоскость через эти 2 точки, а не оси X/Y/Z как у
+        // uClipMin/Max выше: режет под любым углом, как линия разреза в
+        // BIM/CAD, а не только параллельно сторонам bounding box.
+        if (uSectionActive > 0.5 && dot(vLocalPos, uSectionNormal) > uSectionD) {
+          discard;
+        }
         vec3 color;
         if (uColorMode < 0.5) {
           color = vColor.rgb;
@@ -136,6 +146,9 @@ export function createPointCloudMaterial(
   material.setParameter('uClipActive', 0);
   material.setParameter('uClipMin', new Float32Array(bounds.min));
   material.setParameter('uClipMax', new Float32Array(bounds.max));
+  material.setParameter('uSectionActive', 0);
+  material.setParameter('uSectionNormal', new Float32Array([1, 0, 0]));
+  material.setParameter('uSectionD', 0);
   material.update();
   (material as any).gisdataBounds = bounds;
   return material;
@@ -172,5 +185,24 @@ export function setPointCloudClip(
   material.setParameter('uClipActive', active ? 1 : 0);
   material.setParameter('uClipMin', new Float32Array(clipMin));
   material.setParameter('uClipMax', new Float32Array(clipMax));
+  material.update();
+}
+
+/**
+ * Сечение по линии — normal/d уже в ЛОКАЛЬНОМ пространстве модели (том же,
+ * что отдаёт window.TourViewer.pickPoint, см. annotations.ts), общем для
+ * ВСЕХ материалов тура (в отличие от setPointCloudClip выше, тут не нужна
+ * привязка к bounds конкретного материала — все loader'ы кладут точки в
+ * одну и ту же систему координат до AXIS_FIX_ROTATION).
+ */
+export function setPointCloudSection(
+  material: InstanceType<PcModule['ShaderMaterial']>,
+  active: boolean,
+  normal: [number, number, number],
+  d: number
+): void {
+  material.setParameter('uSectionActive', active ? 1 : 0);
+  material.setParameter('uSectionNormal', new Float32Array(normal));
+  material.setParameter('uSectionD', d);
   material.update();
 }

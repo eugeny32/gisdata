@@ -244,6 +244,9 @@ function createPointCloudMaterial(pc, pointSizePx, bounds2 = { min: [0, 0, 0], m
       uniform float uClipActive;
       uniform vec3 uClipMin;
       uniform vec3 uClipMax;
+      uniform float uSectionActive;
+      uniform vec3 uSectionNormal;
+      uniform float uSectionD;
 
       vec3 hslToRgb(float h, float s, float l) {
         float k0 = mod(0.0 + h * 12.0, 12.0);
@@ -278,6 +281,13 @@ function createPointCloudMaterial(pc, pointSizePx, bounds2 = { min: [0, 0, 0], m
             discard;
           }
         }
+        // Сечение по линии (2 клика на модели, см. annotations.ts/map.php)
+        // — вертикальная плоскость через эти 2 точки, а не оси X/Y/Z как у
+        // uClipMin/Max выше: режет под любым углом, как линия разреза в
+        // BIM/CAD, а не только параллельно сторонам bounding box.
+        if (uSectionActive > 0.5 && dot(vLocalPos, uSectionNormal) > uSectionD) {
+          discard;
+        }
         vec3 color;
         if (uColorMode < 0.5) {
           color = vColor.rgb;
@@ -300,6 +310,9 @@ function createPointCloudMaterial(pc, pointSizePx, bounds2 = { min: [0, 0, 0], m
   material.setParameter("uClipActive", 0);
   material.setParameter("uClipMin", new Float32Array(bounds2.min));
   material.setParameter("uClipMax", new Float32Array(bounds2.max));
+  material.setParameter("uSectionActive", 0);
+  material.setParameter("uSectionNormal", new Float32Array([1, 0, 0]));
+  material.setParameter("uSectionD", 0);
   material.update();
   material.gisdataBounds = bounds2;
   return material;
@@ -325,6 +338,12 @@ function setPointCloudClip(material, active, box) {
   material.setParameter("uClipActive", active ? 1 : 0);
   material.setParameter("uClipMin", new Float32Array(clipMin));
   material.setParameter("uClipMax", new Float32Array(clipMax));
+  material.update();
+}
+function setPointCloudSection(material, active, normal, d) {
+  material.setParameter("uSectionActive", active ? 1 : 0);
+  material.setParameter("uSectionNormal", new Float32Array(normal));
+  material.setParameter("uSectionD", d);
   material.update();
 }
 function hslToRgb(h, s, l) {
@@ -4865,7 +4884,10 @@ const DEFAULT_CAMERA_SETTINGS = {
   clipMin: [0, 0, 0],
   clipMax: [1, 1, 1],
   showStats: false,
-  pointBudget: 1e7
+  pointBudget: 1e7,
+  sectionEnabled: false,
+  sectionNormal: [1, 0, 0],
+  sectionD: 0
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -4899,9 +4921,9 @@ function setCameraSettings(partial) {
 function getCameraSettings() {
   return cameraSettings;
 }
-const WORKER_POOL_SIZE = 3;
+const WORKER_POOL_SIZE = 6;
 const REFRESH_INTERVAL_MS = 300;
-const SCREEN_SIZE_THRESHOLD = 0.2;
+const SCREEN_SIZE_THRESHOLD = 0.12;
 const COARSE_ALWAYS_DEPTH = 2;
 const MOVING_THRESHOLD_MULTIPLIER = 2.5;
 const MOVING_BUDGET_DIVISOR = 4;
@@ -5179,12 +5201,15 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         if (nodes[childKey] || pages[childKey]) stack.push(childKey);
       }
     }
-    const candidates = Array.from(selected.entries()).sort((a, b) => {
-      const aLoaded = loaded.has(a[0]) ? 0 : 1;
-      const bLoaded = loaded.has(b[0]) ? 0 : 1;
-      if (aLoaded !== bLoaded) return aLoaded - bLoaded;
-      return a[1] - b[1];
-    });
+    const notLoadedKeys = Array.from(selected.keys()).filter((k) => !loaded.has(k));
+    for (let i = notLoadedKeys.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [notLoadedKeys[i], notLoadedKeys[j]] = [notLoadedKeys[j], notLoadedKeys[i]];
+    }
+    const candidates = [
+      ...Array.from(selected.entries()).filter(([k]) => loaded.has(k)),
+      ...notLoadedKeys.map((k) => [k, selected.get(k)])
+    ];
     let dispatchBudget = 0;
     for (const [key2] of candidates) {
       const node = nodes[key2];
@@ -5744,6 +5769,21 @@ function createAnnotationManager(pc, app) {
     const hit = near.clone().add(dir.clone().mulScalar(t));
     return worldToLocal(hit);
   }
+  function pickGroundPoint(camera, canvas, clientX, clientY) {
+    if (!pickSphere) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
+    const py = (clientY - rect.top) / rect.height * canvas.clientHeight;
+    const camComp = camera.camera;
+    const near = camComp.screenToWorld(px, py, camComp.nearClip);
+    const far = camComp.screenToWorld(px, py, camComp.farClip);
+    const dir = far.clone().sub(near);
+    if (Math.abs(dir.y) < 1e-6) return null;
+    const t = (pickSphere.center.y - near.y) / dir.y;
+    if (t < 0) return null;
+    const hit = near.clone().add(dir.mulScalar(t));
+    return worldToLocal(hit);
+  }
   function pickVertex(camera, canvas, clientX, clientY, thresholdPx = 14) {
     const rect = canvas.getBoundingClientRect();
     const px = clientX - rect.left;
@@ -5773,7 +5813,7 @@ function createAnnotationManager(pc, app) {
   function dispose() {
     app.off("update", renderFrame);
   }
-  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickVertex, dispose };
+  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
 }
 function escapeHtml(s) {
   const div = document.createElement("div");
@@ -5822,6 +5862,10 @@ function recenterTourCamera() {
 function pickTourPoint(clientX, clientY) {
   if (!currentApp) return null;
   return currentApp.annotations.pickPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+function pickTourGroundPoint(clientX, clientY) {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickGroundPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
 }
 function pickTourAnnotationVertex(clientX, clientY) {
   if (!currentApp) return null;
@@ -5892,6 +5936,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
         material.setParameter("uPointSize", settings.pointSizePx);
         setPointCloudColorMode(material, settings.colorMode);
         setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
+        setPointCloudSection(material, settings.sectionEnabled, settings.sectionNormal, settings.sectionD);
       }
       statsOverlay.style.display = settings.showStats ? "block" : "none";
       setNavigationModeInternal(settings.navigationMode);
@@ -6088,6 +6133,7 @@ const api = {
   getSettings: getCameraSettings,
   setSettings: setCameraSettings,
   pickPoint: pickTourPoint,
+  pickGroundPoint: pickTourGroundPoint,
   pickAnnotationVertex: pickTourAnnotationVertex,
   setAnnotationLayers: setTourAnnotationLayers,
   setDrawingPreview: setTourDrawingPreview

@@ -244,5 +244,51 @@ body {
   border: 1px solid rgba(255, 255, 255, .06);
 }
 .surface-card { border: none; border-radius: 16px; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }
+/* .table-responsive ставит overflow-x:auto — по спецификации CSS это
+   неявно превращает И overflow-y в auto (если для оси, отличной от
+   overflow-x, явно не указано что-то своё), из-за чего контекстное меню
+   действий тура обрезалось по вертикали этим же контейнером, едва
+   показывая первый пункт. tours.php добавляет этот класс рядом —
+   принудительно держим overflow-y видимым, горизонтальный скролл (для
+   узких экранов) при этом не теряется. */
+.table-responsive.overflow-y-visible { overflow-y: visible; }
 .table-clean th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #6b7280; border-top: none; }
 .table-clean td { vertical-align: middle; }
+/* Строки таблицы — без СВОЕГО фона, чтобы сквозь них было видно тот же
+   "стеклянный" блюр карточки (.card выше), а не плоский цвет Bootstrap
+   (--bs-table-bg/--bs-table-striped-bg и т.п.) поверх него — иначе на
+   тёмной теме получается видимый шов между размытой карточкой и плоской
+   таблицей внутри неё. Селектор бьёт собственную специфичность Bootstrap
+   у ячеек (.table > :not(caption) > * > *), просто transparent не
+   перекрыл бы её. lass="table-hover" не используется (см. tours.php),
+   класс table-hover не используется (см. tours.php), поэтому подсветка
+   при наведении ниже — наша же лёгкая накладка, а не переопределение
+   чужой.
+*/
+.table-clean,
+.table-clean > :not(caption) > * > * {
+  background-color: transparent !important;
+}
+.table-clean > tbody > tr:hover > * {
+  background-color: rgba(255, 255, 255, .04) !important;
+}
+
+/* Поля форм — тот же принцип: полупрозрачный однородный фон вместо
+   сплошного Bootstrap-цвета, чтобы выглядеть частью той же "стеклянной"
+   карточки, а не отдельными непрозрачными блоками на ней. */
+.form-control,
+.form-select,
+textarea.form-control {
+  background-color: rgba(255, 255, 255, .05);
+  border-color: rgba(255, 255, 255, .12);
+  color: #e5e7eb;
+}
+.form-control:focus,
+.form-select:focus {
+  background-color: rgba(255, 255, 255, .08);
+  border-color: var(--brand);
+  color: #fff;
+  box-shadow: 0 0 0 .2rem rgba(47, 111, 237, .25);
+}
+.form-control::placeholder { color: rgba(229, 231, 235, .45); }
+.form-control:disabled, .form-select:disabled { background-color: rgba(255, 255, 255, .03); }

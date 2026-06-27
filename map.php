@@ -267,6 +267,16 @@ require __DIR__ . '/app/views/_head.php';
                       </div>
                     </div>
                     <?php endforeach; ?>
+                    <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
+                    <div class="form-check form-switch mb-1">
+                      <input class="form-check-input" type="checkbox" id="tourSettingSectionEnabled">
+                      <label class="form-check-label small" for="tourSettingSectionEnabled">Сечение по линии (2 клика на модели)</label>
+                    </div>
+                    <div class="small text-secondary mb-2">Режет под любым углом через 2 точки, в отличие от осевой обрезки выше.</div>
+                    <div class="d-flex gap-2">
+                      <button type="button" class="btn btn-sm btn-outline-light flex-grow-1" id="tourSectionPickBtn">Указать линию</button>
+                      <button type="button" class="btn btn-sm btn-outline-light" id="tourSectionFlipBtn" title="Сменить сторону"><i class="bi bi-arrow-left-right"></i></button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -804,7 +814,52 @@ async function onViewerVertexPointerUp() {
   });
 }
 
+// Сечение по линии — 2 клика на модели (см. tourSectionPickBtn ниже).
+// Доступно ЛЮБОМУ залогиненному пользователю (это инструмент просмотра,
+// не редактирования, в отличие от drawingTool/isAdminJs ниже).
+let sectionPickArmed = false;
+let sectionPickPoints = [];
+
+function applySectionFromPoints(a, b) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len = Math.hypot(dx, dy) || 1;
+  // Вертикальная плоскость через линию A-B — нормаль горизонтальна
+  // (Z=0, см. uSectionNormal в pointCloudMaterial.ts), перпендикулярна
+  // направлению линии.
+  const normal = [-dy / len, dx / len, 0];
+  const d = normal[0] * a[0] + normal[1] * a[1] + normal[2] * a[2];
+  window.TourViewer.setSettings({ sectionEnabled: true, sectionNormal: normal, sectionD: d });
+  document.getElementById('tourSettingSectionEnabled').checked = true;
+}
+
+document.getElementById('tourSectionPickBtn').addEventListener('click', (e) => {
+  sectionPickArmed = !sectionPickArmed;
+  sectionPickPoints = [];
+  e.target.textContent = sectionPickArmed ? 'Кликните 2 точки на модели…' : 'Указать линию';
+});
+
+document.getElementById('tourSectionFlipBtn').addEventListener('click', () => {
+  const s = window.TourViewer.getSettings();
+  window.TourViewer.setSettings({
+    sectionNormal: s.sectionNormal.map((v) => -v),
+    sectionD: -s.sectionD,
+  });
+});
+
 async function onViewerContainerClick(e) {
+  if (sectionPickArmed && window.TourViewer) {
+    const point = window.TourViewer.pickGroundPoint(e.clientX, e.clientY);
+    if (!point) return;
+    sectionPickPoints.push(point);
+    if (sectionPickPoints.length === 2) {
+      applySectionFromPoints(sectionPickPoints[0], sectionPickPoints[1]);
+      sectionPickArmed = false;
+      sectionPickPoints = [];
+      document.getElementById('tourSectionPickBtn').textContent = 'Указать линию';
+    }
+    return;
+  }
   if (!drawingTool || drawingTool === 'edit' || !isAdminJs || !window.TourViewer) return;
   const point = window.TourViewer.pickPoint(e.clientX, e.clientY);
   if (!point) return;
@@ -873,6 +928,7 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
   document.getElementById('tourSettingShowStats').checked = s.showStats;
   document.getElementById('tourSettingClipEnabled').checked = s.clipEnabled;
+  document.getElementById('tourSettingSectionEnabled').checked = s.sectionEnabled;
   const axisKeys = ['X', 'Y', 'Z'];
   for (let i = 0; i < 3; i++) {
     const a = axisKeys[i];
@@ -941,6 +997,9 @@ document.getElementById('tourSettingShowStats').addEventListener('change', (e) =
 
 document.getElementById('tourSettingClipEnabled').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ clipEnabled: e.target.checked });
+});
+document.getElementById('tourSettingSectionEnabled').addEventListener('change', (e) => {
+  window.TourViewer.setSettings({ sectionEnabled: e.target.checked });
 });
 ['X', 'Y', 'Z'].forEach((a, i) => {
   document.getElementById('tourSettingClip' + a + 'Min').addEventListener('input', (e) => {

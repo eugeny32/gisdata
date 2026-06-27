@@ -155,6 +155,16 @@ export function createAnnotationManager(pc: PcModule, app: InstanceType<PcModule
 
     // Стандартное пересечение луча со сферой (см. любой учебник по
     // компьютерной графике/raytracing) — берём БЛИЖНЮЮ положительную t.
+    // ПРИМЕЧАНИЕ: pickSphere.radius — это радиус КАДРИРОВАНИЯ камеры
+    // (halfExtent*1.8 у COPC, *1.3 у сплатов, см. getHomeSphere()) — С
+    // ЗАПАСОМ, чтобы камера могла орбитить без захода внутрь модели, так
+    // что попадание на саму сферу лежит ЗАМЕТНО дальше от реальной
+    // поверхности скана (живым тестом подтверждено: разные клики по
+    // видимо разным частям дома стабильно ложились на одну и ту же
+    // окружность радиуса ~160 = pickSphere.radius). Для грубых маркеров
+    // (точки/линии аннотаций) это приемлемо — там просили "сфера, и
+    // ладно" (см. memory/историю чата); для точной плоскости сечения
+    // нужна не эта функция, а pickGroundPoint ниже.
     const oc = near.clone().sub(pickSphere.center);
     const b = oc.dot(dir);
     const c = oc.dot(oc) - pickSphere.radius * pickSphere.radius;
@@ -165,6 +175,34 @@ export function createAnnotationManager(pc: PcModule, app: InstanceType<PcModule
     if (t < 0) t = -b + sqrtDisc;
     if (t < 0) return null;
     const hit = near.clone().add(dir.clone().mulScalar(t));
+    return worldToLocal(hit);
+  }
+
+  /** Точное (без угадывания радиуса) пересечение луча с ГОРИЗОНТАЛЬНОЙ
+   * плоскостью на высоте центра модели (мировой Y = pickSphere.center.y —
+   * AXIS_FIX_ROTATION переводит исходный LAS Z-up в мировой Y-up, см.
+   * constants.ts) — для сечения по линии достаточно знать ГОРИЗОНТАЛЬНОЕ
+   * положение клика, а не точную глубину поверхности под курсором, и эту
+   * плоскость, в отличие от pickSphere, не нужно подгонять эмпирическим
+   * коэффициентом — она математически точна для любой геометрии. */
+  function pickGroundPoint(
+    camera: InstanceType<PcModule['Entity']>,
+    canvas: HTMLCanvasElement,
+    clientX: number,
+    clientY: number
+  ): [number, number, number] | null {
+    if (!pickSphere) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = ((clientX - rect.left) / rect.width) * canvas.clientWidth;
+    const py = ((clientY - rect.top) / rect.height) * canvas.clientHeight;
+    const camComp: any = (camera as any).camera;
+    const near = camComp.screenToWorld(px, py, camComp.nearClip);
+    const far = camComp.screenToWorld(px, py, camComp.farClip);
+    const dir = far.clone().sub(near);
+    if (Math.abs(dir.y) < 1e-6) return null; // луч практически горизонтален — пересечения нет/неустойчиво
+    const t = (pickSphere.center.y - near.y) / dir.y;
+    if (t < 0) return null;
+    const hit = near.clone().add(dir.mulScalar(t));
     return worldToLocal(hit);
   }
 
@@ -203,7 +241,7 @@ export function createAnnotationManager(pc: PcModule, app: InstanceType<PcModule
     app.off('update', renderFrame);
   }
 
-  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickVertex, dispose };
+  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
 }
 
 export type AnnotationManager = ReturnType<typeof createAnnotationManager>;

@@ -48,6 +48,14 @@ export interface CameraSettings {
    * нагрузка на GPU/память. Живой параметр — copcLoader.ts читает его
    * каждый тик обновления, перезагрузка тура не нужна. */
   pointBudget: number;
+  /** Сечение по линии — задаётся 2 кликами по модели (см. map.php,
+   * window.TourViewer.pickPoint), а не слайдерами как clipMin/Max выше.
+   * normal/d — уравнение плоскости (dot(p, normal) <= d — видимая
+   * сторона) в локальном пространстве модели, общем для ВСЕХ материалов
+   * тура (см. setPointCloudSection). */
+  sectionEnabled: boolean;
+  sectionNormal: [number, number, number];
+  sectionD: number;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -67,6 +75,9 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   clipMax: [1, 1, 1],
   showStats: false,
   pointBudget: 10_000_000,
+  sectionEnabled: false,
+  sectionNormal: [1, 0, 0],
+  sectionD: 0,
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';
