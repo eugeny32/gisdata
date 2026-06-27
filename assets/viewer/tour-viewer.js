@@ -5147,6 +5147,10 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
       const localCenter = new pc.Vec3(...sphere.center);
       const worldCenter = root.getWorldTransform().transformPoint(localCenter);
       const containment = frustum.containsSphere(new pc.BoundingSphere(worldCenter, sphere.radius));
+      if (isCoarseAlways && node) {
+        const entry = loaded.get(keyStr);
+        if (entry) entry.entity.enabled = containment !== 0;
+      }
       if (containment === 0 && !isCoarseAlways) {
         if (isIdle && node && !loaded.has(keyStr) && !dataCache.has(keyStr) && prefetchCandidates.length < PREFETCH_SCAN_LIMIT) {
           prefetchCandidates.push(keyStr);
