@@ -247,7 +247,7 @@ require __DIR__ . '/app/views/_head.php';
                     </div>
                     <div class="mb-2">
                       <label class="form-label small mb-0">Бюджет точек (как в Potree): <span id="tourSettingPointBudgetValue"></span></label>
-                      <input type="range" class="form-range" id="tourSettingPointBudget" min="1000000" max="20000000" step="500000">
+                      <input type="range" class="form-range" id="tourSettingPointBudget" min="1000000" max="100000000" step="1000000">
                       <div class="small text-secondary">Сколько точек COPC держать в сцене одновременно. Больше — подробнее картинка, выше нагрузка на GPU/память.</div>
                     </div>
                     <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
