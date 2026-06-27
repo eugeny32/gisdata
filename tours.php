@@ -522,95 +522,34 @@ require __DIR__ . '/app/views/_head.php';
     <div class="alert alert-danger"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div class="card surface-card mb-4">
-    <div class="card-body">
-      <h2 class="h6 mb-3"><?= $edit ? 'Изменить тур' : 'Добавить тур' ?></h2>
-      <form method="post" action="/tours.php" enctype="multipart/form-data" class="row g-3" id="tourForm">
-        <input type="hidden" name="action" value="save">
-        <input type="hidden" name="id" value="<?= (int)($edit['id'] ?? 0) ?>">
-
-        <div class="col-md-6">
-          <label class="form-label small">Название*</label>
-          <input type="text" name="name" class="form-control" required value="<?= htmlspecialchars($edit['name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Описание</label>
-          <input type="text" name="description" class="form-control" value="<?= htmlspecialchars($edit['description'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small">Широта (lat)*</label>
-          <input type="text" name="lat" class="form-control" required value="<?= htmlspecialchars((string)($edit['lat'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small">Долгота (lon)*</label>
-          <input type="text" name="lon" class="form-control" required value="<?= htmlspecialchars((string)($edit['lon'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-3 form-check mt-4">
-          <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>>
-          <label class="form-check-label" for="isEnabled">Показывать на карте</label>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Группа</label>
-          <select name="group_id" id="tourGroupSelect" class="form-select">
-            <option value="">Без группы</option>
-            <?php foreach ($tourGroups as $g): ?>
-              <option value="<?= (int)$g['id'] ?>" <?= (int)($edit['group_id'] ?? 0) === (int)$g['id'] ? 'selected' : '' ?>><?= htmlspecialchars($g['name'], ENT_QUOTES, 'UTF-8') ?></option>
-            <?php endforeach; ?>
-            <option value="new">+ Новая группа...</option>
-          </select>
-          <div class="form-text">Файлы новых туров складываются в подпапку своей группы — упорядочивает хранилище по мере роста числа туров.</div>
-        </div>
-        <div class="col-md-6 d-none" id="tourNewGroupWrap">
-          <label class="form-label small">Название новой группы</label>
-          <input type="text" name="new_group_name" id="tourNewGroupName" class="form-control" placeholder="Например: Объекты ЕКБ 2026">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat — 3DGS, или .las — облако точек LiDAR)</label>
-          <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
-          <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — облако точек LiDAR, просмотр на карте работает (отдельный рендер, не через 3DGS).</div>
-          <?php if ($edit && $edit['file_path']): ?>
-            <div class="form-text">
-              Текущие файлы: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?><?= $editExtraCount ? ' + ещё ' . $editExtraCount : '' ?>.
-              Оставьте поле пустым, чтобы не менять.
-            </div>
-          <?php endif; ?>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Или файл(ы) уже на сервере (uploads/tours/...), если залиты по FTP — по одному имени на строку</label>
-          <textarea name="existing_file" class="form-control" rows="3" placeholder="model_part1.ply&#10;model_part2.ply"></textarea>
-        </div>
-
-        <div class="col-12 d-none" id="tourUploadProgressWrap">
-          <div class="progress" style="height: 22px">
-            <div class="progress-bar" id="tourUploadProgressBar" role="progressbar" style="width: 0%">0%</div>
-          </div>
-        </div>
-        <div class="col-12 d-flex gap-2">
-          <button type="submit" class="btn btn-primary" id="tourFormSubmit"><?= $edit ? 'Сохранить' : 'Добавить' ?></button>
-          <?php if ($edit): ?><a href="/tours.php" class="btn btn-outline-secondary">Отмена</a><?php endif; ?>
-        </div>
-      </form>
-    </div>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Туры (3DGS)</h2>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#tourFormModal" id="tourAddBtn"><i class="bi bi-plus-lg"></i> Добавить тур</button>
   </div>
 
-  <div class="card surface-card">
+  <?php
+    // Блоки по группам — отдельная карточка+таблица на каждую группу (а не
+    // одна большая таблица с разделительными строками, как было раньше),
+    // по запросу пользователя. Группировка с сервера уже отсортирована
+    // (group_name IS NULL в конец) — здесь только разбивка на блоки.
+    $toursByGroup = [];
+    foreach ($tours as $t) {
+        $key = $t['group_name'] ?? '__no_group__';
+        $toursByGroup[$key]['name'] = $t['group_name'] ?? 'Без группы';
+        $toursByGroup[$key]['tours'][] = $t;
+    }
+  ?>
+  <?php foreach ($toursByGroup as $group): ?>
+  <div class="card surface-card mb-3">
     <div class="card-body">
-      <h2 class="h6 mb-3">Список туров</h2>
+      <h3 class="h6 mb-3"><i class="bi bi-folder2"></i> <?= htmlspecialchars($group['name'], ENT_QUOTES, 'UTF-8') ?> <span class="text-secondary small">(<?= count($group['tours']) ?>)</span></h3>
       <div class="table-responsive">
         <table class="table table-clean align-middle">
           <thead>
             <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>PostGIS</th><th></th></tr>
           </thead>
           <tbody>
-          <?php $currentGroupName = false; // false, не null — отличаем "ещё не печатали" от "группа без имени" ?>
-          <?php foreach ($tours as $t): ?>
-            <?php if ($t['group_name'] !== $currentGroupName): $currentGroupName = $t['group_name']; ?>
-              <tr class="table-group-divider">
-                <td colspan="6" class="bg-body-tertiary fw-semibold small py-1">
-                  <i class="bi bi-folder2"></i> <?= htmlspecialchars($currentGroupName ?? 'Без группы', ENT_QUOTES, 'UTF-8') ?>
-                </td>
-              </tr>
-            <?php endif; ?>
+          <?php foreach ($group['tours'] as $t): ?>
             <tr>
               <td><?= htmlspecialchars($t['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($t['lat'] . ', ' . $t['lon'], ENT_QUOTES, 'UTF-8') ?></td>
@@ -636,10 +575,6 @@ require __DIR__ . '/app/views/_head.php';
                   <span class="badge text-bg-secondary">не выгружено</span>
                 <?php endif; ?>
                 <?php if ($pgConnections && $t['file_path']): ?>
-                <!-- Кнопка отправки формы вынесена в общую группу кнопок
-                     справа (атрибут form= — позволяет кнопке быть вне
-                     формы и всё равно её отправлять), здесь остаётся
-                     только выбор подключения + прогресс-бар выгрузки. -->
                 <form method="post" action="/tours.php" id="syncPgForm<?= (int)$t['id'] ?>" class="sync-pg-form d-flex gap-1 mt-1">
                   <input type="hidden" name="action" value="sync_pg">
                   <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
@@ -655,30 +590,132 @@ require __DIR__ . '/app/views/_head.php';
                 <?php endif; ?>
               </td>
               <td class="text-end">
-                <?php if ($pgConnections && $t['file_path']): ?>
-                  <button type="submit" form="syncPgForm<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-primary" title="Выгрузить в PostGIS"><i class="bi bi-cloud-upload"></i></button>
-                <?php endif; ?>
-                <a href="/tour_files.php?tour_id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-secondary" title="Доп. файлы (части модели)"><i class="bi bi-stack"></i></a>
-                <a href="/tours.php?edit=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
-                <form method="post" action="/tours.php" class="d-inline" onsubmit="return confirm('Удалить тур и файл модели?');">
-                  <input type="hidden" name="action" value="delete">
-                  <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
-                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
-                </form>
+                <!-- Все действия — в одно контекстное меню (значок + текст
+                     у каждого пункта) вместо ряда отдельных кнопок-иконок,
+                     по запросу пользователя. У "Выгрузить в PostGIS" нет
+                     отдельного пункта — она отправляет ту же форму выше
+                     (нужен выбор подключения рядом), у остальных действий
+                     такой зависимости нет. -->
+                <div class="dropdown">
+                  <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" aria-expanded="false" title="Действия"><i class="bi bi-three-dots-vertical"></i></button>
+                  <ul class="dropdown-menu dropdown-menu-end">
+                    <?php if ($pgConnections && $t['file_path']): ?>
+                    <li><button type="submit" form="syncPgForm<?= (int)$t['id'] ?>" class="dropdown-item"><i class="bi bi-cloud-upload me-2"></i>Выгрузить в PostGIS</button></li>
+                    <?php endif; ?>
+                    <li><a class="dropdown-item" href="/tour_files.php?tour_id=<?= (int)$t['id'] ?>"><i class="bi bi-stack me-2"></i>Доп. файлы (части модели)</a></li>
+                    <li><a class="dropdown-item" href="/tours.php?edit=<?= (int)$t['id'] ?>"><i class="bi bi-pencil me-2"></i>Изменить</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                      <form method="post" action="/tours.php" onsubmit="return confirm('Удалить тур и файл модели?');">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                        <button type="submit" class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Удалить</button>
+                      </form>
+                    </li>
+                  </ul>
+                </div>
               </td>
             </tr>
           <?php endforeach; ?>
-          <?php if (!$tours): ?>
-            <tr><td colspan="6" class="text-muted">Туров пока нет</td></tr>
-          <?php endif; ?>
           </tbody>
         </table>
       </div>
     </div>
   </div>
+  <?php endforeach; ?>
+  <?php if (!$tours): ?>
+    <div class="card surface-card"><div class="card-body text-muted">Туров пока нет</div></div>
+  <?php endif; ?>
+
+  <div class="modal fade" id="tourFormModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="tourFormModalTitle"><?= $edit ? 'Изменить тур' : 'Добавить тур' ?></h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form method="post" action="/tours.php" enctype="multipart/form-data" class="row g-3" id="tourForm">
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="id" value="<?= (int)($edit['id'] ?? 0) ?>">
+
+            <div class="col-md-6">
+              <label class="form-label small">Название*</label>
+              <input type="text" name="name" class="form-control" required value="<?= htmlspecialchars($edit['name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Описание</label>
+              <input type="text" name="description" class="form-control" value="<?= htmlspecialchars($edit['description'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Широта (lat)*</label>
+              <input type="text" name="lat" class="form-control" required value="<?= htmlspecialchars((string)($edit['lat'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Долгота (lon)*</label>
+              <input type="text" name="lon" class="form-control" required value="<?= htmlspecialchars((string)($edit['lon'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-3 form-check mt-4">
+              <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>>
+              <label class="form-check-label" for="isEnabled">Показывать на карте</label>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Группа</label>
+              <select name="group_id" id="tourGroupSelect" class="form-select">
+                <option value="">Без группы</option>
+                <?php foreach ($tourGroups as $g): ?>
+                  <option value="<?= (int)$g['id'] ?>" <?= (int)($edit['group_id'] ?? 0) === (int)$g['id'] ? 'selected' : '' ?>><?= htmlspecialchars($g['name'], ENT_QUOTES, 'UTF-8') ?></option>
+                <?php endforeach; ?>
+                <option value="new">+ Новая группа...</option>
+              </select>
+              <div class="form-text">Файлы новых туров складываются в подпапку своей группы — упорядочивает хранилище по мере роста числа туров.</div>
+            </div>
+            <div class="col-md-6 d-none" id="tourNewGroupWrap">
+              <label class="form-label small">Название новой группы</label>
+              <input type="text" name="new_group_name" id="tourNewGroupName" class="form-control" placeholder="Например: Объекты ЕКБ 2026">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat — 3DGS, или .las — облако точек LiDAR)</label>
+              <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
+              <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — облако точек LiDAR, просмотр на карте работает (отдельный рендер, не через 3DGS).</div>
+              <?php if ($edit && $edit['file_path']): ?>
+                <div class="form-text">
+                  Текущие файлы: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?><?= $editExtraCount ? ' + ещё ' . $editExtraCount : '' ?>.
+                  Оставьте поле пустым, чтобы не менять.
+                </div>
+              <?php endif; ?>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Или файл(ы) уже на сервере (uploads/tours/...), если залиты по FTP — по одному имени на строку</label>
+              <textarea name="existing_file" class="form-control" rows="3" placeholder="model_part1.ply&#10;model_part2.ply"></textarea>
+            </div>
+
+            <div class="col-12 d-none" id="tourUploadProgressWrap">
+              <div class="progress" style="height: 22px">
+                <div class="progress-bar" id="tourUploadProgressBar" role="progressbar" style="width: 0%">0%</div>
+              </div>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button type="submit" class="btn btn-primary" id="tourFormSubmit"><?= $edit ? 'Сохранить' : 'Добавить' ?></button>
+              <a href="/tours.php" class="btn btn-outline-secondary">Отмена</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
 <?php
-$extraScripts = <<<'HTML'
+$extraScripts = '<script>const tourFormShouldOpen = ' . ($edit ? 'true' : 'false') . ';</script>' . <<<'HTML'
 <script>
+// Если открыли страницу по ссылке "Изменить" (?edit=ID) — модалка с формой
+// должна сама открыться, а не остаться скрытой за обычной кнопкой
+// "Добавить тур" (раньше форма была всегда видна сверху страницы).
+if (tourFormShouldOpen) {
+  document.addEventListener('DOMContentLoaded', () => {
+    new bootstrap.Modal(document.getElementById('tourFormModal')).show();
+  });
+}
+
 // Обычная HTML-форма не показывает прогресс загрузки файла вообще — браузер
 // просто "висит" до конца запроса. Перехватываем submit и шлём через XHR,
 // чтобы получить реальный прогресс (xhr.upload.onprogress), а результат
