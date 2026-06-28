@@ -354,7 +354,15 @@ function rgen_compute_visible_ranges(array $eph, array $ecef, float $t): array
             continue;
         }
         $satClockM = RGEN_C * rgen_glonass_clock_bias_sec($best, $t);
-        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg, $ecef), 'elevDeg' => $elevDeg];
+        $ranges[$sat] = [
+            'range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg, $ecef),
+            'elevDeg' => $elevDeg,
+            // FDMA-литера нужна вызывающему коду для расчёта ИМЕННО ЭТОГО
+            // спутника длины волны L1/L2 (см. RGEN_GLO_F1_STEP в
+            // Constants.php) — без неё фаза для разных литер ГЛОНАСС
+            // считается с слегка неверным масштабом.
+            'freqChannel' => (int)($best['freq_channel'] ?? 0),
+        ];
     }
     return $ranges;
 }
@@ -468,10 +476,11 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         $eph['glonass'] = [];
     }
     $intervalSec = 5.0;
+    // ГЛОНАСС-длины волн считаются ПЕР-СПУТНИКОВО внутри цикла ниже (FDMA,
+    // см. RGEN_GLO_F1_STEP в Constants.php) — здесь только GPS, общая для
+    // всех спутников системы (CDMA, одна несущая на все PRN).
     $lambdaGps1 = RGEN_C / RGEN_GPS_F1;
     $lambdaGps2 = RGEN_C / RGEN_GPS_F2;
-    $lambdaGlo1 = RGEN_C / RGEN_GLO_F1;
-    $lambdaGlo2 = RGEN_C / RGEN_GLO_F2;
     $ambiguities = rgen_generate_ambiguities($eph);
 
     // Смещение часов приёмника — раньше было до ±2000 м (~6.7 мкс), теперь
@@ -501,8 +510,18 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
-            [$lambda1, $lambda2] = $isGlo ? [$lambdaGlo1, $lambdaGlo2] : [$lambdaGps1, $lambdaGps2];
-            [$f1, $f2] = $isGlo ? [RGEN_GLO_F1, RGEN_GLO_F2] : [RGEN_GPS_F1, RGEN_GPS_F2];
+            // ГЛОНАСС — FDMA, своя несущая на КАЖДЫЙ спутник (литера
+            // freqChannel, -7..+6, см. RGEN_GLO_F1_STEP в Constants.php),
+            // а не одна номинальная частота на все спутники сразу.
+            if ($isGlo) {
+                $k = $info['freqChannel'] ?? 0;
+                $f1 = RGEN_GLO_F1 + $k * RGEN_GLO_F1_STEP;
+                $f2 = RGEN_GLO_F2 + $k * RGEN_GLO_F2_STEP;
+            } else {
+                [$f1, $f2] = [RGEN_GPS_F1, RGEN_GPS_F2];
+            }
+            $lambda1 = RGEN_C / $f1;
+            $lambda2 = RGEN_C / $f2;
 
             // Ионосфера: код запаздывает (+iono), фаза спешит (-iono), по
             // частоте L2 задержка больше, чем на L1 (~в (f1/f2)^2 раз) —
@@ -639,10 +658,10 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
         $eph['glonass'] = [];
     }
     $intervalSec = 5.0;
+    // ГЛОНАСС-длины волн считаются ПЕР-СПУТНИКОВО внутри цикла ниже (FDMA,
+    // см. RGEN_GLO_F1_STEP в Constants.php).
     $lambdaGps1 = RGEN_C / RGEN_GPS_F1;
     $lambdaGps2 = RGEN_C / RGEN_GPS_F2;
-    $lambdaGlo1 = RGEN_C / RGEN_GLO_F1;
-    $lambdaGlo2 = RGEN_C / RGEN_GLO_F2;
     $ambiguities = rgen_generate_ambiguities($eph);
 
     $clockBiasM = mt_rand(-200, 200) / 1.0;
@@ -661,8 +680,15 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
-            [$lambda1, $lambda2] = $isGlo ? [$lambdaGlo1, $lambdaGlo2] : [$lambdaGps1, $lambdaGps2];
-            [$f1, $f2] = $isGlo ? [RGEN_GLO_F1, RGEN_GLO_F2] : [RGEN_GPS_F1, RGEN_GPS_F2];
+            if ($isGlo) {
+                $k = $info['freqChannel'] ?? 0;
+                $f1 = RGEN_GLO_F1 + $k * RGEN_GLO_F1_STEP;
+                $f2 = RGEN_GLO_F2 + $k * RGEN_GLO_F2_STEP;
+            } else {
+                [$f1, $f2] = [RGEN_GPS_F1, RGEN_GPS_F2];
+            }
+            $lambda1 = RGEN_C / $f1;
+            $lambda2 = RGEN_C / $f2;
 
             $ionoL1 = RGEN_IONO_ZENITH_L1_M * rgen_iono_mapping($info['elevDeg']);
             $ionoL2 = $ionoL1 * ($f1 / $f2) ** 2;
