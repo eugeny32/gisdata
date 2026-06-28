@@ -422,11 +422,22 @@ function rgen_build_rinex2_header(string $stationName, array $ecef, int $startUn
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
     // Сверено байт-в-байт с реальным рабочим файлом (RP1 2390.25O,
     // принимается TBC) — там метка времени именно "GPS", не "UTC" (метку-
-    // СЛОВО не трогаем). Но раз заявлена система GPS — числа должны быть
-    // в GPST, а не сырых цифрах UTC; см. rgen_gpst_unix в Constants.php.
-    $firstObsGpst = rgen_gpst_unix($startUnix);
+    // СЛОВО не трогаем). ЧИСЛА — сырые UTC-цифры, БЕЗ сдвига на 18с до
+    // истинного GPST (см. rgen_gpst_unix в Constants.php, сама функция
+    // оставлена, но больше не вызывается здесь). Сдвиг технически более
+    // правилен по спецификации RINEX и был живым тестом подтверждён для
+    // RTKLIB (давал устойчивый Fix вместо дрейфующей на десятки км
+    // одиночной засечки) — но реальный прогон через TBC после этой правки
+    // показал "Опорный файл содержит некорректные данные... начальная
+    // точка слишком далеко" для ВСЕХ пар базовых линий, чего не было до
+    // сдвига. Похоже, TBC соотносит метку эпохи с эфемеридой по сырым
+    // цифрам, не делая поправку на GPST-UTC сама — то есть ожидает именно
+    // старое поведение. Откатываем числа обратно, сохраняя остальные
+    // правки (light-time/Sagnac/релятивистскую/Hopfield/ГЛОНАСС) — они не
+    // трогают то, что ЗАПИСАНО как метка эпохи, только то, как считаются
+    // сами наблюдения.
     $out .= rgen_header_line(
-        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
+        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $startUnix), (int)gmdate('n', $startUnix), (int)gmdate('j', $startUnix), (int)gmdate('G', $startUnix), (int)gmdate('i', $startUnix), (float)gmdate('s', $startUnix), ''),
         'TIME OF FIRST OBS'
     );
     $out .= rgen_header_line('', 'END OF HEADER');
@@ -556,15 +567,13 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         // то есть импорт проходил). Значит TBC ожидает именно эту раскладку
         // колонок (с лишним пробелом перед годом), а не строго
         // спецификационную — возвращаем %3d.
-        // Метка эпохи — в GPST (rgen_gpst_unix), а не сырых цифрах UTC, по
-        // той же причине, что и TIME OF FIRST OBS в заголовке (см.
-        // rgen_gpst_unix в Constants.php) — заявленная система времени
-        // "GPS" должна соответствовать фактическим числам.
-        $tGpst = rgen_gpst_unix((int)$t);
+        // Метка эпохи — сырые UTC-цифры, без сдвига на GPST (см. примечание
+        // у TIME OF FIRST OBS в rgen_build_rinex2_header — откат после
+        // реального сбоя в TBC: "начальная точка слишком далеко").
         $epochPrefix = sprintf(
             '%3d%3d%3d%3d%3d%11.7f%3d%3d',
-            (int)gmdate('y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
-            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
+            (int)gmdate('y', $t), (int)gmdate('n', $t), (int)gmdate('j', $t),
+            (int)gmdate('G', $t), (int)gmdate('i', $t), (float)gmdate('s', $t) + $frac,
             0, count($epochRows)
         );
         // В однородном GPS-файле (gpsOnly) спутники пишутся просто
@@ -624,11 +633,10 @@ function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUn
     }
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
     // См. примечание про метку времени в rgen_build_rinex2_header — "GPS",
-    // не "UTC" (сверено с реальным рабочим файлом), числа — в GPST
-    // (rgen_gpst_unix), а не сырых UTC-цифрах.
-    $firstObsGpst = rgen_gpst_unix($startUnix);
+    // не "UTC" (сверено с реальным рабочим файлом), числа — сырые
+    // UTC-цифры, без сдвига на GPST (откат после сбоя в TBC).
     $out .= rgen_header_line(
-        sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
+        sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $startUnix), (int)gmdate('n', $startUnix), (int)gmdate('j', $startUnix), (int)gmdate('G', $startUnix), (int)gmdate('i', $startUnix), (float)gmdate('s', $startUnix), ''),
         'TIME OF FIRST OBS'
     );
     $out .= rgen_header_line('', 'END OF HEADER');
@@ -705,12 +713,11 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
 
         ksort($epochRows);
         $frac = $t - floor($t);
-        // GPST, не сырой UTC — та же причина, что и в RINEX2-писателе выше.
-        $tGpst = rgen_gpst_unix((int)$t);
+        // Сырые UTC-цифры, без сдвига на GPST — откат, см. примечание выше.
         $out .= sprintf(
             "> %4d %02d %02d %02d %02d%11.7f  0%3d\r\n",
-            (int)gmdate('Y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
-            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
+            (int)gmdate('Y', $t), (int)gmdate('n', $t), (int)gmdate('j', $t),
+            (int)gmdate('G', $t), (int)gmdate('i', $t), (float)gmdate('s', $t) + $frac,
             count($epochRows)
         );
         foreach ($epochRows as $sat => $vals) {

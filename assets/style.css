@@ -298,3 +298,12 @@ textarea.form-control {
 }
 .form-control::placeholder { color: rgba(229, 231, 235, .45); }
 .form-control:disabled, .form-select:disabled { background-color: rgba(255, 255, 255, .03); }
+/* Раскрытый список <select> — браузер рисует его как НАТИВНЫЙ попап, а не
+   часть страницы: на него не действует backdrop-filter/блюр карточки под
+   ним, поэтому полупрозрачный rgba(255,255,255,.05) у .form-select выше
+   (рассчитанный на просвечивающий тёмный фон страницы) в самом попапе
+   выглядел почти белым. <option> нужен СВОЙ непрозрачный тёмный фон. */
+.form-select option {
+  background-color: #1b2028;
+  color: #e5e7eb;
+}
