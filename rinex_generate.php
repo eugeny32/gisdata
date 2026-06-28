@@ -50,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $endInput = (string)($_POST['end'] ?? '');
     $gpsOnly = isset($_POST['gps_only']);
     $rinexVersion = ($_POST['rinex_version'] ?? '2') === '3' ? '3' : '2';
-    $generatorVersion = ($_POST['generator_version'] ?? 'default') === 'sigog' ? 'sigog' : 'default';
+    $generatorVersion = ($_POST['generator_version'] ?? 'default') === 'gisdata' ? 'gisdata' : 'default';
 
     try {
         $stations = rgen_parse_stations_input($stationsInput);
@@ -130,12 +130,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $doy3 = gmdate('z', $startUnix) + 1;
         $yy = gmdate('y', $startUnix);
 
-        // Режим "SiGOG" — отдельная, самостоятельная физика генератора
-        // (см. rgen_build_sigog_obs): только GPS, без ионосферы/шума/
+        // Режим "Gisdata" — отдельная, самостоятельная физика генератора
+        // (см. rgen_build_gisdata_obs): только GPS, без ионосферы/шума/
         // неоднозначности фазы, всегда RINEX 2.11 (как и сам эталонный
-        // SiGOGbcst). Не подменяет основной режим, просто другая ветка.
-        $useSigog = $generatorVersion === 'sigog';
-        if ($useSigog) {
+        // SiGOGbcst, чьи методы здесь применены). Не подменяет основной
+        // режим, просто другая ветка.
+        $useGisdataMode = $generatorVersion === 'gisdata';
+        if ($useGisdataMode) {
             $rinexVersion = '2';
             $gpsOnly = true;
         }
@@ -143,8 +144,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $files = [];
         $usedStationCodes = [];
         foreach ($stations as $st) {
-            if ($useSigog) {
-                $content = rgen_build_sigog_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph);
+            if ($useGisdataMode) {
+                $content = rgen_build_gisdata_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph);
             } else {
                 $content = $rinexVersion === '3'
                     ? rgen_build_rinex3_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph, $gpsOnly)
@@ -256,28 +257,28 @@ require __DIR__ . '/app/views/_head.php';
           <label class="form-label small">Версия генератора</label>
           <select name="generator_version" id="generatorVersion" class="form-select">
             <option value="default" <?= $generatorVersion === 'default' ? 'selected' : '' ?>>Расширенный (по умолчанию): GPS+ГЛОНАСС, ионосфера, шум, RINEX 2/3</option>
-            <option value="sigog" <?= $generatorVersion === 'sigog' ? 'selected' : '' ?>>SiGOG (эталонная физика): только GPS, без ионосферы/шума/неоднозначности фазы, RINEX 2.11</option>
+            <option value="gisdata" <?= $generatorVersion === 'gisdata' ? 'selected' : '' ?>>Gisdata (эталонная физика): только GPS, без ионосферы/шума/неоднозначности фазы, RINEX 2.11</option>
           </select>
-          <div class="form-text">SiGOG-режим — точная копия логики/математики эталонного генератора SiGOGbcst (light-time, Sagnac, релятивистская поправка, тропосфера Hopfield/Seeber), без наших дополнений (ионосфера, шум, ГЛОНАСС). Игнорирует поля "Версия RINEX" и "Только GPS" ниже.</div>
+          <div class="form-text">Режим Gisdata — точная копия логики/математики эталонного генератора SiGOGbcst (light-time, Sagnac, релятивистская поправка, тропосфера Hopfield/Seeber), без наших дополнений (ионосфера, шум, ГЛОНАСС). Игнорирует поля "Версия RINEX" и "Только GPS" ниже.</div>
         </div>
         <div class="col-md-3">
           <label class="form-label small">Версия RINEX</label>
-          <select name="rinex_version" id="rinexVersion" class="form-select" <?= $generatorVersion === 'sigog' ? 'disabled' : '' ?>>
+          <select name="rinex_version" id="rinexVersion" class="form-select" <?= $generatorVersion === 'gisdata' ? 'disabled' : '' ?>>
             <option value="2" <?= $rinexVersion === '2' ? 'selected' : '' ?>>2.11 (классический, набор наблюдений как у CHC)</option>
             <option value="3" <?= $rinexVersion === '3' ? 'selected' : '' ?>>3.04 (мультисистемный, современный)</option>
           </select>
         </div>
         <div class="col-md-3 d-flex align-items-end">
           <div class="form-check">
-            <input type="checkbox" class="form-check-input" name="gps_only" id="gpsOnly" value="1" <?= $gpsOnly ? 'checked' : '' ?> <?= $generatorVersion === 'sigog' ? 'disabled' : '' ?>>
+            <input type="checkbox" class="form-check-input" name="gps_only" id="gpsOnly" value="1" <?= $gpsOnly ? 'checked' : '' ?> <?= $generatorVersion === 'gisdata' ? 'disabled' : '' ?>>
             <label class="form-check-label" for="gpsOnly">Только GPS (диагностика): файл объявляет себя "G (GPS)" и не содержит ни одной записи ГЛОНАСС</label>
           </div>
         </div>
         <script>
           document.getElementById('generatorVersion').addEventListener('change', function () {
-            var isSigog = this.value === 'sigog';
-            document.getElementById('rinexVersion').disabled = isSigog;
-            document.getElementById('gpsOnly').disabled = isSigog;
+            var isGisdataMode = this.value === 'gisdata';
+            document.getElementById('rinexVersion').disabled = isGisdataMode;
+            document.getElementById('gpsOnly').disabled = isGisdataMode;
           });
         </script>
         <div class="col-12">

@@ -729,31 +729,31 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
 }
 
 /**
- * Набор типов наблюдений для "SiGOG"-режима — ровно тот, что в примере
- * самого SiGOGbcst (input.txt: "rp1  C1P1P2L1L2"), а не 17 типов CHC из
- * RGEN_RINEX2_OBS_TYPES (тот набор — под другую, нашу основную задачу
- * имитации конкретного приёмника, здесь не нужен).
+ * Набор типов наблюдений для режима "Gisdata" — ровно тот, что в примере
+ * самого эталонного SiGOGbcst (input.txt: "rp1  C1P1P2L1L2"), а не 17 типов
+ * CHC из RGEN_RINEX2_OBS_TYPES (тот набор — под другую, нашу основную
+ * задачу имитации конкретного приёмника, здесь не нужен).
  */
-const RGEN_SIGOG_OBS_TYPES = ['C1', 'P1', 'P2', 'L1', 'L2'];
+const RGEN_GISDATA_OBS_TYPES = ['C1', 'P1', 'P2', 'L1', 'L2'];
 
-function rgen_build_sigog_header(string $stationName, array $ecef, int $startUnix, float $intervalSec): string
+function rgen_build_gisdata_header(string $stationName, array $ecef, int $startUnix, float $intervalSec): string
 {
     $out = '';
-    // RINEX 2.11, система GPS — сам SiGOGbcst пишет 2.10 и только GPS;
-    // версию RINEX берём 2.11 (как и наш основной CHC-режим), систему —
-    // строго GPS, т.к. SiGOGbcst ГЛОНАСС не считает вовсе.
+    // RINEX 2.11, система GPS — сам эталонный SiGOGbcst пишет 2.10 и
+    // только GPS; версию RINEX берём 2.11 (как и наш основной CHC-режим),
+    // систему — строго GPS, т.к. SiGOGbcst ГЛОНАСС не считает вовсе.
     $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', 2.11, '', 'OBSERVATION DATA', 'G (GPS)'), 'RINEX VERSION / TYPE');
-    $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', 'gisdata-rinex-sigog', 'gisdata', gmdate('Ymd His', time()) . ' UTC'), 'PGM / RUN BY / DATE');
-    $out .= rgen_header_line('SiGOG-compatible synthetic RINEX: no iono, no noise, no ambiguity', 'COMMENT');
+    $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', 'gisdata-rinex-gisdata', 'gisdata', gmdate('Ymd His', time()) . ' UTC'), 'PGM / RUN BY / DATE');
+    $out .= rgen_header_line('Gisdata-mode synthetic RINEX: no iono, no noise, no ambiguity', 'COMMENT');
     $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NAME');
     $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NUMBER');
     $out .= rgen_header_line(sprintf('%-20s%-40s', 'SYNTH', 'gisdata'), 'OBSERVER / AGENCY');
-    $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', '1', 'SIGOG', '1.0'), 'REC # / TYPE / VERS');
-    $out .= rgen_header_line(sprintf('%-20s%-20s', '1', 'SIGOG'), 'ANT # / TYPE');
+    $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', '1', 'GISDATA', '1.0'), 'REC # / TYPE / VERS');
+    $out .= rgen_header_line(sprintf('%-20s%-20s', '1', 'GISDATA'), 'ANT # / TYPE');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', $ecef[0], $ecef[1], $ecef[2]), 'APPROX POSITION XYZ');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', 0.0, 0.0, 0.0), 'ANTENNA: DELTA H/E/N');
     $out .= rgen_header_line(sprintf('%6d%6d', 1, 1), 'WAVELENGTH FACT L1/2');
-    $out .= rgen_build_obs_types_header_lines(RGEN_SIGOG_OBS_TYPES);
+    $out .= rgen_build_obs_types_header_lines(RGEN_GISDATA_OBS_TYPES);
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
     $firstObsGpst = rgen_gpst_unix($startUnix);
     $out .= rgen_header_line(
@@ -766,31 +766,32 @@ function rgen_build_sigog_header(string $stationName, array $ecef, int $startUni
 
 /**
  * Строит RINEX 2.11 OBS строго по логике/математике эталонного SiGOGbcst —
- * отдельный, самостоятельный режим генератора (выбирается на форме), не
- * заменяющий и не меняющий основной (rgen_build_rinex2_obs/rinex3): только
- * GPS (SiGOGbcst ГЛОНАСС не поддерживает), геометрическая дальность с
- * light-time/Sagnac, релятивистской поправкой и тропосферой Hopfield/
- * Seeber (то же, что считает rgen_compute_visible_ranges — это были
- * методы, перенесённые из SiGOG в основной генератор) — БЕЗ ионосферы, БЕЗ
- * шума измерений и БЕЗ целочисленной неоднозначности фазы: код и фаза
- * берутся из ОДНОЙ и той же скорректированной дальности (см. SiGOGbcst,
- * SUBROUTINE rinex: vto(cto)=dist(i)*alp(cto), alp=1 для кода, alp=f/c для
- * фазы — никакого отдельного слагаемого неоднозначности или шума там нет).
- * Координаты станции — ECEF в метрах, как и во всех остальных режимах
- * генератора (внутренние величины везде в метрах; SiGOGbcst исторически
- * принимал координаты в км только в своём собственном входном файле —
- * здесь in/out уже в метрах, доп. перевода не требуется).
+ * это режим "Gisdata": отдельный, самостоятельный режим генератора
+ * (выбирается на форме), не заменяющий и не меняющий основной
+ * (rgen_build_rinex2_obs/rinex3): только GPS (SiGOGbcst ГЛОНАСС не
+ * поддерживает), геометрическая дальность с light-time/Sagnac,
+ * релятивистской поправкой и тропосферой Hopfield/Seeber (то же, что
+ * считает rgen_compute_visible_ranges — это были методы, перенесённые из
+ * SiGOG в основной генератор) — БЕЗ ионосферы, БЕЗ шума измерений и БЕЗ
+ * целочисленной неоднозначности фазы: код и фаза берутся из ОДНОЙ и той же
+ * скорректированной дальности (см. SiGOGbcst, SUBROUTINE rinex:
+ * vto(cto)=dist(i)*alp(cto), alp=1 для кода, alp=f/c для фазы — никакого
+ * отдельного слагаемого неоднозначности или шума там нет). Координаты
+ * станции — ECEF в метрах, как и во всех остальных режимах генератора
+ * (внутренние величины везде в метрах; SiGOGbcst исторически принимал
+ * координаты в км только в своём собственном входном файле — здесь in/out
+ * уже в метрах, доп. перевода не требуется).
  *
  * @param array{gps: array, glonass: array} $eph объединённые эфемериды (см. rgen_merge_ephemerides)
  */
-function rgen_build_sigog_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph): string
+function rgen_build_gisdata_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph): string
 {
     $eph['glonass'] = [];
     $intervalSec = 5.0;
     $lambda1 = RGEN_C / RGEN_GPS_F1;
     $lambda2 = RGEN_C / RGEN_GPS_F2;
 
-    $out = rgen_build_sigog_header($stationName, $ecef, $startUnix, $intervalSec);
+    $out = rgen_build_gisdata_header($stationName, $ecef, $startUnix, $intervalSec);
 
     for ($t = $startUnix; $t <= $endUnix; $t += (int)$intervalSec) {
         $ranges = rgen_compute_visible_ranges($eph, $ecef, (float)$t);
