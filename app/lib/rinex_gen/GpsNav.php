@@ -59,6 +59,11 @@ function rgen_parse_gps_record(array $l): array
 /**
  * ECEF-координаты (метры) GPS-спутника в момент unixUtc по эфемериде $eph
  * (одна запись из rgen_parse_gps_nav). Алгоритм — ICD-GPS-200, таблица 20-IV.
+ *
+ * Возвращает [x, y, z, Ek] — эксцентрическая анomalия (Ek, последний
+ * элемент) добавлена для релятивистской поправки часов спутника (см.
+ * rgen_gps_relativistic_correction_sec в RinexObsWriter.php) — без
+ * повторного решения уравнения Кеплера в вызывающем коде.
  */
 function rgen_gps_sat_position(array $eph, float $unixUtc): array
 {
@@ -102,7 +107,23 @@ function rgen_gps_sat_position(array $eph, float $unixUtc): array
     $y = $xk1 * sin($omegak) + $yk1 * cos($ik) * cos($omegak);
     $z = $yk1 * sin($ik);
 
-    return [$x, $y, $z];
+    return [$x, $y, $z, $ek];
+}
+
+/**
+ * Релятивистская поправка часов GPS-спутника (секунды) — периодический
+ * член из-за эксцентричности орбиты (ICD-GPS-200, §20.3.3.3.3.1), который
+ * НЕ входит в транслируемые af0/af1/af2 и должен добавляться отдельно.
+ * F = -2*sqrt(mu)/c^2 — сверено с эталонным генератором SiGOGbcst
+ * (константа fmay=-4.442807633e-10 там же, совпадает до 6 значащих цифр).
+ * До этой правки генератор эту поправку не считал вовсе — при характерных
+ * e~0.01-0.02 это даёт периодическую ошибку дальности порядка нескольких
+ * метров, разную для каждого спутника (зависит от его текущей Ek).
+ */
+function rgen_gps_relativistic_correction_sec(array $eph, float $ek): float
+{
+    $f = -2.0 * sqrt(RGEN_GPS_MU) / (RGEN_C ** 2);
+    return $f * $eph['e'] * $eph['sqrt_a'] * sin($ek);
 }
 
 /** Выбирает эфемериду с Toe, ближайшим к запрошенному моменту. */

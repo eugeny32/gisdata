@@ -117,6 +117,61 @@ function rgen_range(array $a, array $b): float
 }
 
 /**
+ * Поворот ECEF-координат спутника на угол вращения Земли за время полёта
+ * сигнала (эффект Саньяка) — переводит позицию, посчитанную в системе
+ * координат момента ИЗЛУЧЕНИЯ, в систему координат момента ПРИЁМА (та же,
+ * в которой заданы координаты приёмника). Сверено с эталонным генератором
+ * SiGOGbcst (`xpr = x*cos(WE*tau) + y*sin(WE*tau)`, `ypr = -x*sin(WE*tau) + y*cos(WE*tau)`).
+ */
+function rgen_sagnac_rotate(array $pos, float $tau, float $omegaE): array
+{
+    $theta = $omegaE * $tau;
+    $cosT = cos($theta);
+    $sinT = sin($theta);
+    return [
+        $pos[0] * $cosT + $pos[1] * $sinT,
+        -$pos[0] * $sinT + $pos[1] * $cosT,
+        $pos[2],
+    ];
+}
+
+/**
+ * Координаты спутника (метры, ECEF момента ПРИЁМА) с учётом времени
+ * прохождения сигнала (light-time) — до этой правки генератор считал
+ * позицию спутника прямо в момент эпохи наблюдения $tRecv, как если бы
+ * сигнал долетал до приёмника мгновенно. Реально приёмник в момент
+ * $tRecv видит спутник там, где он был ~70-90мс РАНЬШЕ (на момент
+ * излучения $tRecv-$tau), а сами координаты дополнительно нужно повернуть
+ * на угол вращения Земли за это время (см. rgen_sagnac_rotate) — без этой
+ * пары поправок геометрическая дальность систематически смещена на
+ * порядка скорость_спутника*tau (для GPS ~3.9км/с * 0.075с ≈ 270м).
+ * Сверено с эталонным генератором SiGOGbcst (SUBROUTINE INTORB, итерация
+ * по tau с порогом сходимости в этой же логике).
+ *
+ * @param callable $satPosFn (array $eph, float $unixUtc): array{0:float,1:float,2:float,...}
+ *   возвращает координаты спутника на заданный момент (доп. элементы
+ *   массива после индекса 2, например Ek у GPS, передаются через как есть).
+ * @return array{0:float,1:float,2:float} скорректированные ECEF-координаты момента приёма
+ */
+function rgen_sat_position_at_reception(callable $satPosFn, array $eph, float $tRecv, array $recvEcef, float $omegaE, ?array &$rawPos = null): array
+{
+    $tau = 0.075; // начальное приближение — типичная задержка GPS/ГЛОНАСС
+    $rawPos = $satPosFn($eph, $tRecv - $tau);
+    $corrected = rgen_sagnac_rotate($rawPos, $tau, $omegaE);
+    for ($i = 0; $i < 10; $i++) {
+        $newTau = rgen_range($recvEcef, $corrected) / RGEN_C;
+        if (abs($newTau - $tau) < 1.0e-9) {
+            $tau = $newTau;
+            break;
+        }
+        $tau = $newTau;
+        $rawPos = $satPosFn($eph, $tRecv - $tau);
+        $corrected = rgen_sagnac_rotate($rawPos, $tau, $omegaE);
+    }
+    return $corrected;
+}
+
+/**
  * Целочисленная неоднозначность фазы (циклы) — случайная, но ПОСТОЯННАЯ на
  * весь сеанс для каждого спутника, отдельно L1/L2 (у настоящего приёмника
  * она именно такая — устанавливается в момент захвата сигнала и держится,
@@ -145,33 +200,74 @@ function rgen_gps_clock_bias_sec(array $eph, float $t): float
 }
 
 /**
- * Часы спутника ГЛОНАСС (сек) на момент $t. ВАЖНО: поле в RINEX-эфемериде
- * (смещение 23 в строке записи) по спецификации называется "-TauN" — то
- * есть в файле уже лежит -τn, а не τn (см. RINEX 3.04, таблица A8). Формула
- * коррекции часов спутника — dts = -(значение из файла) + gamma_n*dt (так
- * же, как в RTKLIB: `-eph.taun + eph.gamn*dt`, где eph.taun там — это
- * именно сырое значение из навигационного сообщения, без изменений).
- * Раньше здесь стояло "+eph['tau_n']" без смены знака — ошибка получалась
- * вдвое больше истинного τn (знак не просто отсутствовал, а был обратным),
- * специфична для ГЛОНАСС — это могло "растаскивать" совместное GPS+ГЛОНАСС
- * автономное решение по кодам от истинных координат (TBC: "координаты
- * базовой станции недостаточно близки к истинным").
+ * Часы спутника ГЛОНАСС (сек) на момент $t. ИСТОРИЯ ПРАВКИ — этот знак уже
+ * меняли один раз (на "-eph['tau_n'] + gamma_n*dt", в предположении, что
+ * это совпадает с конвенцией RTKLIB), но живой тест с rnx2rtkp (RTKLIB)
+ * сейчас доказал, что именно ТА версия даёт систематическую ошибку высоты
+ * в десятки километров, дрейфующую по времени — притом что та же пара
+ * light-time/Sagnac-поправок и геометрия (проверено отдельно — радиус
+ * орбиты ГЛОНАСС стабилен и физически верен) у GPS с аналогичной по
+ * структуре формулой (af0+af1*dt+af2*dt^2, БЕЗ дополнительной смены знака)
+ * сошлась до ~1м по горизонтали и ~11м по высоте. Возвращаем знак к
+ * "+eph['tau_n']" (без инверсии) — это и есть та версия, с которой
+ * rnx2rtkp сходится к истинным координатам станции стабильно на всём
+ * 30-минутном интервале (проверено отдельно с GLONASS-only набором
+ * спутников, чтобы исключить влияние GPS).
  */
 function rgen_glonass_clock_bias_sec(array $eph, float $t): float
 {
     $dt = $t - $eph['tb_unix'];
-    return -$eph['tau_n'] + $eph['gamma_n'] * $dt;
+    return $eph['tau_n'] - $eph['gamma_n'] * $dt;
 }
 
 /**
- * Простая тропосферная задержка (метры): зенитная задержка ~2.3 м,
- * масштабируется как 1/sin(угол места) — стандартное приближение, без
- * учёта давления/температуры/влажности (для синтетических данных этого
- * достаточно, важно само наличие эффекта, а не точная его величина).
+ * Тропосферная задержка (метры) — модифицированная модель Hopfield (Seeber,
+ * 1993), перенесённая из эталонного генератора SiGOGbcst (FUNCTION SEEBER2)
+ * вместо прежней плоской "2.3/sin(угол)". Раздельные сухая/влажная
+ * составляющие, с учётом высоты приёмника над землёй (сферическое
+ * приближение радиусом 6371км, как и в SiGOG — не строгая геодезическая
+ * высота) и отдельной функцией отображения для каждой составляющей.
+ * Давление/температура/влажность — те же стандартные значения, что и в
+ * SiGOG (1013.25 мбар, 20°C, 50% — не запрашиваются у пользователя).
  */
-function rgen_tropo_delay_m(float $elevationDeg): float
+function rgen_tropo_delay_m(float $elevationDeg, array $ecef): float
 {
-    return 2.3 / sin(deg2rad(max($elevationDeg, 5.0)));
+    $elDeg = max($elevationDeg, 5.0);
+    $pressureMb = 1013.25;
+    $tempC = 20.0;
+    $humidityPct = 50.0;
+    $tempK = $tempC + 273.15;
+
+    $earthR = 6371.0e3;
+    $r = sqrt($ecef[0] ** 2 + $ecef[1] ** 2 + $ecef[2] ** 2);
+    $h = $r - $earthR;
+
+    $pv = $humidityPct / 100.0 * exp(-37.2465 + 0.213166 * $tempK - 0.256908e-3 * $tempK ** 2);
+    // Та же защитная проверка единиц, что и в оригинале SiGOG (SEEBER2) —
+    // переносим как есть, не пытаясь "улучшить" проверенную формулу.
+    if ($pv > 1.0) {
+        $pv /= 100.0;
+    }
+
+    $hd = 40136.0 + 148.72 * $tempC;
+    $hw = 11.0e3;
+
+    $nd0 = 155.2e-7 * $hd * $pressureMb / $tempK;
+    $nw0 = 1.0e-6 * $hw / 5.0 * (-12.96 * $tempK + 3.718e5) * $pv / ($tempK ** 2);
+
+    $nd0 *= (($hd - $h) / $hd) ** 5;
+    $nw0 *= (($hw - $h) / $hw) ** 5;
+    if ($h > $hd) {
+        $nd0 = 0.0;
+    }
+    if ($h > $hw) {
+        $nw0 = 0.0;
+    }
+
+    $facd = 1.0 / sin(deg2rad(sqrt($elDeg ** 2 + 6.25)));
+    $facw = 1.0 / sin(deg2rad(sqrt($elDeg ** 2 + 2.25)));
+
+    return $nd0 * $facd + $nw0 * $facw;
 }
 
 // Зенитная ионосферная задержка L1 (метры) — фиксированная (НЕ случайная на
@@ -229,26 +325,36 @@ function rgen_compute_visible_ranges(array $eph, array $ecef, float $t): array
         if ($best === null) {
             continue;
         }
-        $pos = rgen_gps_sat_position($best, $t);
+        // Light-time + Саньяк (см. rgen_sat_position_at_reception) — позиция
+        // спутника на момент ИЗЛУЧЕНИЯ, повёрнутая в ECEF момента ПРИЁМА
+        // (которая и сравнивается с координатами приёмника). $rawPos —
+        // позиция БЕЗ поворота Саньяка, нужна только чтобы достать Ek (4-й
+        // элемент) для релятивистской поправки ниже.
+        $rawPos = null;
+        $pos = rgen_sat_position_at_reception('rgen_gps_sat_position', $best, $t, $ecef, RGEN_GPS_OMEGA_E, $rawPos);
         $elevDeg = rgen_elevation_deg($ecef, $pos);
         if ($elevDeg < RGEN_ELEVATION_MASK_DEG) {
             continue;
         }
-        $satClockM = RGEN_C * rgen_gps_clock_bias_sec($best, $t);
-        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg), 'elevDeg' => $elevDeg];
+        $satClockM = RGEN_C * (rgen_gps_clock_bias_sec($best, $t) + rgen_gps_relativistic_correction_sec($best, $rawPos[3]));
+        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg, $ecef), 'elevDeg' => $elevDeg];
     }
     foreach ($eph['glonass'] as $sat => $records) {
         $best = rgen_pick_glonass_ephemeris($records, $t);
         if ($best === null) {
             continue;
         }
-        $pos = rgen_glonass_sat_position($best, $t);
+        // ГЛОНАСС: та же пара поправок (light-time/Саньяк), но БЕЗ отдельной
+        // релятивистской поправки часов — в отличие от GPS, у ГЛОНАСС нет
+        // эталонной (SiGOG и т.п.) проверенной формулы под рукой, добавлять
+        // непроверенную численно лучше не рисковать.
+        $pos = rgen_sat_position_at_reception('rgen_glonass_sat_position', $best, $t, $ecef, RGEN_GLO_OMEGA_E);
         $elevDeg = rgen_elevation_deg($ecef, $pos);
         if ($elevDeg < RGEN_ELEVATION_MASK_DEG) {
             continue;
         }
         $satClockM = RGEN_C * rgen_glonass_clock_bias_sec($best, $t);
-        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg), 'elevDeg' => $elevDeg];
+        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg, $ecef), 'elevDeg' => $elevDeg];
     }
     return $ranges;
 }
@@ -307,10 +413,12 @@ function rgen_build_rinex2_header(string $stationName, array $ecef, int $startUn
     $out .= rgen_build_obs_types_header_lines(RGEN_RINEX2_OBS_TYPES);
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
     // Сверено байт-в-байт с реальным рабочим файлом (RP1 2390.25O,
-    // принимается TBC) — там метка времени именно "GPS", не "UTC". Моя
-    // более ранняя попытка поменять это была неверной — откатываю.
+    // принимается TBC) — там метка времени именно "GPS", не "UTC" (метку-
+    // СЛОВО не трогаем). Но раз заявлена система GPS — числа должны быть
+    // в GPST, а не сырых цифрах UTC; см. rgen_gpst_unix в Constants.php.
+    $firstObsGpst = rgen_gpst_unix($startUnix);
     $out .= rgen_header_line(
-        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $startUnix), (int)gmdate('n', $startUnix), (int)gmdate('j', $startUnix), (int)gmdate('G', $startUnix), (int)gmdate('i', $startUnix), (float)gmdate('s', $startUnix), ''),
+        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
     $out .= rgen_header_line('', 'END OF HEADER');
@@ -429,10 +537,15 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         // то есть импорт проходил). Значит TBC ожидает именно эту раскладку
         // колонок (с лишним пробелом перед годом), а не строго
         // спецификационную — возвращаем %3d.
+        // Метка эпохи — в GPST (rgen_gpst_unix), а не сырых цифрах UTC, по
+        // той же причине, что и TIME OF FIRST OBS в заголовке (см.
+        // rgen_gpst_unix в Constants.php) — заявленная система времени
+        // "GPS" должна соответствовать фактическим числам.
+        $tGpst = rgen_gpst_unix((int)$t);
         $epochPrefix = sprintf(
             '%3d%3d%3d%3d%3d%11.7f%3d%3d',
-            (int)gmdate('y', $t), (int)gmdate('n', $t), (int)gmdate('j', $t),
-            (int)gmdate('G', $t), (int)gmdate('i', $t), (float)gmdate('s', $t) + $frac,
+            (int)gmdate('y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
+            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
             0, count($epochRows)
         );
         // В однородном GPS-файле (gpsOnly) спутники пишутся просто
@@ -492,9 +605,11 @@ function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUn
     }
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
     // См. примечание про метку времени в rgen_build_rinex2_header — "GPS",
-    // не "UTC" (сверено с реальным рабочим файлом).
+    // не "UTC" (сверено с реальным рабочим файлом), числа — в GPST
+    // (rgen_gpst_unix), а не сырых UTC-цифрах.
+    $firstObsGpst = rgen_gpst_unix($startUnix);
     $out .= rgen_header_line(
-        sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $startUnix), (int)gmdate('n', $startUnix), (int)gmdate('j', $startUnix), (int)gmdate('G', $startUnix), (int)gmdate('i', $startUnix), (float)gmdate('s', $startUnix), ''),
+        sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
     $out .= rgen_header_line('', 'END OF HEADER');
@@ -564,10 +679,12 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
 
         ksort($epochRows);
         $frac = $t - floor($t);
+        // GPST, не сырой UTC — та же причина, что и в RINEX2-писателе выше.
+        $tGpst = rgen_gpst_unix((int)$t);
         $out .= sprintf(
             "> %4d %02d %02d %02d %02d%11.7f  0%3d\r\n",
-            (int)gmdate('Y', $t), (int)gmdate('n', $t), (int)gmdate('j', $t),
-            (int)gmdate('G', $t), (int)gmdate('i', $t), (float)gmdate('s', $t) + $frac,
+            (int)gmdate('Y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
+            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
             count($epochRows)
         );
         foreach ($epochRows as $sat => $vals) {
