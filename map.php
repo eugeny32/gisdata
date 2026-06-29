@@ -44,14 +44,11 @@ require __DIR__ . '/app/views/_head.php';
     <button type="button" id="mapContextView" class="btn btn-sm w-100 text-start text-white d-none" style="border-radius:0;">
       <i class="bi bi-eye"></i> Просмотр
     </button>
-    <?php if ($isAdmin): ?>
     <button type="button" id="mapContextAddTour" class="btn btn-sm w-100 text-start text-white" style="border-radius:0;">
       <i class="bi bi-plus-circle"></i> Добавить объект
     </button>
-    <?php endif; ?>
   </div>
 
-  <?php if ($isAdmin): ?>
   <div class="modal fade" id="quickAddTourModal" tabindex="-1">
     <div class="modal-dialog">
       <div class="modal-content">
@@ -75,6 +72,7 @@ require __DIR__ . '/app/views/_head.php';
               <label class="form-label small">Описание</label>
               <input type="text" name="description" class="form-control">
             </div>
+            <?php if ($isAdmin): ?>
             <div class="mb-2">
               <label class="form-label small">Группа</label>
               <select name="group_id" id="quickAddGroupSelect" class="form-select">
@@ -89,15 +87,21 @@ require __DIR__ . '/app/views/_head.php';
               <label class="form-label small">Название новой группы</label>
               <input type="text" name="new_group_name" id="quickAddNewGroupName" class="form-control">
             </div>
+            <?php endif; ?>
             <div class="mb-2">
               <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat / .las)</label>
               <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
-              <div class="form-text">.ply автоматически прогоняется через фильтр шума при сохранении.</div>
+              <div class="form-text">
+                .ply автоматически прогоняется через фильтр шума при сохранении.
+                <?php if (!$isAdmin): ?>Суммарный размер файлов — не больше 2 ГБ.<?php endif; ?>
+              </div>
             </div>
+            <?php if ($isAdmin): ?>
             <div class="mb-2">
               <label class="form-label small">Или файл(ы) уже на сервере — по одному имени на строку</label>
               <textarea name="existing_file" class="form-control" rows="2"></textarea>
             </div>
+            <?php endif; ?>
             <div class="d-none" id="quickAddProgressWrap">
               <div class="progress" style="height: 18px">
                 <div class="progress-bar" id="quickAddProgressBar" style="width: 0%">0%</div>
@@ -113,7 +117,6 @@ require __DIR__ . '/app/views/_head.php';
       </div>
     </div>
   </div>
-  <?php endif; ?>
 
   <div class="modal fade" id="tourViewerModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-dialog-centered tour-viewer-dialog">
@@ -571,22 +574,31 @@ contextViewBtn.addEventListener('click', () => {
   if (contextTourTarget) openTour(contextTourTarget.id, contextTourTarget.name);
 });
 
-if (isAdminJs) {
+// "Добавить объект" — доступно всем вошедшим (не только админам): админы
+// добавляют через полноценный /tours.php (группы, файлы уже на сервере,
+// без ограничения размера, кроме лимитов хостинга), обычные пользователи —
+// через упрощённый /tour_user_upload.php (без групп, с лимитом 2 ГБ
+// суммарно на файлы тура — оба ограничения только что добавлены).
+{
   const quickAddModalEl = document.getElementById('quickAddTourModal');
   const quickAddModal = new bootstrap.Modal(quickAddModalEl);
   const quickAddForm = document.getElementById('quickAddTourForm');
   const quickAddGroupSelect = document.getElementById('quickAddGroupSelect');
   const quickAddNewGroupWrap = document.getElementById('quickAddNewGroupWrap');
 
-  quickAddGroupSelect.addEventListener('change', () => {
-    quickAddNewGroupWrap.classList.toggle('d-none', quickAddGroupSelect.value !== 'new');
-  });
+  // Группы — только в форме админа (см. <?php if ($isAdmin): ?> вокруг
+  // quickAddGroupSelect выше), у обычных пользователей этих элементов нет.
+  if (isAdminJs) {
+    quickAddGroupSelect.addEventListener('change', () => {
+      quickAddNewGroupWrap.classList.toggle('d-none', quickAddGroupSelect.value !== 'new');
+    });
+  }
 
   document.getElementById('mapContextAddTour').addEventListener('click', () => {
     hideContextMenu();
     if (!contextLatLng) return;
     quickAddForm.reset();
-    quickAddNewGroupWrap.classList.add('d-none');
+    if (quickAddNewGroupWrap) quickAddNewGroupWrap.classList.add('d-none');
     document.getElementById('quickAddError').classList.add('d-none');
     document.getElementById('quickAddLat').value = contextLatLng.lat.toFixed(7);
     document.getElementById('quickAddLon').value = contextLatLng.lng.toFixed(7);
@@ -618,7 +630,7 @@ if (isAdminJs) {
     }
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/tours.php');
+    xhr.open('POST', isAdminJs ? '/tours.php' : '/tour_user_upload.php');
     xhr.upload.onprogress = (evt) => {
       if (evt.lengthComputable) {
         const pct = Math.round((evt.loaded / evt.total) * 100);
@@ -634,6 +646,8 @@ if (isAdminJs) {
       // ошибку; xhr.status здесь будет 200 и при успехе, и при ошибке
       // валидации (та же страница с отрендеренным .alert-danger), поэтому
       // отличаем по наличию .alert-danger в ответе, а не по статусу.
+      // tour_user_upload.php (не-админы) использует тот же контракт —
+      // .alert-danger при ошибке, иначе пустой/успешный ответ.
       const match = xhr.responseText.match(/<div class="alert alert-danger">([\s\S]*?)<\/div>/);
       if (match) {
         errorBox.textContent = match[1].replace(/<[^>]+>/g, '').trim();
