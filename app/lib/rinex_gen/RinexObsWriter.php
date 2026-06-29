@@ -310,6 +310,31 @@ function rgen_snr_db(float $elevationDeg): float
 }
 
 /**
+ * Однозначный индикатор силы сигнала (1-9) по спецификации RINEX 2/3 —
+ * пишется ВПРИТЫК к каждому значению наблюдения (вторая цифра после LLI,
+ * формат F14.3,I1,I1). Раньше у нас это поле было ВСЕГДА пустым (см.
+ * историю в rgen_format_obs_line) — сверено байт-в-байт со старым реальным
+ * файлом CHC, где оно тоже было пустым, но более новый реальный рабочий
+ * файл (приёмник South GNSS, успешно даёт Fix в TBC между несколькими
+ * станциями) имеет этот индикатор заполненным на каждой записи без
+ * исключений. Раз у НАШИХ файлов он пустой на 100% наблюдений во ВСЕХ
+ * вариантах — возможно, именно эта "стопроцентная пустота" выглядит для
+ * TBC как признак недостоверных/повреждённых данных.
+ */
+function rgen_snr_flag(float $snrDb): int
+{
+    if ($snrDb < 12.0) return 1;
+    if ($snrDb < 18.0) return 2;
+    if ($snrDb < 24.0) return 3;
+    if ($snrDb < 30.0) return 4;
+    if ($snrDb < 36.0) return 5;
+    if ($snrDb < 42.0) return 6;
+    if ($snrDb < 48.0) return 7;
+    if ($snrDb < 54.0) return 8;
+    return 9;
+}
+
+/**
  * Геометрическая дальность + часы спутника + тропосфера для всех видимых
  * (выше маски возвышения) спутников на момент $t. Часы ПРИЁМНИКА и
  * ионосфера (она зависит от частоты, а здесь дальность одна на оба
@@ -462,20 +487,35 @@ function rgen_format_sat_list_lines(string $epochPrefix, array $satIds): string
     return $out;
 }
 
-function rgen_format_obs_line(array $values): string
+/**
+ * @param array<int, int|null> $flags индикатор силы сигнала 1-9 (см.
+ *        rgen_snr_flag) на ту же позицию, что и $values; null/отсутствие —
+ *        поле остаётся пустым (как раньше, для незадействованных типов).
+ */
+function rgen_format_obs_line(array $values, array $flags = []): string
 {
-    // LLI и SSI — ОБА пустые (сверено байт-в-байт с реальными рабочими
-    // файлами: между значениями ровно 4 пробела — 2 пустых флага текущего
-    // значения + 2 ведущих пробела следующего F14.3, а не 3, как было при
-    // LLI='0'). 17 типов наблюдений (см. RGEN_RINEX2_OBS_TYPES) — максимум
-    // 5 значений на строку данных (RINEX 2.11), остаток переносится на
-    // следующую строку БЕЗ какого-либо префикса — именно так устроен
-    // настоящий файл с приёмника CHC (4 строки на спутник: 5+5+5+2).
+    // LLI всегда пустой (флаг потери цикла — для синтетических данных без
+    // реальных перерывов сигнала это корректно пишется как "неизвестно",
+    // не как 0). SSI/индикатор силы сигнала — раньше тоже был всегда
+    // пустым (сверено байт-в-байт со старым файлом CHC — там тоже пустой),
+    // теперь заполняется через $flags там, где он передан (см.
+    // rgen_snr_flag) — по новому образцу реального файла South GNSS,
+    // у которого это поле заполнено всегда. 17 типов наблюдений (см.
+    // RGEN_RINEX2_OBS_TYPES) — максимум 5 значений на строку данных
+    // (RINEX 2.11), остаток переносится на следующую строку БЕЗ
+    // какого-либо префикса — именно так устроен настоящий файл с
+    // приёмника CHC (4 строки на спутник: 5+5+5+2).
     $out = '';
-    foreach (array_chunk($values, 5) as $chunk) {
+    foreach (array_chunk($values, 5) as $i => $chunk) {
+        $flagChunk = array_slice($flags, $i * 5, count($chunk));
         $line = '';
-        foreach ($chunk as $v) {
-            $line .= $v === null ? str_repeat(' ', 16) : sprintf('%14.3f', $v) . '  ';
+        foreach ($chunk as $j => $v) {
+            if ($v === null) {
+                $line .= str_repeat(' ', 16);
+                continue;
+            }
+            $flag = $flagChunk[$j] ?? null;
+            $line .= sprintf('%14.3f', $v) . ' ' . ($flag !== null ? (string)$flag : ' ');
         }
         $out .= $line . "\r\n";
     }
@@ -524,6 +564,7 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         $clockOffsetM = $clockBiasM + $clockDriftMPerSec * ($t - $startUnix);
 
         $epochRows = []; // satId => [C1, L1, D1, S1, P2, L2, D2, S2, C2, C5, L5, D5, S5, C7, L7, D7, S7]
+        $epochFlags = []; // satId => индикаторы силы сигнала (см. rgen_snr_flag) на тех же позициях
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
@@ -561,6 +602,9 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
             // эти диапазоны для GPS/ГЛОНАСС, см. примечание у
             // RGEN_RINEX2_OBS_TYPES).
             $epochRows[$sat] = [$c1, $l1, $d1, $s1, $p2, $l2, $d2, $s2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            $flag1 = rgen_snr_flag($s1);
+            $flag2 = rgen_snr_flag($s2);
+            $epochFlags[$sat] = [$flag1, $flag1, $flag1, $flag1, $flag2, $flag2, $flag2, $flag2, null, null, null, null, null, null, null, null, null];
         }
 
         ksort($epochRows);
@@ -589,8 +633,8 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
             ? array_map(fn($s) => sprintf('%3d', (int)substr($s, 1)), array_keys($epochRows))
             : array_keys($epochRows);
         $out .= rgen_format_sat_list_lines($epochPrefix, $satIdsForList);
-        foreach ($epochRows as $vals) {
-            $out .= rgen_format_obs_line($vals);
+        foreach ($epochRows as $sat => $vals) {
+            $out .= rgen_format_obs_line($vals, $epochFlags[$sat]);
         }
     }
 
@@ -652,14 +696,21 @@ function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUn
     return $out;
 }
 
-function rgen_format_obs_line_rinex3(string $satId, array $values): string
+/**
+ * @param array<int, int|null> $flags см. rgen_format_obs_line.
+ */
+function rgen_format_obs_line_rinex3(string $satId, array $values, array $flags = []): string
 {
-    // LLI/SSI пустые — см. примечание в rgen_format_obs_line (сверено с
-    // реальным рабочим RINEX2-файлом; для RINEX3 эталона нет, но логика
-    // поля та же).
+    // LLI пустой, SSI/индикатор силы сигнала — из $flags там, где передан
+    // (см. rgen_snr_flag и подробную историю в rgen_format_obs_line).
     $line = $satId;
-    foreach ($values as $v) {
-        $line .= $v === null ? str_repeat(' ', 16) : sprintf('%14.3f', $v) . '  ';
+    foreach ($values as $i => $v) {
+        if ($v === null) {
+            $line .= str_repeat(' ', 16);
+            continue;
+        }
+        $flag = $flags[$i] ?? null;
+        $line .= sprintf('%14.3f', $v) . ' ' . ($flag !== null ? (string)$flag : ' ');
     }
     return $line . "\r\n";
 }
@@ -699,6 +750,7 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
         $clockOffsetM = $clockBiasM + $clockDriftMPerSec * ($t - $startUnix);
 
         $epochRows = []; // satId => [C1C, L1C, C2P, L2P, S1C, S2P]
+        $epochFlags = [];
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
@@ -723,6 +775,9 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
             $s1 = rgen_snr_db($info['elevDeg']);
             $s2 = rgen_snr_db($info['elevDeg']);
             $epochRows[$sat] = [$c1, $l1, $c2, $l2, $s1, $s2];
+            $flag1 = rgen_snr_flag($s1);
+            $flag2 = rgen_snr_flag($s2);
+            $epochFlags[$sat] = [$flag1, $flag1, $flag2, $flag2, $flag1, $flag2];
         }
 
         ksort($epochRows);
@@ -736,7 +791,7 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
             count($epochRows)
         );
         foreach ($epochRows as $sat => $vals) {
-            $out .= rgen_format_obs_line_rinex3($sat, $vals);
+            $out .= rgen_format_obs_line_rinex3($sat, $vals, $epochFlags[$sat]);
         }
     }
 
@@ -817,12 +872,19 @@ function rgen_build_gisdata_obs(string $stationName, array $ecef, int $startUnix
             continue;
         }
         $epochRows = []; // satId => [C1, P1, P2, L1, L2]
+        $epochFlags = [];
         foreach ($ranges as $sat => $info) {
             // $range уже включает геометрию + часы спутника + тропосферу
             // (см. rgen_compute_visible_ranges) — без иono, без шума, без
             // неоднозначности: ровно SiGOG-логика.
             $range = $info['range'];
             $epochRows[$sat] = [$range, $range, $range, $range / $lambda1, $range / $lambda2];
+            // SiGOG-логика не считает SNR вовсе — индикатор силы сигнала
+            // (см. rgen_snr_flag) для записи в файл берём из той же
+            // элевационной модели, что и остальные режимы (rgen_snr_db),
+            // без добавления шума в сами измерения дальности/фазы.
+            $flag1 = rgen_snr_flag(rgen_snr_db($info['elevDeg']));
+            $epochFlags[$sat] = [$flag1, $flag1, $flag1, $flag1, $flag1];
         }
         ksort($epochRows);
         $frac = $t - floor($t);
@@ -834,8 +896,8 @@ function rgen_build_gisdata_obs(string $stationName, array $ecef, int $startUnix
             0, count($epochRows)
         );
         $out .= rgen_format_sat_list_lines($epochPrefix, array_keys($epochRows));
-        foreach ($epochRows as $vals) {
-            $out .= rgen_format_obs_line($vals);
+        foreach ($epochRows as $sat => $vals) {
+            $out .= rgen_format_obs_line($vals, $epochFlags[$sat]);
         }
     }
 
