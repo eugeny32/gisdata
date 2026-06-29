@@ -602,9 +602,13 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
             // эти диапазоны для GPS/ГЛОНАСС, см. примечание у
             // RGEN_RINEX2_OBS_TYPES).
             $epochRows[$sat] = [$c1, $l1, $d1, $s1, $p2, $l2, $d2, $s2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            // Сверено байт-в-байт с реальным файлом (EKB2/ARTI): индикатор
+            // силы сигнала стоит ТОЛЬКО у фазовых наблюдений (L1/L2) — у
+            // кода (C1/P2), допплера (D1/D2) и самого SNR-наблюдения
+            // (S1/S2) он всегда пуст, даже в настоящем файле.
             $flag1 = rgen_snr_flag($s1);
             $flag2 = rgen_snr_flag($s2);
-            $epochFlags[$sat] = [$flag1, $flag1, $flag1, $flag1, $flag2, $flag2, $flag2, $flag2, null, null, null, null, null, null, null, null, null];
+            $epochFlags[$sat] = [null, $flag1, null, null, null, $flag2, null, null, null, null, null, null, null, null, null, null, null];
         }
 
         ksort($epochRows);
@@ -775,9 +779,10 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
             $s1 = rgen_snr_db($info['elevDeg']);
             $s2 = rgen_snr_db($info['elevDeg']);
             $epochRows[$sat] = [$c1, $l1, $c2, $l2, $s1, $s2];
+            // См. примечание у rgen_build_rinex2_obs — флаг только у фазы.
             $flag1 = rgen_snr_flag($s1);
             $flag2 = rgen_snr_flag($s2);
-            $epochFlags[$sat] = [$flag1, $flag1, $flag2, $flag2, $flag1, $flag2];
+            $epochFlags[$sat] = [null, $flag1, null, $flag2, null, null];
         }
 
         ksort($epochRows);
@@ -882,9 +887,12 @@ function rgen_build_gisdata_obs(string $stationName, array $ecef, int $startUnix
             // SiGOG-логика не считает SNR вовсе — индикатор силы сигнала
             // (см. rgen_snr_flag) для записи в файл берём из той же
             // элевационной модели, что и остальные режимы (rgen_snr_db),
-            // без добавления шума в сами измерения дальности/фазы.
+            // без добавления шума в сами измерения дальности/фазы. Флаг —
+            // только у фазы (L1/L2, индексы 3 и 4), см. примечание у
+            // rgen_build_rinex2_obs (сверено байт-в-байт с реальным
+            // файлом: у кода/допплера/SNR-наблюдения он всегда пуст).
             $flag1 = rgen_snr_flag(rgen_snr_db($info['elevDeg']));
-            $epochFlags[$sat] = [$flag1, $flag1, $flag1, $flag1, $flag1];
+            $epochFlags[$sat] = [null, null, null, $flag1, $flag1];
         }
         ksort($epochRows);
         $frac = $t - floor($t);
