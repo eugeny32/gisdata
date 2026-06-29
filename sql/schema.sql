@@ -206,6 +206,17 @@ ALTER TABLE tours DROP CONSTRAINT IF EXISTS fk_tour_group;
 ALTER TABLE tours ADD CONSTRAINT fk_tour_group FOREIGN KEY (group_id) REFERENCES tour_groups(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_tours_group ON tours (group_id);
 
+-- created_by (см. выше) — FK на admins, заполняется только когда тур
+-- создан через админский /tours.php или через /tour_user_upload.php
+-- залогиненным как admin/viewer. Для обычных пользователей mdb
+-- (users_sync, у них нет совместимого id с admins) нужна ОТДЕЛЬНАЯ
+-- колонка — иначе "Мои туры" (my_tours.php) не сможет понять, какие
+-- туры принадлежат конкретному mdb-пользователю.
+ALTER TABLE tours ADD COLUMN IF NOT EXISTS created_by_user_id INT NULL;
+ALTER TABLE tours DROP CONSTRAINT IF EXISTS fk_tour_user;
+ALTER TABLE tours ADD CONSTRAINT fk_tour_user FOREIGN KEY (created_by_user_id) REFERENCES users_sync(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tours_created_by_user ON tours (created_by_user_id);
+
 -- ---------------------------------------------------------------------------
 -- Слои и аннотации (точки/линии/полигоны), нарисованные пользователем прямо
 -- на 3D-модели тура в map.php. Координаты — в локальном пространстве модели

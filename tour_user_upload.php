@@ -105,14 +105,17 @@ $filePath = $newFiles[0]['file_path'];
 $fileFormat = $newFiles[0]['file_format'];
 $extraFiles = array_slice($newFiles, 1);
 
-// created_by — только для аккаунтов из таблицы admins (включая viewer);
-// у обычных пользователей mdb (current_user(), таблица users_sync) нет
-// совместимого id — оставляем NULL (колонка для этого и nullable).
+// Владелец — у admins-аккаунтов (включая viewer) в created_by, у обычных
+// пользователей mdb (users_sync, несовместимый id с admins) — в отдельной
+// created_by_user_id (см. миграцию в sql/schema.sql). Ровно одна из двух
+// колонок заполнена — нужно для my_tours.php ("Мои туры" в меню), чтобы
+// найти туры конкретного пользователя независимо от типа его аккаунта.
 $admin = current_admin();
+$user = current_user();
 
 $stmt = $pdo->prepare(
-    'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by)
-     VALUES (:name, :description, :lat, :lon, :file_path, :file_format, 1, :created_by)
+    'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by, created_by_user_id)
+     VALUES (:name, :description, :lat, :lon, :file_path, :file_format, 1, :created_by, :created_by_user_id)
      RETURNING id'
 );
 $stmt->execute([
@@ -123,6 +126,7 @@ $stmt->execute([
     'file_path' => $filePath,
     'file_format' => $fileFormat,
     'created_by' => $admin['id'] ?? null,
+    'created_by_user_id' => $admin ? null : ($user['id'] ?? null),
 ]);
 $tourId = (int)$stmt->fetchColumn();
 

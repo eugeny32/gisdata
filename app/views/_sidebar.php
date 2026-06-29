@@ -19,6 +19,9 @@ function nav_active(string $page, string $current): string
     <a class="sidebar-link<?= nav_active('map.php', $__current) ?>" href="/map.php">
       <i class="bi bi-map"></i><span>Карта</span>
     </a>
+    <a class="sidebar-link<?= nav_active('my_tours.php', $__current) ?>" href="/my_tours.php">
+      <i class="bi bi-camera-reels"></i><span>Мои туры</span>
+    </a>
     <?php if ($__role === 'admin'): ?>
     <a class="sidebar-link<?= nav_active('stations.php', $__current) ?>" href="/stations.php">
       <i class="bi bi-hdd-network"></i><span>Станции</span>
