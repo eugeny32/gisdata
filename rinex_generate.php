@@ -180,8 +180,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Broadcast-эфемериды кладём в тот же архив рядом с наблюдениями,
         // чтобы файл можно было сразу обрабатывать сторонним ПО без
-        // отдельной загрузки эфемерид. Имя — тоже классическое короткое
-        // (как реальный "brdc2390.25n").
+        // отдельной загрузки эфемерид. Имя — классическое короткое, НО
+        // расширение ".p" (не ".n"!): сам файл, который мы скачиваем
+        // (nav_url_templates в app/config.php — "BRDC00IGS_R_..._MN.rnx" /
+        // "BRDM00DLR_S_..._MN.rnx") — это настоящий RINEX 3.04 MIXED-формат
+        // (несколько систем G/R/E/C/... в одном файле, см. заголовок
+        // "RINEX VERSION / TYPE": "3.04 N: GNSS NAV DATA M: MIXED"), а
+        // классическое расширение ".YYn" по конвенции RINEX2 означает
+        // GPS-only navigation файл другого, несовместимого формата записи.
+        // Названный ".n" мультисистемный RINEX3-файл может заставить
+        // сторонний обработчик (TBC и т.п.), ориентирующийся на
+        // расширение, пытаться разобрать его как RINEX2 — отсюда мусор в
+        // эфемеридах и ошибки вида "опорный файл содержит некорректные
+        // данные" при обработке базовой линии. ".p" — стандартное
+        // обозначение IGS для смешанного/объединённого ("mixed") nav-файла.
         // День года считаем ПО КАЖДОЙ дате отдельно ($dateKey, не
         // $startUnix) — иначе при многосуточном периоде все NAV-файлы
         // получили бы одно и то же имя и затёрли бы друг друга в архиве.
@@ -191,10 +203,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($navPaths as $dateKey => $navPath) {
             $dateKey = (string)$dateKey;
             $dayUnix = (int)gmmktime(0, 0, 0, (int)substr($dateKey, 4, 2), (int)substr($dateKey, 6, 2), (int)substr($dateKey, 0, 4));
-            $files[sprintf('brdc%03d0.%sn', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = (string)file_get_contents($navPath);
+            $files[sprintf('brdc%03d0.%sp', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = (string)file_get_contents($navPath);
         }
         if (isset($manualNavContent)) {
-            $files[sprintf('brdc%03d0.%sn', $doy3, $yy)] = $manualNavContent;
+            $files[sprintf('brdc%03d0.%sp', $doy3, $yy)] = $manualNavContent;
         }
 
         $zipPath = tempnam(sys_get_temp_dir(), 'rnx');
