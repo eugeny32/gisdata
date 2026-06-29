@@ -40,13 +40,18 @@ require __DIR__ . '/app/views/_head.php';
     </div>
   </div>
 
-  <?php if ($isAdmin): ?>
-  <div id="mapContextMenu" class="d-none" style="position:absolute; z-index:1200; background:#1f232b; color:#fff; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); min-width:180px; overflow:hidden;">
+  <div id="mapContextMenu" class="d-none" style="position:fixed; z-index:1200; background:#1f232b; color:#fff; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); min-width:180px; max-width:240px; overflow:hidden;">
+    <button type="button" id="mapContextView" class="btn btn-sm w-100 text-start text-white d-none" style="border-radius:0;">
+      <i class="bi bi-eye"></i> Просмотр
+    </button>
+    <?php if ($isAdmin): ?>
     <button type="button" id="mapContextAddTour" class="btn btn-sm w-100 text-start text-white" style="border-radius:0;">
       <i class="bi bi-plus-circle"></i> Добавить объект
     </button>
+    <?php endif; ?>
   </div>
 
+  <?php if ($isAdmin): ?>
   <div class="modal fade" id="quickAddTourModal" tabindex="-1">
     <div class="modal-dialog">
       <div class="modal-content">
@@ -502,36 +507,71 @@ async function loadTours() {
       `<br><button type="button" class="btn btn-sm btn-outline-primary mt-2" ` +
       `onclick="openTour(${t.id}, '${escapeAttr(t.name)}')">` +
       `<i class="bi bi-camera-reels"></i> Открыть тур</button>`;
-    tourMarkers.push(L.marker([t.lat, t.lon], { icon: tourMarkerIcon() }).addTo(map).bindPopup(popup));
+    const marker = L.marker([t.lat, t.lon], { icon: tourMarkerIcon() }).addTo(map).bindPopup(popup);
+    // Правый клик прямо по маркеру тура — отдельная цель для контекстного
+    // меню (пункт "Просмотр"), отличная от правого клика по пустой карте
+    // (там — только "Добавить объект", у админов). stopPropagation — чтобы
+    // у map не сработал её собственный contextmenu-обработчик ниже (иначе
+    // сработали бы оба, и цель тура сразу же сбросилась бы в null).
+    marker.on('contextmenu', (e) => {
+      L.DomEvent.stopPropagation(e);
+      showMapContextMenu(e.originalEvent, { id: t.id, name: t.name });
+    });
+    tourMarkers.push(marker);
   }
 }
 loadTours();
 
-// --- Контекстное меню карты (правый клик) — быстрое добавление объекта
-// (тура) прямо в точке клика, без перехода на отдельную страницу tours.php.
-if (isAdminJs) {
-  const contextMenu = document.getElementById('mapContextMenu');
-  let contextLatLng = null;
+// --- Контекстное меню карты (правый клик). Доступно всем вошедшим:
+// "Просмотр" (открыть плеер модели тура, под курсором) — всем; "Добавить
+// объект" (быстрое создание тура прямо в точке клика, без перехода на
+// отдельную страницу tours.php) — только админам.
+const contextMenu = document.getElementById('mapContextMenu');
+const contextViewBtn = document.getElementById('mapContextView');
+let contextLatLng = null;
+let contextTourTarget = null; // {id, name} тура под курсором, иначе null
 
-  function hideContextMenu() {
-    contextMenu.classList.add('d-none');
+function hideContextMenu() {
+  contextMenu.classList.add('d-none');
+}
+
+// position:fixed + клиентские координаты (не относительно .map-card) —
+// раньше меню позиционировалось относительно карточки карты и обрезалось
+// по её границе при правом клике у правого края (выглядело как "прилипло
+// и растягивается": видна была только обрезанная часть). После показа
+// меню (когда браузер уже посчитал его реальную ширину/высоту) — подвинуть
+// влево/вверх, если оно не влезает в окно по правому/нижнему краю.
+function showMapContextMenu(domEvent, tourTarget) {
+  domEvent.preventDefault();
+  contextTourTarget = tourTarget;
+  contextViewBtn.classList.toggle('d-none', !tourTarget);
+  contextMenu.style.left = domEvent.clientX + 'px';
+  contextMenu.style.top = domEvent.clientY + 'px';
+  contextMenu.classList.remove('d-none');
+  const rect = contextMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    contextMenu.style.left = Math.max(0, window.innerWidth - rect.width - 8) + 'px';
   }
+  if (rect.bottom > window.innerHeight) {
+    contextMenu.style.top = Math.max(0, window.innerHeight - rect.height - 8) + 'px';
+  }
+}
 
-  map.on('contextmenu', (e) => {
-    e.originalEvent.preventDefault();
-    contextLatLng = e.latlng;
-    const mapContainer = document.getElementById('map');
-    const rect = mapContainer.getBoundingClientRect();
-    const pageRect = mapContainer.closest('.map-card').getBoundingClientRect();
-    contextMenu.style.left = (e.originalEvent.clientX - pageRect.left) + 'px';
-    contextMenu.style.top = (e.originalEvent.clientY - pageRect.top) + 'px';
-    contextMenu.classList.remove('d-none');
-  });
-  map.on('click movestart zoomstart', hideContextMenu);
-  document.addEventListener('click', (e) => {
-    if (!contextMenu.contains(e.target)) hideContextMenu();
-  });
+map.on('contextmenu', (e) => {
+  contextLatLng = e.latlng;
+  showMapContextMenu(e.originalEvent, null);
+});
+map.on('click movestart zoomstart', hideContextMenu);
+document.addEventListener('click', (e) => {
+  if (!contextMenu.contains(e.target)) hideContextMenu();
+});
 
+contextViewBtn.addEventListener('click', () => {
+  hideContextMenu();
+  if (contextTourTarget) openTour(contextTourTarget.id, contextTourTarget.name);
+});
+
+if (isAdminJs) {
   const quickAddModalEl = document.getElementById('quickAddTourModal');
   const quickAddModal = new bootstrap.Modal(quickAddModalEl);
   const quickAddForm = document.getElementById('quickAddTourForm');
