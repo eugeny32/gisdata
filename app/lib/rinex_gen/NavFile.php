@@ -272,3 +272,80 @@ function rgen_filter_nav_to_gps_glonass(string $content): string
     }
     return implode("\r\n", $kept) . "\r\n";
 }
+
+/**
+ * Преобразует NAV-файл в формат RINEX 4.00 (с фильтрацией до GPS+ГЛОНАСС,
+ * как rgen_filter_nav_to_gps_glonass) — версия "4.00" в заголовке
+ * (RINEX VERSION / TYPE) и, главное, перед КАЖДОЙ записью эфемериды
+ * добавляется новая в RINEX 4 строка-заголовок записи "> EPH <SAT>
+ * <тип сообщения>" (LNAV для GPS legacy navigation, FDMA для ГЛОНАСС) —
+ * именно так выглядят настоящие, успешно обрабатываемые TBC NAV-файлы
+ * (сверено байт-в-байт с реальным файлом приёмника South GNSS,
+ * "EKB2...MN.rnx", который даёт Fix в TBC между несколькими станциями).
+ * До этой функции мы передавали NAV-файл RINEX 3.04 (без этих строк) —
+ * если у стороннего ПО лучше/надёжнее поддержан именно новый формат
+ * записи, несовпадение версии OBS/NAV или отсутствие "> EPH" могло быть
+ * причиной ошибок при обработке базовой линии.
+ */
+function rgen_filter_nav_to_rinex4(string $content): string
+{
+    $lines = preg_split('/\r\n|\r|\n/', $content);
+    $n = count($lines);
+
+    $pos = 0;
+    while ($pos < $n && strpos($lines[$pos], 'END OF HEADER') === false) {
+        $pos++;
+    }
+    $headerLines = array_slice($lines, 0, $pos);
+    $pos++; // строка после END OF HEADER
+
+    // Заголовок — версия 4.00 вместо исходной (3.0x), остальные строки
+    // заголовка (PGM/RUN BY/DATE, IONOSPHERIC CORR, LEAP SECONDS и т.п.)
+    // переносятся как есть — RINEX 4 их формат не меняет.
+    $kept = [];
+    foreach ($headerLines as $line) {
+        if (strpos($line, 'RINEX VERSION') !== false) {
+            $kept[] = str_pad(sprintf('%9.2f%11s%-20s%-20s', 4.00, '', 'N: GNSS NAV DATA', 'M: MIXED'), 60) . str_pad('RINEX VERSION / TYPE', 20);
+        } else {
+            $kept[] = $line;
+        }
+    }
+    $kept[] = str_pad('', 60) . str_pad('END OF HEADER', 20);
+
+    while ($pos < $n) {
+        $line = $lines[$pos];
+        if (trim($line) === '') {
+            $pos++;
+            continue;
+        }
+        $sys = $line[0];
+        if (in_array($sys, ['G', 'E', 'C', 'J', 'I'], true)) {
+            if ($pos + 7 >= $n) {
+                break;
+            }
+            if ($sys === 'G') {
+                $sat = substr($line, 0, 3);
+                $kept[] = '> EPH ' . $sat . ' LNAV';
+                $kept = array_merge($kept, array_slice($lines, $pos, 8));
+            }
+            $pos += 8;
+        } elseif ($sys === 'R' || $sys === 'S') {
+            if ($pos + 3 >= $n) {
+                break;
+            }
+            if ($sys === 'R') {
+                $sat = substr($line, 0, 3);
+                $kept[] = '> EPH ' . $sat . ' FDMA';
+                $kept = array_merge($kept, array_slice($lines, $pos, 4));
+            }
+            $pos += 4;
+        } else {
+            $pos++;
+        }
+    }
+
+    if ($kept && trim(end($kept)) === '') {
+        array_pop($kept);
+    }
+    return implode("\r\n", $kept) . "\r\n";
+}

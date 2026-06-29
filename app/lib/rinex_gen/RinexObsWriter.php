@@ -439,6 +439,13 @@ function rgen_build_rinex2_header(string $stationName, array $ecef, int $startUn
         sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
+    // Сверено с реальным рабочим файлом (приёмник South GNSS, "EKB2...
+    // MN/MO.rnx", успешно даёт Fix в TBC) — там этот заголовок ЕСТЬ, у нас
+    // не было вовсе. Раз вся эта эпопея была про рассинхрон GPST/UTC,
+    // отсутствие явного "сколько секунд координации" могло заставлять TBC
+    // использовать своё значение по умолчанию (которое могло не совпасть с
+    // нашим RGEN_GPS_UTC_LEAP_SECONDS).
+    $out .= rgen_header_line(sprintf('%6d', RGEN_GPS_UTC_LEAP_SECONDS), 'LEAP SECONDS');
     $out .= rgen_header_line('', 'END OF HEADER');
     return $out;
 }
@@ -612,11 +619,11 @@ function rgen_build_glonass_slot_freq_lines(array $glonassEph): string
     return $out;
 }
 
-function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUnix, float $intervalSec, array $eph, bool $gpsOnly = false): string
+function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUnix, float $intervalSec, array $eph, bool $gpsOnly = false, float $rinexVersion = 3.04): string
 {
     $sysLabel = $gpsOnly ? 'G (GPS)' : 'M (MIXED)';
     $out = '';
-    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', 3.04, '', 'OBSERVATION DATA', $sysLabel), 'RINEX VERSION / TYPE');
+    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', $rinexVersion, '', 'OBSERVATION DATA', $sysLabel), 'RINEX VERSION / TYPE');
     $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', 'gisdata-rinex-synth', 'gisdata', gmdate('Ymd His', time()) . ' UTC'), 'PGM / RUN BY / DATE');
     $out .= rgen_header_line('Synthetic RINEX (artificial test data, not real observations)', 'COMMENT');
     $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NAME');
@@ -638,6 +645,9 @@ function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUn
         sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
+    // См. примечание у rgen_build_rinex2_header — сверено с реальным
+    // рабочим файлом, у нас этого заголовка не было вовсе.
+    $out .= rgen_header_line(sprintf('%6d', RGEN_GPS_UTC_LEAP_SECONDS), 'LEAP SECONDS');
     $out .= rgen_header_line('', 'END OF HEADER');
     return $out;
 }
@@ -655,11 +665,16 @@ function rgen_format_obs_line_rinex3(string $satId, array $values): string
 }
 
 /**
- * Строит полный текст RINEX 3.04 OBS-файла для одной станции.
+ * Строит полный текст RINEX 3.04/4.00 OBS-файла для одной станции —
+ * структура наблюдений (формат строк эпох/измерений с 3-символьными
+ * кодами C1C/L1C/...) у RINEX 4.00 для OBS-файлов та же, что и у 3.04,
+ * меняется только номер версии в заголовке (RINEX VERSION / TYPE) —
+ * содержательная разница 4.00 в основном про NAV-файлы (см.
+ * rgen_filter_nav_to_rinex4 в NavFile.php).
  *
  * @param array{gps: array, glonass: array} $eph объединённые эфемериды (см. rgen_merge_ephemerides)
  */
-function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph, bool $gpsOnly = false): string
+function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph, bool $gpsOnly = false, float $rinexVersion = 3.04): string
 {
     if ($gpsOnly) {
         $eph['glonass'] = [];
@@ -674,7 +689,7 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
     $clockBiasM = mt_rand(-200, 200) / 1.0;
     $clockDriftMPerSec = mt_rand(-3, 3) / 1000.0;
 
-    $out = rgen_build_rinex3_header($stationName, $ecef, $startUnix, $intervalSec, $eph, $gpsOnly);
+    $out = rgen_build_rinex3_header($stationName, $ecef, $startUnix, $intervalSec, $eph, $gpsOnly, $rinexVersion);
 
     for ($t = $startUnix; $t <= $endUnix; $t += (int)$intervalSec) {
         $ranges = rgen_compute_visible_ranges($eph, $ecef, (float)$t);
@@ -760,6 +775,9 @@ function rgen_build_gisdata_header(string $stationName, array $ecef, int $startU
         sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
+    // См. примечание у rgen_build_rinex2_header — сверено с реальным
+    // рабочим файлом, у нас этого заголовка не было вовсе.
+    $out .= rgen_header_line(sprintf('%6d', RGEN_GPS_UTC_LEAP_SECONDS), 'LEAP SECONDS');
     $out .= rgen_header_line('', 'END OF HEADER');
     return $out;
 }
