@@ -200,3 +200,75 @@ function rgen_parse_nav_file(string $content): array
 
     return ['gps' => $gps, 'glonass' => $glonass];
 }
+
+/**
+ * Возвращает ТЕКСТ NAV-файла (для упаковки в архив пользователю), оставляя
+ * только записи GPS ('G') и ГЛОНАСС ('R') — ровно те системы, для которых
+ * мы реально пишем наблюдения в OBS-файлах. Остальные системы (Galileo
+ * 'E', BeiDou 'C', QZSS 'J', IRNSS 'I', SBAS 'S') у настоящего CDDIS/BKG
+ * merged-файла ("BRDC00IGS_R.../BRDM00DLR_S..._MN.rnx") присутствуют, но
+ * никак не используются нашим генератором (rgen_parse_nav_file их тоже
+ * только пропускает по числу строк, не разбирая).
+ *
+ * Зачем убирать, а не просто оставить как было: сторонний обработчик
+ * (например TBC) может разбирать NAV-записи иначе, чем наш парсер — если
+ * его поддержка отдельных систем (особенно более новых: IRNSS, SBAS в
+ * составе MIXED-файла) неполна или содержит баг смещения строк, один
+ * "непонятый" блок может сдвинуть разбор ВСЕХ последующих записей в файле
+ * (классическая ошибка "не на ту длину записи проскочили") — тогда даже
+ * корректные GPS/ГЛОНАСС эфемериды, идущие в файле ПОСЛЕ такого блока,
+ * прочитаются с ошибкой. Раз наши OBS-файлы используют только G+R, нет
+ * смысла рисковать остальными системами ради файла, который мы не разбираем
+ * сами — отсюда фильтрация перед упаковкой в архив (см. вызов в
+ * rinex_generate.php). Сам внутренний расчёт орбит/часов это не затрагивает
+ * — он и раньше брал только G/R из rgen_parse_nav_file.
+ */
+function rgen_filter_nav_to_gps_glonass(string $content): string
+{
+    $lines = preg_split('/\r\n|\r|\n/', $content);
+    $n = count($lines);
+
+    $pos = 0;
+    while ($pos < $n && strpos($lines[$pos], 'END OF HEADER') === false) {
+        $pos++;
+    }
+    $pos++; // строка после END OF HEADER
+
+    $kept = array_slice($lines, 0, $pos);
+
+    while ($pos < $n) {
+        $line = $lines[$pos];
+        if (trim($line) === '') {
+            $pos++;
+            continue;
+        }
+        $sys = $line[0];
+        if (in_array($sys, ['G', 'E', 'C', 'J', 'I'], true)) {
+            if ($pos + 7 >= $n) {
+                break;
+            }
+            if ($sys === 'G') {
+                $kept = array_merge($kept, array_slice($lines, $pos, 8));
+            }
+            $pos += 8;
+        } elseif ($sys === 'R' || $sys === 'S') {
+            if ($pos + 3 >= $n) {
+                break;
+            }
+            if ($sys === 'R') {
+                $kept = array_merge($kept, array_slice($lines, $pos, 4));
+            }
+            $pos += 4;
+        } else {
+            $pos++;
+        }
+    }
+
+    // Убираем хвостовую пустую строку от preg_split, если она была, и
+    // склеиваем CRLF — общая RINEX-конвенция (как и весь остальной вывод
+    // этого генератора).
+    if ($kept && trim(end($kept)) === '') {
+        array_pop($kept);
+    }
+    return implode("\r\n", $kept) . "\r\n";
+}

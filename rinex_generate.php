@@ -203,10 +203,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($navPaths as $dateKey => $navPath) {
             $dateKey = (string)$dateKey;
             $dayUnix = (int)gmmktime(0, 0, 0, (int)substr($dateKey, 4, 2), (int)substr($dateKey, 6, 2), (int)substr($dateKey, 0, 4));
-            $files[sprintf('brdc%03d0.%sp', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = (string)file_get_contents($navPath);
+            // Только GPS+ГЛОНАСС (см. rgen_filter_nav_to_gps_glonass) — наши
+            // OBS-файлы используют лишь эти две системы, остальные
+            // (Galileo/BeiDou/QZSS/IRNSS/SBAS) из настоящего CDDIS/BKG
+            // merged-файла убираем перед упаковкой, чтобы не зависеть от
+            // того, насколько полно сторонний обработчик умеет их разбирать.
+            $files[sprintf('brdc%03d0.%sp', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = rgen_filter_nav_to_gps_glonass((string)file_get_contents($navPath));
         }
         if (isset($manualNavContent)) {
-            $files[sprintf('brdc%03d0.%sp', $doy3, $yy)] = $manualNavContent;
+            $files[sprintf('brdc%03d0.%sp', $doy3, $yy)] = rgen_filter_nav_to_gps_glonass($manualNavContent);
         }
 
         $zipPath = tempnam(sys_get_temp_dir(), 'rnx');
