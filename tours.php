@@ -822,11 +822,23 @@ if (window.tourFormShouldOpen) {
     toggle.parentElement.addEventListener('shown.bs.dropdown', () => {
       placeholder = document.createComment('dropdown-portal-placeholder');
       menu.parentNode.insertBefore(placeholder, menu);
+      // Сброс инлайн-стилей ДО переноса и замера — на некоторых страницах
+      // (где меню до этого уже было показано раньше, либо Bootstrap/Popper
+      // успел проставить свои собственные inset/width до того, как сюда
+      // долетел этот хендлер) offsetWidth мог замеряться с остаточным
+      // width/inset от предыдущего раза, и меню "растягивалось" на всю
+      // ширину после переноса в body — баг воспроизводился не везде и не
+      // всегда, поэтому здесь явная зачистка перед каждым замером.
+      menu.style.width = '';
+      menu.style.maxWidth = '';
+      menu.style.inset = '';
       document.body.appendChild(menu);
       const rect = toggle.getBoundingClientRect();
+      const width = menu.offsetWidth;
       menu.style.position = 'fixed';
       menu.style.top = rect.bottom + 'px';
-      menu.style.left = (rect.right - menu.offsetWidth) + 'px';
+      menu.style.left = (rect.right - width) + 'px';
+      menu.style.width = width + 'px';
       menu.style.margin = '0';
     });
     toggle.parentElement.addEventListener('hidden.bs.dropdown', () => {
@@ -837,6 +849,7 @@ if (window.tourFormShouldOpen) {
       menu.style.position = '';
       menu.style.top = '';
       menu.style.left = '';
+      menu.style.width = '';
       menu.style.margin = '';
     });
   });

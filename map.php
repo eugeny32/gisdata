@@ -713,6 +713,7 @@ function syncAnnotationsToViewer() {
 
 function renderActiveLayerSelect() {
   const sel = document.getElementById('tourActiveLayerSelect');
+  if (!sel) return; // не-админы: tourDrawToolbar (рисование) не рендерится вовсе
   const prev = activeLayerId;
   sel.innerHTML = tourLayersData.map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
   if (prev && tourLayersData.some((l) => l.id === prev)) {
@@ -725,6 +726,7 @@ function renderActiveLayerSelect() {
 
 function renderSelectedAnnoPanel() {
   const panel = document.getElementById('tourSelectedAnnoPanel');
+  if (!panel) return; // не-админы: tourDrawToolbar (рисование) не рендерится вовсе
   if (!selectedAnno) {
     panel.classList.add('d-none');
     return;
@@ -914,11 +916,20 @@ async function onViewerContainerClick(e) {
 document.getElementById('tourViewerContainer').addEventListener('click', onViewerContainerClick);
 document.getElementById('tourViewerContainer').addEventListener('pointerdown', onViewerVertexPointerDown);
 
-document.getElementById('tourActiveLayerSelect').addEventListener('change', (e) => {
+// ?. — tourActiveLayerSelect/tourSelectedAnnoLayerSelect/tourSelectedAnnoDeleteBtn
+// существуют в DOM только внутри tourDrawToolbar, который рендерится PHP
+// только для админов (см. <?php if ($isAdmin): ?> вокруг него выше). Без
+// ?. вызов .addEventListener на null здесь бросал необработанную ошибку
+// при загрузке страницы для остальных пользователей — а это останавливало
+// выполнение ВСЕГО ОСТАЛЬНОГО кода в этом <script>-блоке (в т.ч. привязку
+// shown.bs.modal ниже, которая запускает window.TourViewer.load(...)) —
+// именно поэтому туры не открывались в плеере у не-админов: окно плеера
+// открывалось, но модель никогда не подгружалась.
+document.getElementById('tourActiveLayerSelect')?.addEventListener('change', (e) => {
   activeLayerId = Number(e.target.value);
 });
 
-document.getElementById('tourSelectedAnnoLayerSelect').addEventListener('change', async (e) => {
+document.getElementById('tourSelectedAnnoLayerSelect')?.addEventListener('change', async (e) => {
   if (!selectedAnno) return;
   const newLayerId = Number(e.target.value);
   await fetch('/api/tour_annotations.php', {
@@ -929,7 +940,7 @@ document.getElementById('tourSelectedAnnoLayerSelect').addEventListener('change'
   await fetchLayers();
 });
 
-document.getElementById('tourSelectedAnnoDeleteBtn').addEventListener('click', async () => {
+document.getElementById('tourSelectedAnnoDeleteBtn')?.addEventListener('click', async () => {
   if (!selectedAnno || !confirm('Удалить объект?')) return;
   await fetch('/api/tour_annotations.php', {
     method: 'POST',
