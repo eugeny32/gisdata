@@ -680,9 +680,15 @@ function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUn
     $out .= rgen_header_line(sprintf('%-20s%-20s', '1', RGEN_ANTENNA_TYPE), 'ANT # / TYPE');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', $ecef[0], $ecef[1], $ecef[2]), 'APPROX POSITION XYZ');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', 0.0, 0.0, 0.0), 'ANTENNA: DELTA H/E/N');
-    $out .= rgen_header_line('G    6 C1C L1C C2P L2P S1C S2P', 'SYS / # / OBS TYPES');
+    // L2-код: "W" у GPS (Z-tracking — современные приёмники не трекают
+    // P(Y)-код напрямую, см. реальные файлы EKB2/ARTI: "C2W L2W"), "C" у
+    // ГЛОНАСС (у него нет той же схемы защиты кода, что у GPS, поэтому
+    // там C/A-код и на L2 — "C2C L2C" в тех же реальных файлах). Раньше
+    // здесь было "C2P L2P" для обеих систем — устаревшее обозначение,
+    // которого не было ни у одного реального рабочего файла.
+    $out .= rgen_header_line('G    6 C1C L1C C2W L2W S1C S2W', 'SYS / # / OBS TYPES');
     if (!$gpsOnly) {
-        $out .= rgen_header_line('R    6 C1C L1C C2P L2P S1C S2P', 'SYS / # / OBS TYPES');
+        $out .= rgen_header_line('R    6 C1C L1C C2C L2C S1C S2C', 'SYS / # / OBS TYPES');
         $out .= rgen_build_glonass_slot_freq_lines($eph['glonass']);
     }
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
@@ -753,7 +759,7 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
         }
         $clockOffsetM = $clockBiasM + $clockDriftMPerSec * ($t - $startUnix);
 
-        $epochRows = []; // satId => [C1C, L1C, C2P, L2P, S1C, S2P]
+        $epochRows = []; // satId => [C1C, L1C, C2W/C2C, L2W/L2C, S1C, S2W/S2C] — см. метки в заголовке
         $epochFlags = [];
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
