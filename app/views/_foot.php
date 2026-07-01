@@ -22,9 +22,25 @@
     }
     var toggleBtn = document.getElementById('sidebarToggle');
     var sidebar = document.getElementById('sidebar');
+    var backdrop = document.getElementById('sidebarBackdrop');
+    function closeSidebar() {
+      if (!sidebar) return;
+      sidebar.classList.remove('sidebar-open');
+      if (backdrop) backdrop.classList.remove('show');
+    }
     if (toggleBtn && sidebar) {
       toggleBtn.addEventListener('click', function () {
-        sidebar.classList.toggle('sidebar-open');
+        var isOpen = sidebar.classList.toggle('sidebar-open');
+        if (backdrop) backdrop.classList.toggle('show', isOpen);
+      });
+    }
+    if (backdrop) backdrop.addEventListener('click', closeSidebar);
+    // Закрываем сайдбар при клике по ссылке меню на мобильных
+    if (sidebar) {
+      sidebar.querySelectorAll('.sidebar-link').forEach(function (link) {
+        link.addEventListener('click', function () {
+          if (window.innerWidth < 992) closeSidebar();
+        });
       });
     }
   })();

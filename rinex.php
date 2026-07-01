@@ -175,7 +175,7 @@ require __DIR__ . '/app/views/_head.php';
           </div>
           <div class="form-text">Файлы объединяются, только если идут подряд без разрыва — при пропуске в несколько минут (станция не передавала данные) получится отдельный файл, а не файл с дыркой.</div>
         </div>
-        <div class="col-12 d-flex gap-2 align-items-center">
+        <div class="col-12 d-flex gap-2 align-items-center rinex-action-row">
           <button type="submit" name="intent" value="search" class="btn btn-outline-primary"><i class="bi bi-search"></i> Найти и выбрать файлы</button>
           <button type="submit" name="intent" value="create_request" class="btn btn-primary"><i class="bi bi-clock-history"></i> Сформировать фоновый запрос</button>
           <span class="text-secondary small">Максимум <?= RINEX_MAX_DAYS ?> дней за раз</span>

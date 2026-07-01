@@ -94,14 +94,14 @@ require __DIR__ . '/app/views/_head.php';
       </p>
       <div class="table-responsive">
         <table class="table table-clean align-middle mb-0">
-          <thead><tr><th>Название</th><th>Описание</th><th>Файл</th><th>Создан</th><th></th></tr></thead>
+          <thead><tr><th>Название</th><th class="my-tours-desc-col">Описание</th><th>Файл</th><th>Создан</th><th></th></tr></thead>
           <tbody>
           <?php foreach ($tours as $t): ?>
             <tr>
               <td>
                 <input type="text" name="name" form="updateForm<?= (int)$t['id'] ?>" class="form-control form-control-sm" value="<?= htmlspecialchars($t['name'], ENT_QUOTES, 'UTF-8') ?>" required>
               </td>
-              <td>
+              <td class="my-tours-desc-col">
                 <input type="text" name="description" form="updateForm<?= (int)$t['id'] ?>" class="form-control form-control-sm" value="<?= htmlspecialchars((string)$t['description'], ENT_QUOTES, 'UTF-8') ?>" placeholder="Без описания">
               </td>
               <td class="text-secondary small"><?= htmlspecialchars((string)$t['file_format'], ENT_QUOTES, 'UTF-8') ?></td>

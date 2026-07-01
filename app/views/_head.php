@@ -38,6 +38,7 @@ $pageIcon = $pageIcon ?? 'bi-house';
 </head>
 <body>
 <div class="app-shell">
+  <div id="sidebarBackdrop"></div>
   <?php include __DIR__ . '/_sidebar.php'; ?>
   <div class="app-content">
     <header class="topbar">
@@ -50,11 +51,11 @@ $pageIcon = $pageIcon ?? 'bi-house';
       </button>
       <?php $__a = current_admin(); $__u = current_user(); ?>
       <?php if ($__a): ?>
-        <span class="text-secondary small ms-2"><i class="bi bi-shield-lock me-1"></i><?= htmlspecialchars($__a['login'], ENT_QUOTES, 'UTF-8') ?></span>
+        <span class="text-secondary small ms-2 d-none d-sm-inline text-truncate" style="max-width:160px"><i class="bi bi-shield-lock me-1"></i><?= htmlspecialchars($__a['login'], ENT_QUOTES, 'UTF-8') ?></span>
         <a class="btn btn-sm btn-outline-light ms-2" href="/logout.php">Выход</a>
       <?php elseif ($__u): ?>
-        <span class="text-secondary small ms-2"><i class="bi bi-person me-1"></i><?= htmlspecialchars($__u['name'], ENT_QUOTES, 'UTF-8') ?></span>
-        <a class="btn btn-sm btn-outline-secondary ms-2" href="/admin_login.php">Вход суперпользователя</a>
+        <span class="text-secondary small ms-2 d-none d-sm-inline text-truncate" style="max-width:130px"><i class="bi bi-person me-1"></i><?= htmlspecialchars($__u['name'], ENT_QUOTES, 'UTF-8') ?></span>
+        <a class="btn btn-sm btn-outline-secondary ms-2 d-none d-sm-inline-flex" href="/admin_login.php">Вход суперпользователя</a>
         <a class="btn btn-sm btn-outline-light ms-2" href="/logout.php">Выход</a>
       <?php endif; ?>
     </header>

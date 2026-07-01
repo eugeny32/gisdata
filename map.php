@@ -12,15 +12,15 @@ require __DIR__ . '/app/views/_head.php';
   <div class="card surface-card mb-3">
     <div class="card-body py-2">
       <div class="row g-2 align-items-center">
-        <div class="col-md-4">
+        <div class="col-6 col-md-4">
           <input type="text" id="stationSearch" class="form-control form-control-sm" placeholder="Поиск по названию...">
         </div>
-        <div class="col-md-3">
+        <div class="col-6 col-md-3">
           <select id="stationCodeFilter" class="form-select form-select-sm">
             <option value="">Все коды станций</option>
           </select>
         </div>
-        <div class="col-md-5 text-md-end small text-secondary">
+        <div class="col-12 col-md-5 text-md-end small text-secondary">
           Станций: <span id="countTotal">0</span>,
           онлайн: <span id="countOnline" class="text-success">0</span>,
           офлайн: <span id="countOffline" class="text-danger">0</span>
