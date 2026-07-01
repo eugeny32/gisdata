@@ -215,19 +215,8 @@ body {
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid rgba(255, 255, 255, .06);
 }
-@media (max-width: 576px) {
-  /* Bootstrap у .modal-dialog по умолчанию даёт margin: .5rem (8px) с
-     каждой стороны ДО применения нашей ширины — 96vw этот зазор не
-     учитывал, отсюда заметная несимметричная "недотяжка" до правого края
-     на скриншоте пользователя. margin: 0 здесь убирает именно это, а не
-     центрирование (центрирование — класс modal-dialog-centered, flex). */
-  .tour-viewer-dialog {
-    width: 99vw;
-    max-width: 99vw;
-    height: 96vh;
-    margin: 0 auto;
-  }
-}
+/* Мобильный override для .tour-viewer-dialog перенесён в блок
+   "@media (max-width: 575.98px)" ниже вместе с остальными xs-правилами. */
 
 /* --- Map --- */
 .map-card { border: none; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }
@@ -266,10 +255,9 @@ body {
    тёмной теме получается видимый шов между размытой карточкой и плоской
    таблицей внутри неё. Селектор бьёт собственную специфичность Bootstrap
    у ячеек (.table > :not(caption) > * > *), просто transparent не
-   перекрыл бы её. lass="table-hover" не используется (см. tours.php),
-   класс table-hover не используется (см. tours.php), поэтому подсветка
-   при наведении ниже — наша же лёгкая накладка, а не переопределение
-   чужой.
+   перекрыл бы её. class="table-hover" не используется (см. tours.php),
+   поэтому подсветка при наведении ниже — наша же лёгкая накладка, а не
+   переопределение чужой.
 */
 .table-clean,
 .table-clean > :not(caption) > * > * {

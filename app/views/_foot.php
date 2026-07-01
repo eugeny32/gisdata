@@ -27,11 +27,13 @@
       if (!sidebar) return;
       sidebar.classList.remove('sidebar-open');
       if (backdrop) backdrop.classList.remove('show');
+      document.body.style.overflow = '';
     }
     if (toggleBtn && sidebar) {
       toggleBtn.addEventListener('click', function () {
         var isOpen = sidebar.classList.toggle('sidebar-open');
         if (backdrop) backdrop.classList.toggle('show', isOpen);
+        document.body.style.overflow = isOpen ? 'hidden' : '';
       });
     }
     if (backdrop) backdrop.addEventListener('click', closeSidebar);

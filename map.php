@@ -23,7 +23,7 @@ require __DIR__ . '/app/views/_head.php';
         <div class="col-12 col-md-5 text-md-end small text-secondary">
           Станций: <span id="countTotal">0</span>,
           онлайн: <span id="countOnline" class="text-success">0</span>,
-          офлайн: <span id="countOffline" class="text-danger">0</span>
+          офлайн/unknown: <span id="countOffline" class="text-danger">0</span>
         </div>
       </div>
     </div>
@@ -518,6 +518,7 @@ async function loadTours() {
     // сработали бы оба, и цель тура сразу же сбросилась бы в null).
     marker.on('contextmenu', (e) => {
       L.DomEvent.stopPropagation(e);
+      contextLatLng = e.latlng; // нужно для "Добавить объект" из меню маркера
       showMapContextMenu(e.originalEvent, { id: t.id, name: t.name });
     });
     tourMarkers.push(marker);
@@ -965,6 +966,7 @@ document.getElementById('tourSelectedAnnoDeleteBtn')?.addEventListener('click', 
 });
 
 document.getElementById('tourLayersBtn').addEventListener('click', () => {
+  document.getElementById('tourSettingsPanel').classList.add('d-none');
   document.getElementById('tourLayersPanel').classList.toggle('d-none');
 });
 
@@ -1005,6 +1007,7 @@ function syncSettingsPanelFromViewer() {
 }
 
 document.getElementById('tourSettingsBtn').addEventListener('click', () => {
+  document.getElementById('tourLayersPanel').classList.add('d-none');
   syncSettingsPanelFromViewer();
   document.getElementById('tourSettingsPanel').classList.toggle('d-none');
 });

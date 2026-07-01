@@ -24,7 +24,7 @@ $pageIcon = 'bi-house';
 require __DIR__ . '/app/views/_head.php';
 ?>
   <div class="row g-3 mb-3">
-    <div class="col-12 col-sm-6 col-md-4">
+    <div class="col-6 col-md-4">
       <div class="card surface-card h-100">
         <div class="card-body">
           <div class="text-secondary small">Станций всего</div>
@@ -32,7 +32,7 @@ require __DIR__ . '/app/views/_head.php';
         </div>
       </div>
     </div>
-    <div class="col-6 col-sm-6 col-md-4">
+    <div class="col-6 col-md-4">
       <div class="card surface-card h-100">
         <div class="card-body">
           <div class="text-secondary small">Онлайн</div>
@@ -40,7 +40,7 @@ require __DIR__ . '/app/views/_head.php';
         </div>
       </div>
     </div>
-    <div class="col-6 col-sm-6 col-md-4">
+    <div class="col-6 col-md-4">
       <div class="card surface-card h-100">
         <div class="card-body">
           <div class="text-secondary small">Офлайн / неизвестно</div>
