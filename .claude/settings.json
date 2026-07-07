@@ -109,7 +109,8 @@
       "Bash(curl -s \"https://data.jsdelivr.com/v1/packages/npm/playcanvas@2.20.0\")",
       "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 ntrip.host \"echo ok\")",
       "Bash(scp -i ~/.ssh/gisdata_deploy \"C:\\\\Users\\\\admin\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-admin-Documents-GitHub-gisdata\\\\7cffd7a8-5b6a-4419-92c4-9bd36c307abb\\\\scratchpad\\\\test_settings.js\" admin@ntrip.host:test_settings.js)",
-      "Bash(timeout 20 ssh -i ~/.ssh/gisdata_deploy admin@ntrip.host \"powershell -NoProfile -Command \\\\\"& 'D:\\\\\\\\xaamp\\\\\\\\php\\\\\\\\php.exe' C:\\\\\\\\Users\\\\\\\\admin\\\\\\\\gen_session.php\\\\\"\")"
+      "Bash(timeout 20 ssh -i ~/.ssh/gisdata_deploy admin@ntrip.host \"powershell -NoProfile -Command \\\\\"& 'D:\\\\\\\\xaamp\\\\\\\\php\\\\\\\\php.exe' C:\\\\\\\\Users\\\\\\\\admin\\\\\\\\gen_session.php\\\\\"\")",
+      "Bash(timeout 40 ssh -i ~/.ssh/gisdata_deploy admin@ntrip.host \"powershell -NoProfile -Command \\\\\"& 'D:\\\\\\\\xaamp\\\\\\\\php\\\\\\\\php.exe' C:\\\\\\\\Users\\\\\\\\admin\\\\\\\\gen_session.php\\\\\"\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\admin"

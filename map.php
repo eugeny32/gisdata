@@ -1131,7 +1131,11 @@ tourModalEl.addEventListener('shown.bs.modal', () => {
   const sogUrls = pendingSogUrls;
   const collisionUrl = pendingCollisionUrl;
   pendingTourUrls = null;
-  window.TourViewer.load(currentTourUrls, modelType, copcUrls, sogUrls, collisionUrl);
+  // rAF даёт браузеру один кадр, чтобы вычислить layout контейнера
+  // (clientHeight = 0 если layout не готов → WebGL framebuffer 0×0)
+  requestAnimationFrame(() => {
+    window.TourViewer.load(currentTourUrls, modelType, copcUrls, sogUrls, collisionUrl);
+  });
 });
 
 document.getElementById('tourCenterBtn').addEventListener('click', () => {

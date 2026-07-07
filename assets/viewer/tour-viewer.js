@@ -5025,7 +5025,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     loaded.delete(key2);
   }
   function buildEntity(key2, node, positions, colors, intensityClass) {
-    if (!isCurrent()) return;
+    if (!isCurrent() || !app.graphicsDevice) return;
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
@@ -5096,6 +5096,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         console.error("COPC: не удалось загрузить узел", pending.key, error);
         return;
       }
+      if (!isCurrent()) return;
       if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
       const resolvedHasColor = hasColor ?? false;
       const cacheEntry = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };

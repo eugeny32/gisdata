@@ -289,6 +289,10 @@ CREATE TABLE IF NOT EXISTS station_status (
   CONSTRAINT fk_status_station FOREIGN KEY (station_id) REFERENCES stations(id) ON DELETE CASCADE
 );
 
+-- Пользователи, добавленные вручную через веб-форму (не из MDB).
+-- is_manual = 1: при синхронизации из MDB эта строка не перезатирается.
+ALTER TABLE users_sync ADD COLUMN IF NOT EXISTS is_manual SMALLINT NOT NULL DEFAULT 0;
+
 -- Резервный канал определения статуса — по наличию свежих файлов в
 -- каталоге станции на ftp://gnss.host (см. bin/poll_stations_ftp.php,
 -- запускается раз в час, в отличие от NTRIP-опроса раз в минуту).
