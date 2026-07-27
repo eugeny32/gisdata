@@ -1156,6 +1156,13 @@ tourModalEl.addEventListener('hidden.bs.modal', () => {
   document.getElementById('tourViewerContainer').innerHTML = '';
 });
 </script>
-<script type="module" src="/assets/viewer/tour-viewer.js"></script>
 HTML;
+// Cache-busting для бандла вьювера: тег вынесен из nowdoc и собирается с
+// ?v=filemtime — иначе браузер держит старый закэшированный tour-viewer.js
+// и изменения навигации/вьювера "не доезжают" до пользователя (тег грузится
+// как ES-модуль, а модули кэшируются агрессивно по URL). filemtime меняется
+// при каждой пересборке бандла, поэтому URL автоматически инвалидируется.
+$viewerBundle = __DIR__ . '/assets/viewer/tour-viewer.js';
+$viewerVer = @filemtime($viewerBundle) ?: time();
+$extraScripts .= '<script type="module" src="/assets/viewer/tour-viewer.js?v=' . $viewerVer . '"></script>';
 require __DIR__ . '/app/views/_foot.php';
