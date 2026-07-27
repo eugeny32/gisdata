@@ -121,10 +121,7 @@ export class OrbitController {
     } else {
       const k = 0.3 * cameraSettings.orbitSensitivity;
       this.yaw -= dx * k;
-      // Вертикаль инвертирована (+dy) по запросу пользователя: тянешь вниз —
-      // модель наклоняется К СЕБЕ (камера идёт вниз), а не от себя. Раньше
-      // было -dy (камера уходила вверх) — ощущалось как вращение "наоборот".
-      this.pitch = Math.max(-89, Math.min(89, this.pitch + dy * k));
+      this.pitch = Math.max(-89, Math.min(89, this.pitch - dy * k));
     }
     this.update();
   };
