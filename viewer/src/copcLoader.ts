@@ -252,7 +252,14 @@ export async function loadCopcPointCloud(
     colors: Uint8Array,
     intensityClass: Float32Array
   ): void {
-    if (!isCurrent()) return;
+    // !app.graphicsDevice — отдельная от isCurrent() проверка: между тем,
+    // как асинхронный колбэк (воркер/IndexedDB) был поставлен в очередь, и
+    // моментом, когда он реально вызвался, app.destroy() (disposeTourViewer)
+    // могло произойти в ТОМ ЖЕ поколении (generation не успел вырасти), но
+    // graphicsDevice у уничтоженного pc.Application уже null — без этой
+    // проверки new pc.Mesh(null) кидает исключение при быстром закрытии
+    // модалки во время догрузки узла.
+    if (!isCurrent() || !app.graphicsDevice) return;
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);

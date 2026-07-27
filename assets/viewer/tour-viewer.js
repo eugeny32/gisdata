@@ -5096,7 +5096,6 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         console.error("COPC: не удалось загрузить узел", pending.key, error);
         return;
       }
-      if (!isCurrent()) return;
       if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
       const resolvedHasColor = hasColor ?? false;
       const cacheEntry = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };
@@ -5407,7 +5406,7 @@ class OrbitController {
       } else {
         const k = 0.3 * cameraSettings.orbitSensitivity;
         this.yaw -= dx * k;
-        this.pitch = Math.max(-89, Math.min(89, this.pitch - dy * k));
+        this.pitch = Math.max(-89, Math.min(89, this.pitch + dy * k));
       }
       this.update();
     };
