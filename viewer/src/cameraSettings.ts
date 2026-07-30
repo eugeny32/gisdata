@@ -56,6 +56,14 @@ export interface CameraSettings {
   sectionEnabled: boolean;
   sectionNormal: [number, number, number];
   sectionD: number;
+  /** Экспозиция сцены (PlayCanvas app.scene.exposure, дефолт движка — 1) —
+   * прямой рычаг против "пересвеченных"/светящихся 3DGS-сплатов (частая
+   * жалоба на реальных сканах с яркими бликами/пересветом в исходных
+   * фото) — ниже 1 просто затемняет финальный рендер. Действует и на
+   * LAS/COPC тоже (это общий множитель яркости кадра, не свойство
+   * материала конкретного типа модели), но явно просили именно про
+   * "свечение сплатов". */
+  exposure: number;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -78,6 +86,7 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   sectionEnabled: false,
   sectionNormal: [1, 0, 0],
   sectionD: 0,
+  exposure: 1,
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

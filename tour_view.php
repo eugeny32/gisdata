@@ -85,6 +85,11 @@ $tourId = (int)($_GET['tour'] ?? $_GET['id'] ?? 0);
               <label class="form-label small mb-0">Угол обзора (FOV): <span id="tourSettingFovValue"></span>°</label>
               <input type="range" class="form-range" id="tourSettingFov" min="20" max="100" step="1">
             </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">Экспозиция (яркость/свечение): <span id="tourSettingExposureValue"></span></label>
+              <input type="range" class="form-range" id="tourSettingExposure" min="0.1" max="3" step="0.05">
+              <div class="small text-secondary">Ниже 1 — приглушает пересвеченные/светящиеся сплаты. Действует на всю сцену.</div>
+            </div>
             <div class="row g-2 mb-2">
               <div class="col-6">
                 <label class="form-label small mb-0">Near</label>
@@ -528,6 +533,8 @@ function syncSettingsPanelFromViewer() {
   const s = window.TourViewer.getSettings();
   document.getElementById('tourSettingFov').value = s.fov;
   document.getElementById('tourSettingFovValue').textContent = s.fov;
+  document.getElementById('tourSettingExposure').value = s.exposure;
+  document.getElementById('tourSettingExposureValue').textContent = s.exposure;
   document.getElementById('tourSettingNear').value = s.nearClip;
   document.getElementById('tourSettingFar').value = s.farClip;
   document.getElementById('tourSettingProjection').value = s.projection;
@@ -566,6 +573,10 @@ document.getElementById('tourSettingsBtn').addEventListener('click', () => {
 document.getElementById('tourSettingFov').addEventListener('input', (e) => {
   document.getElementById('tourSettingFovValue').textContent = e.target.value;
   window.TourViewer.setSettings({ fov: Number(e.target.value) });
+});
+document.getElementById('tourSettingExposure').addEventListener('input', (e) => {
+  document.getElementById('tourSettingExposureValue').textContent = e.target.value;
+  window.TourViewer.setSettings({ exposure: Number(e.target.value) });
 });
 document.getElementById('tourSettingNear').addEventListener('change', (e) => {
   window.TourViewer.setSettings({ nearClip: Number(e.target.value) });

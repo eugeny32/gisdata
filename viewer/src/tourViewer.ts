@@ -227,6 +227,7 @@ export async function loadTourScene(
       camComp.nearClip = settings.nearClip;
       camComp.farClip = settings.farClip;
       camComp.projection = settings.projection === 'orthographic' ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
+      app.scene.exposure = settings.exposure;
       for (const material of lasMaterials) {
         material.setParameter('uPointSize', settings.pointSizePx);
         setPointCloudColorMode(material, settings.colorMode);

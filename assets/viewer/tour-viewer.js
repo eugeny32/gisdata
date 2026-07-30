@@ -4887,7 +4887,8 @@ const DEFAULT_CAMERA_SETTINGS = {
   pointBudget: 1e7,
   sectionEnabled: false,
   sectionNormal: [1, 0, 0],
-  sectionD: 0
+  sectionD: 0,
+  exposure: 1
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -6006,6 +6007,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       camComp.nearClip = settings.nearClip;
       camComp.farClip = settings.farClip;
       camComp.projection = settings.projection === "orthographic" ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
+      app.scene.exposure = settings.exposure;
       for (const material of lasMaterials) {
         material.setParameter("uPointSize", settings.pointSizePx);
         setPointCloudColorMode(material, settings.colorMode);
