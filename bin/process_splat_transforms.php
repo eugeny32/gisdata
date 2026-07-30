@@ -23,6 +23,15 @@ require __DIR__ . '/../app/lib/cli.php';
 require_cli_or_token();
 
 const MAX_CONCURRENT = 10;
+// См. тот же механизм и то же обоснование в process_copc_conversions.php —
+// живой случай на проде: перезагрузка сервера убила все процессы node.exe
+// (splat-transform) прямо посреди конвертации, .sog.lock остались лежать
+// без единого шанса на finally (сам процесс, а не только его дочерние,
+// был убит перезагрузкой) — process_splat_transforms.php считал файлы
+// "уже конвертируются" и молча пропускал их бы вечно.
+const STALL_MINUTES = 120;
+const STARTUP_GRACE_MINUTES = 15;
+const MAX_STALL_RETRIES = 3;
 
 $uploadDir = realpath(__DIR__ . '/../uploads/tours') . DIRECTORY_SEPARATOR;
 $psScript = __DIR__ . '/splat_transform_worker.ps1';
@@ -40,6 +49,58 @@ foreach ($pdo->query("SELECT file_path FROM tour_files WHERE file_format = 'ply'
     $plyFiles[] = $row['file_path'];
 }
 $plyFiles = array_unique($plyFiles);
+
+// Проход 1: см. process_copc_conversions.php — та же логика обнаружения
+// зависших/осиротевших конвертаций, здесь для .sog вместо .copc.laz.
+foreach ($plyFiles as $relativePath) {
+    $base = $uploadDir . $relativePath;
+    $lockFile = $base . '.sog.lock';
+    if (!is_file($lockFile)) {
+        continue;
+    }
+    $tmpOutput = $base . '.converting.sog';
+    $progressFile = $base . '.sog.progress';
+    $retriesFile = $base . '.sog.stall_retries';
+
+    $currentSize = is_file($tmpOutput) ? filesize($tmpOutput) : null;
+    $prev = is_file($progressFile) ? json_decode((string)file_get_contents($progressFile), true) : null;
+
+    $stalled = false;
+    if ($currentSize === null) {
+        $lockAgeMin = (time() - filemtime($lockFile)) / 60;
+        if ($lockAgeMin > STARTUP_GRACE_MINUTES) {
+            $stalled = true;
+            cli_err("Завис (нет выходного файла спустя " . round($lockAgeMin) . " мин): $relativePath");
+        }
+    } elseif ($prev !== null && $currentSize <= $prev['size'] && (time() - $prev['at']) / 60 > STALL_MINUTES) {
+        $stalled = true;
+        cli_err("Завис (выходной файл не растёт дольше " . STALL_MINUTES . " мин): $relativePath");
+    }
+
+    if ($currentSize !== null && ($prev === null || $currentSize > $prev['size'])) {
+        file_put_contents($progressFile, json_encode(['size' => $currentSize, 'at' => time()]));
+    }
+
+    if (!$stalled) {
+        continue;
+    }
+
+    $retries = is_file($retriesFile) ? (int)file_get_contents($retriesFile) : 0;
+    @unlink($lockFile);
+    @unlink($tmpOutput);
+    @unlink($progressFile);
+    if ($retries + 1 >= MAX_STALL_RETRIES) {
+        file_put_contents(
+            $base . '.sog.error',
+            "Конвертация зависала $retries раз подряд (сервер перезапускался/процесс убит без завершения) — автоматические попытки остановлены, нужно разобраться вручную."
+        );
+        @unlink($retriesFile);
+        cli_err("$relativePath: превышен лимит автоповторов ($retries), помечен как .error");
+    } else {
+        file_put_contents($retriesFile, (string)($retries + 1));
+        cli_out("$relativePath: lock снят, будет перезапущен (попытка " . ($retries + 1) . "/" . MAX_STALL_RETRIES . ")");
+    }
+}
 
 $runningCount = 0;
 foreach ($plyFiles as $relativePath) {

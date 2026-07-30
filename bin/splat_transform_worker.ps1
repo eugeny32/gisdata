@@ -74,4 +74,11 @@ catch {
 }
 finally {
     if (Test-Path $LockFile) { Remove-Item $LockFile -Force -ErrorAction SilentlyContinue }
+    # Служебные файлы отслеживания зависаний (см. process_splat_transforms.php)
+    # — больше не нужны после ЛЮБОГО завершения (успех или явная ошибка),
+    # иначе остаются висеть мусором навсегда.
+    $progressFile = $OutputSog + ".progress"
+    $retriesFile = $OutputSog + ".stall_retries"
+    if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $retriesFile) { Remove-Item $retriesFile -Force -ErrorAction SilentlyContinue }
 }

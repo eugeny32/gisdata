@@ -40,12 +40,6 @@ try {
     }
 
     Move-Item -Path $tmpOutput -Destination $OutputCopc -Force
-    # Служебные файлы отслеживания зависаний (см. process_copc_conversions.php)
-    # — при успехе больше не нужны, иначе остаются висеть как мусор навсегда.
-    $progressFile = $OutputCopc + ".progress"
-    $retriesFile = $OutputCopc + ".stall_retries"
-    if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
-    if (Test-Path $retriesFile) { Remove-Item $retriesFile -Force -ErrorAction SilentlyContinue }
 }
 catch {
     $_.Exception.Message | Out-File -FilePath $ErrorFile -Encoding utf8
@@ -53,4 +47,11 @@ catch {
 }
 finally {
     if (Test-Path $LockFile) { Remove-Item $LockFile -Force -ErrorAction SilentlyContinue }
+    # Служебные файлы отслеживания зависаний (см. process_copc_conversions.php)
+    # — не нужны после ЛЮБОГО завершения (успех или явная ошибка), иначе
+    # остаются висеть мусором навсегда.
+    $progressFile = $OutputCopc + ".progress"
+    $retriesFile = $OutputCopc + ".stall_retries"
+    if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $retriesFile) { Remove-Item $retriesFile -Force -ErrorAction SilentlyContinue }
 }
