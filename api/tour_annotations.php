@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/../app/lib/auth.php';
+require __DIR__ . '/../app/lib/tours.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -8,9 +9,14 @@ $pdo = db();
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET') {
-    // Просмотр слоёв/аннотаций доступен любому залогиненному пользователю.
-    require_login();
     $tourId = (int)($_GET['tour_id'] ?? 0);
+    // Просмотр слоёв/аннотаций — любому залогиненному, либо анонимно, если
+    // именно этот тур опубликован по прямой ссылке (см. tour_view.php).
+    // Изменяющие действия ниже (POST) остаются admin-only ВСЕГДА — публичная
+    // ссылка даёт только просмотр, никогда редактирование.
+    if (!tour_is_public($tourId)) {
+        require_login();
+    }
 
     $layersStmt = $pdo->prepare('SELECT id, name, color, is_visible, sort_order FROM tour_layers WHERE tour_id = :tour_id ORDER BY sort_order, id');
     $layersStmt->execute(['tour_id' => $tourId]);

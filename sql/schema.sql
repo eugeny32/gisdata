@@ -217,6 +217,13 @@ ALTER TABLE tours DROP CONSTRAINT IF EXISTS fk_tour_user;
 ALTER TABLE tours ADD CONSTRAINT fk_tour_user FOREIGN KEY (created_by_user_id) REFERENCES users_sync(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_tours_created_by_user ON tours (created_by_user_id);
 
+-- is_public — тур доступен БЕЗ логина по прямой ссылке (tour_view.php,
+-- см. app/lib/tours.php/tour_is_public()). Отдельно от is_enabled (та
+-- управляет видимостью на карте для ЗАЛОГИНЕННЫХ) — публикация не должна
+-- тихо задеть карту, и наоборот; отключение тура (is_enabled=0) всегда
+-- отзывает и публичный доступ, даже если is_public остался 1.
+ALTER TABLE tours ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+
 -- ---------------------------------------------------------------------------
 -- Слои и аннотации (точки/линии/полигоны), нарисованные пользователем прямо
 -- на 3D-модели тура в map.php. Координаты — в локальном пространстве модели

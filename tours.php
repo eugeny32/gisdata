@@ -61,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lon         = (float)($_POST['lon'] ?? 0);
         $existingFileName = trim((string)($_POST['existing_file'] ?? ''));
         $isEnabled   = isset($_POST['is_enabled']) ? 1 : 0;
+        $isPublic    = isset($_POST['is_public']) ? 1 : 0;
         $groupIdRaw  = (string)($_POST['group_id'] ?? '');
         $newGroupName = trim((string)($_POST['new_group_name'] ?? ''));
 
@@ -177,37 +178,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($filePath !== null) {
                         $stmt = $pdo->prepare(
                             'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon,
-                                file_path=:file_path, file_format=:file_format, is_enabled=:is_enabled, group_id=:group_id
+                                file_path=:file_path, file_format=:file_format, is_enabled=:is_enabled,
+                                is_public=:is_public, group_id=:group_id
                              WHERE id=:id'
                         );
                         $stmt->execute([
                             'id' => $id, 'name' => $name, 'description' => $description ?: null,
                             'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
-                            'file_format' => $fileFormat, 'is_enabled' => $isEnabled, 'group_id' => $groupId,
+                            'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
+                            'is_public' => $isPublic, 'group_id' => $groupId,
                         ]);
                         // Новый набор файлов полностью заменяет старые доп. файлы тура.
                         $pdo->prepare('DELETE FROM tour_files WHERE tour_id = :id')->execute(['id' => $id]);
                     } else {
                         $stmt = $pdo->prepare(
-                            'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon, is_enabled=:is_enabled, group_id=:group_id
+                            'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon,
+                                is_enabled=:is_enabled, is_public=:is_public, group_id=:group_id
                              WHERE id=:id'
                         );
                         $stmt->execute([
                             'id' => $id, 'name' => $name, 'description' => $description ?: null,
-                            'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled, 'group_id' => $groupId,
+                            'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled,
+                            'is_public' => $isPublic, 'group_id' => $groupId,
                         ]);
                     }
                     $tourId = $id;
                 } else {
                     $stmt = $pdo->prepare(
-                        'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by, group_id)
-                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :created_by, :group_id)
+                        'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, is_public, created_by, group_id)
+                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :is_public, :created_by, :group_id)
                          RETURNING id'
                     );
                     $stmt->execute([
                         'name' => $name, 'description' => $description ?: null,
                         'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
-                        'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
+                        'file_format' => $fileFormat, 'is_enabled' => $isEnabled, 'is_public' => $isPublic,
                         'created_by' => $admin['id'], 'group_id' => $groupId,
                     ]);
                     $tourId = (int)$stmt->fetchColumn();
@@ -477,7 +482,7 @@ require __DIR__ . '/app/views/_head.php';
       <div class="table-responsive overflow-y-visible">
         <table class="table table-clean align-middle">
           <thead>
-            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>PostGIS</th><th></th></tr>
+            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>Публичный</th><th>PostGIS</th><th></th></tr>
           </thead>
           <tbody>
           <?php foreach ($group['tours'] as $t): ?>
@@ -497,6 +502,7 @@ require __DIR__ . '/app/views/_head.php';
                 <?php endif; ?>
               </td>
               <td><?= $t['is_enabled'] ? '<span class="badge text-bg-success">да</span>' : '<span class="badge text-bg-secondary">нет</span>' ?></td>
+              <td><?= $t['is_public'] ? '<span class="badge text-bg-info">да</span>' : '<span class="badge text-bg-secondary">нет</span>' ?></td>
               <td>
                 <?php if ($t['pg_synced_at']): ?>
                   <span class="badge text-bg-success" title="<?= htmlspecialchars($t['pg_connection_name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">выгружено <?= htmlspecialchars(substr($t['pg_synced_at'], 0, 16), ENT_QUOTES, 'UTF-8') ?></span>
@@ -589,6 +595,10 @@ require __DIR__ . '/app/views/_head.php';
             <div class="col-md-3 form-check mt-4">
               <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>>
               <label class="form-check-label" for="isEnabled">Показывать на карте</label>
+            </div>
+            <div class="col-md-3 form-check mt-4">
+              <input type="checkbox" name="is_public" class="form-check-input" id="isPublic" <?= !empty($edit['is_public']) ? 'checked' : '' ?>>
+              <label class="form-check-label" for="isPublic">Опубликован (ссылка без входа)</label>
             </div>
             <div class="col-md-6">
               <label class="form-label small">Группа</label>

@@ -1,9 +1,18 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/../app/lib/auth.php';
-require_login();
+require __DIR__ . '/../app/lib/tours.php';
 
 header('Content-Type: application/json; charset=utf-8');
+
+// Полный список (без ?id=) — всегда только для залогиненных, это карта
+// кабинета, а не публичная витрина. Единичный ?id= — без логина, если
+// именно ЭТОТ тур явно опубликован (см. tours.php/is_public) — так
+// tour_view.php по прямой ссылке может подтянуть данные тура анонимно.
+$publicRequestedId = isset($_GET['id']) ? (int)$_GET['id'] : null;
+if ($publicRequestedId === null || !tour_is_public($publicRequestedId)) {
+    require_login();
+}
 
 function tour_file_url(string $filePath): string
 {
@@ -45,7 +54,7 @@ $uploadDir = realpath(__DIR__ . '/../uploads/tours') . '/';
 $pdo = db();
 // ?id= — один тур по id (для tour_view.php, полноэкранного вьювера по
 // прямой ссылке); без параметра — весь список для карты, как раньше.
-$requestedId = isset($_GET['id']) ? (int)$_GET['id'] : null;
+$requestedId = $publicRequestedId;
 if ($requestedId !== null) {
     $stmt = $pdo->prepare(
         'SELECT id, name, description, lat, lon, file_path, file_format

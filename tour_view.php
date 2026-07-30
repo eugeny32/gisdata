@@ -1,10 +1,17 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/app/lib/auth.php';
-require_login();
-$isAdmin = (current_admin()['role'] ?? null) === 'admin';
+require __DIR__ . '/app/lib/tours.php';
 
 $tourId = (int)($_GET['tour'] ?? $_GET['id'] ?? 0);
+// Опубликованные туры (is_public, см. tours.php) открываются без входа —
+// "мы же расшариваем проект"; остальные — как раньше, только по логину.
+// Публичным посетителям (current_admin() всегда null) toolbar рисования
+// ниже не показывается — только просмотр, никогда редактирование.
+if (!tour_is_public($tourId)) {
+    require_login();
+}
+$isAdmin = (current_admin()['role'] ?? null) === 'admin';
 ?>
 <!doctype html>
 <html lang="ru">

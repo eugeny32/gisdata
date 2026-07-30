@@ -1,10 +1,16 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/app/lib/auth.php';
-require_login();
+require __DIR__ . '/app/lib/tours.php';
+
+$tourId = (int)($_GET['tour_id'] ?? 0);
+// Экспорт DXF — та же логика доступа, что и сам просмотр (tour_view.php):
+// без логина, если тур явно опубликован по прямой ссылке.
+if (!tour_is_public($tourId)) {
+    require_login();
+}
 
 $pdo = db();
-$tourId = (int)($_GET['tour_id'] ?? 0);
 
 $tourStmt = $pdo->prepare('SELECT name FROM tours WHERE id = :id');
 $tourStmt->execute(['id' => $tourId]);
