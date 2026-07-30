@@ -1,5 +1,6 @@
 import type { PcModule } from './types';
 import { AXIS_FIX_ROTATION } from './constants';
+import type { CopcStreamHandle } from './copcLoader';
 
 /**
  * Рисование векторных аннотаций (точка/линия/полигон) прямо на 3D-модели
@@ -74,6 +75,16 @@ export function createAnnotationManager(pc: PcModule, app: InstanceType<PcModule
     pickSphere = { center: center.clone(), radius: Math.max(radius, 1e-3) };
   }
 
+  // COPC-облака (точки, не сплаты) — реальный пикинг по загруженным точкам
+  // (см. copcLoader.ts/pickNearestPoint), точнее приближающей сферы ниже.
+  // Пусто для сплат-туров и для LAS-туров без готового COPC (там остаётся
+  // только сфера — см. pickPoint).
+  let copcHandles: CopcStreamHandle[] = [];
+
+  function setCopcHandles(handles: CopcStreamHandle[]): void {
+    copcHandles = handles;
+  }
+
   function setLayers(next: AnnotationLayerData[]): void {
     layers = next;
   }
@@ -134,16 +145,37 @@ export function createAnnotationManager(pc: PcModule, app: InstanceType<PcModule
   }
   app.on('update', renderFrame);
 
-  /** Луч из камеры через экранную точку (clientX/clientY canvas-страницы) —
-   * пересечение с pickSphere, ближняя точка. Возвращает координаты в
-   * ЛОКАЛЬНОМ пространстве модели (готовые для сохранения через API), либо
-   * null, если луч мимо сферы/модель ещё не загружена. */
+  /** Луч из камеры через экранную точку (clientX/clientY canvas-страницы).
+   * Для COPC-облаков (copcHandles непусто) — точный пикинг по реально
+   * загруженным точкам (см. copcLoader.ts/pickNearestPoint); при нескольких
+   * файлах в туре берётся хит, ближайший к камере. Иначе (сплаты, LAS без
+   * готового COPC) — приближение через pickSphere, см. комментарий ниже.
+   * Возвращает координаты в ЛОКАЛЬНОМ пространстве модели (готовые для
+   * сохранения через API), либо null, если ни один способ не дал хита. */
   function pickPoint(
     camera: InstanceType<PcModule['Entity']>,
     canvas: HTMLCanvasElement,
     clientX: number,
     clientY: number
   ): [number, number, number] | null {
+    if (copcHandles.length) {
+      let best: InstanceType<PcModule['Vec3']> | null = null;
+      let bestDistSq = Infinity;
+      for (const handle of copcHandles) {
+        const hit = handle.pickNearestPoint(camera, canvas, clientX, clientY);
+        if (!hit) continue;
+        const distSq = hit.clone().sub(camera.getPosition()).lengthSq();
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = hit;
+        }
+      }
+      if (best) return worldToLocal(best);
+      // Ни одна загруженная точка не попала под курсор (мимо модели, или в
+      // этом месте ещё ничего не подгружено) -- сфера ниже как минимум
+      // вернёт null тоже в большинстве таких случаев, но пусть отработает
+      // как обычно, а не молча даёт неверный хит.
+    }
     if (!pickSphere) return null;
     const rect = canvas.getBoundingClientRect();
     const px = ((clientX - rect.left) / rect.width) * canvas.clientWidth;
@@ -241,7 +273,7 @@ export function createAnnotationManager(pc: PcModule, app: InstanceType<PcModule
     app.off('update', renderFrame);
   }
 
-  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
+  return { setPickSphere, setCopcHandles, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
 }
 
 export type AnnotationManager = ReturnType<typeof createAnnotationManager>;

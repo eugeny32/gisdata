@@ -43,11 +43,24 @@ function tour_collision_url(string $filePath, string $uploadDir): ?string
 $uploadDir = realpath(__DIR__ . '/../uploads/tours') . '/';
 
 $pdo = db();
-$rows = $pdo->query(
-    'SELECT id, name, description, lat, lon, file_path, file_format
-     FROM tours
-     WHERE is_enabled = 1'
-)->fetchAll();
+// ?id= — один тур по id (для tour_view.php, полноэкранного вьювера по
+// прямой ссылке); без параметра — весь список для карты, как раньше.
+$requestedId = isset($_GET['id']) ? (int)$_GET['id'] : null;
+if ($requestedId !== null) {
+    $stmt = $pdo->prepare(
+        'SELECT id, name, description, lat, lon, file_path, file_format
+         FROM tours
+         WHERE is_enabled = 1 AND id = :id'
+    );
+    $stmt->execute(['id' => $requestedId]);
+    $rows = $stmt->fetchAll();
+} else {
+    $rows = $pdo->query(
+        'SELECT id, name, description, lat, lon, file_path, file_format
+         FROM tours
+         WHERE is_enabled = 1'
+    )->fetchAll();
+}
 
 $extraStmt = $pdo->prepare('SELECT file_path FROM tour_files WHERE tour_id = :id ORDER BY sort_order');
 

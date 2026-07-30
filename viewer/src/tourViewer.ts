@@ -424,6 +424,10 @@ export async function loadTourScene(
       recenter();
       const sphere = orbit.getHomeSphere();
       annotations.setPickSphere(sphere.center, sphere.radius);
+      // COPC-туры (реальные точки) — точный пикинг вместо сферы, см.
+      // annotations.ts/pickPoint. Пусто для сплатов/legacy LAS без COPC —
+      // там остаётся только сфера.
+      annotations.setCopcHandles(copcHandles);
     }
     hideProgress();
   } catch (e) {

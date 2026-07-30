@@ -124,6 +124,9 @@ require __DIR__ . '/app/views/_head.php';
         <div class="modal-header">
           <h5 class="modal-title" id="tourViewerTitle">Тур</h5>
           <div class="d-flex align-items-center gap-2 ms-auto">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="tourShareBtn" title="Скопировать ссылку на полноэкранный просмотр тура">
+              <i class="bi bi-share"></i>
+            </button>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="tourLayersBtn" title="Слои">
               <i class="bi bi-layers"></i>
             </button>
@@ -1109,6 +1112,43 @@ document.getElementById('tourHelpBtn').addEventListener('click', () => {
   document.getElementById('tourMouseHelp').classList.toggle('d-none');
 });
 
+// Ссылка на полноэкранный просмотр этого тура (tour_view.php) — отдельная
+// страница без карты/сайдбара/навигации, только сам вьювер + инструменты
+// (см. tour_view.php). copy() с fallback на execCommand — navigator.
+// clipboard.writeText требует secure context (HTTPS/localhost), на обычном
+// http:// он просто недоступен (undefined), а не бросает исключение.
+document.getElementById('tourShareBtn').addEventListener('click', async (e) => {
+  if (!currentTourId) return;
+  const url = location.origin + '/tour_view.php?tour=' + currentTourId;
+  const btn = e.currentTarget;
+  const icon = btn.querySelector('i');
+  async function copy(text) {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) { /* переходим к fallback ниже */ }
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  const ok = await copy(url);
+  icon.className = ok ? 'bi bi-check-lg' : 'bi bi-exclamation-triangle';
+  btn.title = ok ? 'Ссылка скопирована' : 'Не удалось скопировать — вот ссылка: ' + url;
+  setTimeout(() => {
+    icon.className = 'bi bi-share';
+    btn.title = 'Скопировать ссылку на полноэкранный просмотр тура';
+  }, 2000);
+});
+
 tourModalEl.addEventListener('shown.bs.modal', () => {
   // Подсказку по управлению показываем сразу при открытии тура, чтобы
   // пользователь увидел её без лишнего клика — скрыть можно той же кнопкой.
@@ -1156,6 +1196,13 @@ tourModalEl.addEventListener('hidden.bs.modal', () => {
   document.getElementById('tourViewerContainer').innerHTML = '';
 });
 </script>
-<script type="module" src="/assets/viewer/tour-viewer.js"></script>
 HTML;
+// Cache-busting для бандла вьювера: тег вынесен из nowdoc и собирается с
+// ?v=filemtime — иначе браузер держит старый закэшированный tour-viewer.js
+// и правки вьювера (например, точность привязки рисования к облаку точек)
+// не доезжают до пользователя. filemtime меняется при каждой пересборке
+// бандла, поэтому URL автоматически инвалидируется.
+$viewerBundle = __DIR__ . '/assets/viewer/tour-viewer.js';
+$viewerVer = @filemtime($viewerBundle) ?: time();
+$extraScripts .= '<script type="module" src="/assets/viewer/tour-viewer.js?v=' . $viewerVer . '"></script>';
 require __DIR__ . '/app/views/_foot.php';

@@ -118,6 +118,17 @@ export interface CopcStreamHandle {
   /** Для индикатора стриминга (PR8) — текущее число загруженных узлов/точек,
    * без дополнительных вычислений (просто читает уже посчитанные суммы). */
   getStats(): { loadedNodes: number; loadedPoints: number };
+  /** Точный пикинг по РЕАЛЬНО загруженным точкам (не по грубой сфере
+   * кадрирования, см. annotations.ts) — для привязки рисуемой геометрии к
+   * поверхности облака. null, если луч не прошёл рядом ни с одной точкой
+   * (мимо модели, или в этом месте ничего ещё не подгружено). Возвращает
+   * МИРОВУЮ точку — как и остальной picking в annotations.ts. */
+  pickNearestPoint(
+    camera: InstanceType<PcModule['Entity']>,
+    canvas: HTMLCanvasElement,
+    clientX: number,
+    clientY: number
+  ): InstanceType<PcModule['Vec3']> | null;
   dispose(): void;
 }
 
@@ -143,7 +154,14 @@ export async function loadCopcPointCloud(
   const absoluteUrl = new URL(url, window.location.origin).toString();
   showProgress('Загрузка заголовка COPC...', 0);
   const copc = await Copc.create(absoluteUrl);
-  if (!isCurrent()) return { refresh: () => {}, dispose: () => {}, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
+  if (!isCurrent()) {
+    return {
+      refresh: () => {},
+      dispose: () => {},
+      getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }),
+      pickNearestPoint: () => null,
+    };
+  }
 
   const cube = copc.info.cube as Cube;
   // ВАЖНО: copc.info.cube — это корень octree, ДОПОЛНЕННЫЙ до правильного
@@ -197,7 +215,14 @@ export async function loadCopcPointCloud(
   const rootPage = await Copc.loadHierarchyPage(absoluteUrl, copc.info.rootHierarchyPage);
   nodes = { ...nodes, ...rootPage.nodes };
   pages = { ...pages, ...rootPage.pages };
-  if (!isCurrent()) return { refresh: () => {}, dispose: () => {}, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
+  if (!isCurrent()) {
+    return {
+      refresh: () => {},
+      dispose: () => {},
+      getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }),
+      pickNearestPoint: () => null,
+    };
+  }
 
   const loaded = new Map<string, LoadedNode>();
   const pendingKeys = new Set<string>();
@@ -597,6 +622,76 @@ export async function loadCopcPointCloud(
     return { loadedNodes: loaded.size, loadedPoints };
   }
 
+  // Тот же поворот, что и у root (см. root.setLocalRotation ниже) — берём
+  // его напрямую из константы, а не через root.getRotation()/getEulerAngles
+  // (не хотим зависеть от точного имени геттера PlayCanvas; конструктор
+  // Entity гарантированно принимает именно этот кватернион, вот и обратный
+  // строим из него же).
+  const axisFixInv = new pc.Quat(...(AXIS_FIX_ROTATION as [number, number, number, number])).clone().invert();
+
+  function pickNearestPoint(
+    camera: InstanceType<PcModule['Entity']>,
+    canvas: HTMLCanvasElement,
+    clientX: number,
+    clientY: number
+  ): InstanceType<PcModule['Vec3']> | null {
+    const rect = canvas.getBoundingClientRect();
+    const px = ((clientX - rect.left) / rect.width) * canvas.clientWidth;
+    const py = ((clientY - rect.top) / rect.height) * canvas.clientHeight;
+    const camComp: any = (camera as any).camera;
+    const nearWorld = camComp.screenToWorld(px, py, camComp.nearClip);
+    const farWorld = camComp.screenToWorld(px, py, camComp.farClip);
+
+    // Луч -> локальное пространство узлов (то же самое пространство, в
+    // котором лежат сырые positions из воркера, ДО поворота root) — root
+    // это чистый поворот без translate/scale, так что вектора достаточно
+    // повернуть, не умножая КАЖДУЮ точку на полную матрицу в горячем цикле.
+    const rayOrigin = axisFixInv.transformVector(nearWorld.clone());
+    const rayDir = axisFixInv.transformVector(farWorld.clone().sub(nearWorld)).normalize();
+
+    // Порог "достаточно близко к лучу" считается в пикселях экрана и
+    // переводится в мировые единицы ОТДЕЛЬНО для каждой точки через её t
+    // (расстояние вдоль луча) — иначе один фиксированный мировой допуск был
+    // бы то слишком узким (далёкие точки), то слишком широким (близкие),
+    // в зависимости от того, насколько камера приближена к модели.
+    const fovRad = (camComp.fov * Math.PI) / 180;
+    const screenHeight = app.graphicsDevice.height || 1;
+    const worldPerPixelAtT = (t: number) => (2 * t * Math.tan(fovRad / 2)) / screenHeight;
+    const PICK_RADIUS_PX = 10;
+
+    let bestT = Infinity;
+    let bestLocal: [number, number, number] | null = null;
+
+    for (const [key, entry] of loaded) {
+      // "Скелет" вне фрустума скрыт (entity.enabled = false, см. doRefresh)
+      // — невидимые точки не должны ловить клики.
+      if (!entry.entity.enabled) continue;
+      const cached = dataCache.get(key);
+      if (!cached) continue;
+      const pos = cached.positions;
+      const n = pos.length / 3;
+      for (let i = 0; i < n; i++) {
+        const qx = pos[i * 3] - rayOrigin.x;
+        const qy = pos[i * 3 + 1] - rayOrigin.y;
+        const qz = pos[i * 3 + 2] - rayOrigin.z;
+        const t = qx * rayDir.x + qy * rayDir.y + qz * rayDir.z;
+        if (t < 0 || t >= bestT) continue; // за камерой, или заведомо не ближе уже найденного
+        const perpX = qx - rayDir.x * t;
+        const perpY = qy - rayDir.y * t;
+        const perpZ = qz - rayDir.z * t;
+        const perpSq = perpX * perpX + perpY * perpY + perpZ * perpZ;
+        const maxPerp = worldPerPixelAtT(t) * PICK_RADIUS_PX;
+        if (perpSq <= maxPerp * maxPerp) {
+          bestT = t;
+          bestLocal = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
+        }
+      }
+    }
+
+    if (!bestLocal) return null;
+    return root.getWorldTransform().transformPoint(new pc.Vec3(bestLocal[0], bestLocal[1], bestLocal[2]));
+  }
+
   showProgress('COPC: подгрузка по области видимости...', 100);
-  return { refresh, dispose, getStats };
+  return { refresh, dispose, getStats, pickNearestPoint };
 }

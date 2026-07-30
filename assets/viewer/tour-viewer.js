@@ -4958,9 +4958,16 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const absoluteUrl = new URL(url, window.location.origin).toString();
   showProgress("Загрузка заголовка COPC...", 0);
   const copc2 = await lib.Copc.create(absoluteUrl);
-  if (!isCurrent()) return { refresh: () => {
-  }, dispose: () => {
-  }, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
+  if (!isCurrent()) {
+    return {
+      refresh: () => {
+      },
+      dispose: () => {
+      },
+      getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }),
+      pickNearestPoint: () => null
+    };
+  }
   const cube2 = copc2.info.cube;
   const dataMin = copc2.header.min;
   const dataMax = copc2.header.max;
@@ -4995,9 +5002,16 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
   const rootPage = await lib.Copc.loadHierarchyPage(absoluteUrl, copc2.info.rootHierarchyPage);
   nodes = { ...nodes, ...rootPage.nodes };
   pages = { ...pages, ...rootPage.pages };
-  if (!isCurrent()) return { refresh: () => {
-  }, dispose: () => {
-  }, getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }) };
+  if (!isCurrent()) {
+    return {
+      refresh: () => {
+      },
+      dispose: () => {
+      },
+      getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }),
+      pickNearestPoint: () => null
+    };
+  }
   const loaded = /* @__PURE__ */ new Map();
   const pendingKeys = /* @__PURE__ */ new Set();
   let hasColorDecided = null;
@@ -5025,7 +5039,7 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     loaded.delete(key2);
   }
   function buildEntity(key2, node, positions, colors, intensityClass) {
-    if (!isCurrent() || !app.graphicsDevice) return;
+    if (!isCurrent()) return;
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
@@ -5096,7 +5110,6 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
         console.error("COPC: не удалось загрузить узел", pending.key, error);
         return;
       }
-      if (!isCurrent()) return;
       if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
       const resolvedHasColor = hasColor ?? false;
       const cacheEntry = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };
@@ -5262,8 +5275,50 @@ async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCame
     for (const entry of loaded.values()) loadedPoints += entry.pointCount;
     return { loadedNodes: loaded.size, loadedPoints };
   }
+  const axisFixInv = new pc.Quat(...AXIS_FIX_ROTATION).clone().invert();
+  function pickNearestPoint(camera, canvas, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
+    const py = (clientY - rect.top) / rect.height * canvas.clientHeight;
+    const camComp = camera.camera;
+    const nearWorld = camComp.screenToWorld(px, py, camComp.nearClip);
+    const farWorld = camComp.screenToWorld(px, py, camComp.farClip);
+    const rayOrigin = axisFixInv.transformVector(nearWorld.clone());
+    const rayDir = axisFixInv.transformVector(farWorld.clone().sub(nearWorld)).normalize();
+    const fovRad = camComp.fov * Math.PI / 180;
+    const screenHeight = app.graphicsDevice.height || 1;
+    const worldPerPixelAtT = (t) => 2 * t * Math.tan(fovRad / 2) / screenHeight;
+    const PICK_RADIUS_PX = 10;
+    let bestT = Infinity;
+    let bestLocal = null;
+    for (const [key2, entry] of loaded) {
+      if (!entry.entity.enabled) continue;
+      const cached = dataCache.get(key2);
+      if (!cached) continue;
+      const pos = cached.positions;
+      const n = pos.length / 3;
+      for (let i = 0; i < n; i++) {
+        const qx = pos[i * 3] - rayOrigin.x;
+        const qy = pos[i * 3 + 1] - rayOrigin.y;
+        const qz = pos[i * 3 + 2] - rayOrigin.z;
+        const t = qx * rayDir.x + qy * rayDir.y + qz * rayDir.z;
+        if (t < 0 || t >= bestT) continue;
+        const perpX = qx - rayDir.x * t;
+        const perpY = qy - rayDir.y * t;
+        const perpZ = qz - rayDir.z * t;
+        const perpSq = perpX * perpX + perpY * perpY + perpZ * perpZ;
+        const maxPerp = worldPerPixelAtT(t) * PICK_RADIUS_PX;
+        if (perpSq <= maxPerp * maxPerp) {
+          bestT = t;
+          bestLocal = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
+        }
+      }
+    }
+    if (!bestLocal) return null;
+    return root.getWorldTransform().transformPoint(new pc.Vec3(bestLocal[0], bestLocal[1], bestLocal[2]));
+  }
   showProgress("COPC: подгрузка по области видимости...", 100);
-  return { refresh, dispose, getStats };
+  return { refresh, dispose, getStats, pickNearestPoint };
 }
 async function loadCollisionMesh(pc, app, url) {
   var _a;
@@ -5699,6 +5754,10 @@ function createAnnotationManager(pc, app) {
   function setPickSphere(center, radius) {
     pickSphere = { center: center.clone(), radius: Math.max(radius, 1e-3) };
   }
+  let copcHandles = [];
+  function setCopcHandles(handles) {
+    copcHandles = handles;
+  }
   function setLayers(next) {
     layers = next;
   }
@@ -5750,6 +5809,20 @@ function createAnnotationManager(pc, app) {
   }
   app.on("update", renderFrame);
   function pickPoint(camera, canvas, clientX, clientY) {
+    if (copcHandles.length) {
+      let best = null;
+      let bestDistSq = Infinity;
+      for (const handle of copcHandles) {
+        const hit2 = handle.pickNearestPoint(camera, canvas, clientX, clientY);
+        if (!hit2) continue;
+        const distSq = hit2.clone().sub(camera.getPosition()).lengthSq();
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = hit2;
+        }
+      }
+      if (best) return worldToLocal(best);
+    }
     if (!pickSphere) return null;
     const rect = canvas.getBoundingClientRect();
     const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
@@ -5814,7 +5887,7 @@ function createAnnotationManager(pc, app) {
   function dispose() {
     app.off("update", renderFrame);
   }
-  return { setPickSphere, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
+  return { setPickSphere, setCopcHandles, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
 }
 function escapeHtml(s) {
   const div = document.createElement("div");
@@ -6118,6 +6191,7 @@ async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], colli
       recenter();
       const sphere = orbit.getHomeSphere();
       annotations.setPickSphere(sphere.center, sphere.radius);
+      annotations.setCopcHandles(copcHandles);
     }
     hideProgress();
   } catch (e) {
