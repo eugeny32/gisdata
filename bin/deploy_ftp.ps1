@@ -72,6 +72,22 @@ if ($lastDeployed) {
 
 $files = $files | Where-Object { $_ -notmatch '^\.claude/' } | Where-Object { Test-Path $_ }
 
+# `git status --porcelain` reports a wholly untracked directory as a single
+# "?? dir/" entry, not one line per file inside it (e.g. a brand new slam/
+# subtree) -- curl -T later expects individual files, so expand any
+# directory entries into their tracked+untracked (non-ignored) files here.
+# node_modules/ is already in .gitignore, so it's excluded automatically --
+# dependencies are npm-installed on the server, never uploaded from here.
+$expanded = @()
+foreach ($f in $files) {
+    if (Test-Path $f -PathType Container) {
+        $expanded += git ls-files --others --exclude-standard --cached -- $f
+    } else {
+        $expanded += $f
+    }
+}
+$files = $expanded | Select-Object -Unique
+
 if ($files.Count -eq 0) {
     Write-Output "Nothing changed since the last deploy ($lastDeployed) - nothing to upload."
     exit 0

@@ -3,9 +3,12 @@ import { createNavCubeGizmo } from './gizmo';
 import { loadSplatFiles } from './splatLoader';
 import { loadLasFiles } from './lasLoader';
 import { loadCopcPointCloud, type CopcStreamHandle } from './copcLoader';
+import { loadCollisionMesh, type CollisionMesh } from './collisionMesh';
+import { setPointCloudColorMode, setPointCloudClip, setPointCloudSection } from './pointCloudMaterial';
 import { cameraSettings, onCameraSettingsChange, type CameraSettings } from './cameraSettings';
 import { OrbitController } from './navigation/orbitController';
 import { FlyController } from './navigation/flyController';
+import { createAnnotationManager, type AnnotationLayerData, type VertexHit, type AnnotationManager } from './annotations';
 
 /** Минимальный HTML-escape для сообщения об ошибке — дублирует
  * escapeHtml() из map.php намеренно: модуль не должен тянуться в global
@@ -41,6 +44,11 @@ interface PcAppWithGisdata {
   unsubscribeSettings: () => void;
   detachNavigation: () => void;
   copcHandles: CopcStreamHandle[];
+  collisionMesh: CollisionMesh | null;
+  splatObjectUrls: string[];
+  annotations: AnnotationManager;
+  camera: InstanceType<PcModule['Entity']>;
+  canvas: HTMLCanvasElement;
 }
 
 let currentApp: PcAppWithGisdata | null = null;
@@ -54,6 +62,12 @@ export function disposeTourViewer(): void {
     entry.unsubscribeSettings();
     entry.detachNavigation();
     for (const handle of entry.copcHandles) handle.dispose();
+    entry.collisionMesh?.dispose();
+    // blob:-URL из splatCache.ts (resolveSplatUrl) — данные уже отдельно
+    // лежат в Cache Storage, эти объекты — просто временная ручка
+    // браузерной памяти на время жизни ЭТОГО pc.Application.
+    for (const url of entry.splatObjectUrls) URL.revokeObjectURL(url);
+    entry.annotations.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -66,13 +80,50 @@ export function recenterTourCamera(): void {
   currentApp.recenter();
 }
 
+/** Точка на поверхности модели под курсором (приближённо, см. annotations.ts)
+ * — в локальных координатах модели (готово для сохранения через
+ * api/tour_annotations.php), либо null (модель не загружена/курсор мимо). */
+export function pickTourPoint(clientX: number, clientY: number): [number, number, number] | null {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+
+/** Точная горизонтальная проекция клика (для сечения по линии, см.
+ * annotations.ts/pickGroundPoint) — не зависит от приближения по сфере. */
+export function pickTourGroundPoint(clientX: number, clientY: number): [number, number, number] | null {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickGroundPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+
+/** Существующая вершина аннотации под курсором (для редактирования) —
+ * см. annotations.ts. */
+export function pickTourAnnotationVertex(clientX: number, clientY: number): VertexHit | null {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickVertex(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+
+export function setTourAnnotationLayers(layers: AnnotationLayerData[]): void {
+  if (!currentApp) return;
+  currentApp.annotations.setLayers(layers);
+}
+
+export function setTourDrawingPreview(points: [number, number, number][] | null, color: string): void {
+  if (!currentApp) return;
+  currentApp.annotations.setDrawingPreview(points, color);
+}
+
 export async function loadTourScene(
   urls: string[],
   modelType: ModelType,
   /** Параллельный urls массив той же длины — элемент не null, если для
    * этого файла уже готов потоковый .copc.laz (см. api/tours.php, PR4).
    * Файлы без готового COPC грузятся старым полным lasLoader.ts. */
-  copcUrls: (string | null)[] = []
+  copcUrls: (string | null)[] = [],
+  /** То же самое для .sog (PR5) — параллельно urls, для сплат-туров. */
+  sogUrls: (string | null)[] = [],
+  /** Коллайдер для Walk-режима (PR5) — берётся только у первого файла
+   * тура, как и центрирование/distance (см. loadSplatFiles ниже). */
+  collisionUrl: string | null = null
 ): Promise<void> {
   hideViewerError();
   generation++;
@@ -88,6 +139,10 @@ export async function loadTourScene(
   canvas.style.width = '100%';
   canvas.style.height = '100%';
   canvas.style.display = 'block';
+  // Без этого браузер на тач-устройствах сам обрабатывает свайп/pinch как
+  // скролл/масштаб страницы — конкурирует с нашими pointer-обработчиками
+  // (PR8, мобильный проход, см. OrbitController.touchPoints).
+  canvas.style.touchAction = 'none';
   container.appendChild(canvas);
 
   const progressWrap = document.createElement('div');
@@ -109,6 +164,22 @@ export async function loadTourScene(
   function hideProgress(): void {
     progressWrap.remove();
   }
+
+  // Индикатор FPS/памяти/стриминга (PR8) — создаём элемент сразу, прячем
+  // через CSS (cameraSettings.showStats), а не condicional-рендер, чтобы
+  // не плодить лишний DOM-код на каждое включение/выключение.
+  const statsOverlay = document.createElement('div');
+  statsOverlay.className = 'position-absolute bottom-0 end-0 m-2 p-2 rounded';
+  statsOverlay.style.zIndex = '1090';
+  statsOverlay.style.background = 'rgba(0,0,0,.6)';
+  statsOverlay.style.color = '#bbb';
+  statsOverlay.style.fontSize = '11px';
+  statsOverlay.style.fontFamily = 'monospace';
+  statsOverlay.style.lineHeight = '1.4';
+  statsOverlay.style.pointerEvents = 'none';
+  statsOverlay.style.whiteSpace = 'pre';
+  statsOverlay.style.display = cameraSettings.showStats ? 'block' : 'none';
+  container.appendChild(statsOverlay);
 
   try {
     // Динамический import — ленивая загрузка движка, только когда
@@ -156,10 +227,14 @@ export async function loadTourScene(
       camComp.nearClip = settings.nearClip;
       camComp.farClip = settings.farClip;
       camComp.projection = settings.projection === 'orthographic' ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
+      app.scene.exposure = settings.exposure;
       for (const material of lasMaterials) {
         material.setParameter('uPointSize', settings.pointSizePx);
-        material.update();
+        setPointCloudColorMode(material, settings.colorMode);
+        setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
+        setPointCloudSection(material, settings.sectionEnabled, settings.sectionNormal, settings.sectionD);
       }
+      statsOverlay.style.display = settings.showStats ? 'block' : 'none';
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === 'orbit') orbit.update();
     }
@@ -170,16 +245,27 @@ export async function loadTourScene(
     const gizmo = createNavCubeGizmo(pc, app);
     const orbit = new OrbitController(pc, camera, gizmo);
     const fly = new FlyController(pc, camera, gizmo);
+    const annotations = createAnnotationManager(pc, app);
 
-    // 'walk' зарезервирован под PR5 (коллизии через -K-коллайдер из
-    // splat-transform) — пока молча работает как 'fly' (см. cameraSettings.ts).
+    // FlyController обслуживает и 'fly', и 'walk' — различие только в том,
+    // выставлен ли fly.collisionMesh (см. updateFlyCollision ниже). 'walk'
+    // без загруженного коллайдера (тур без сплатов/без готового .collision.glb)
+    // молча работает как обычный полёт без коллизий.
     let activeMode: 'orbit' | 'fly' = cameraSettings.navigationMode === 'orbit' ? 'orbit' : 'fly';
+    let requestedMode: 'orbit' | 'fly' | 'walk' = cameraSettings.navigationMode;
+    let collisionMesh: CollisionMesh | null = null;
+
+    function updateFlyCollision(): void {
+      fly.collisionMesh = requestedMode === 'walk' ? collisionMesh : null;
+    }
 
     function syncFlyFromOrbit(): void {
       fly.syncFrom(camera.getPosition(), orbit.yaw, orbit.pitch);
     }
 
     function setNavigationModeInternal(mode: 'orbit' | 'fly' | 'walk'): void {
+      requestedMode = mode;
+      updateFlyCollision();
       const next = mode === 'orbit' ? 'orbit' : 'fly';
       if (next === activeMode) return;
       if (activeMode === 'orbit') orbit.detach();
@@ -200,19 +286,42 @@ export async function loadTourScene(
       fly.attach(canvas);
     }
 
-    /** "Центрировать" — независимо от текущего режима возвращает камеру к
-     * виду по умолчанию (target/distance/yaw/pitch орбиты для этой модели);
-     * если активен полёт — синхронизирует его состояние с этим видом, чтобы
-     * WASD продолжил движение от свежей позиции, а не от старой. */
+    /** "Центрировать" (Home) — независимо от текущего режима возвращает
+     * камеру к ИСХОДНОМУ виду модели (см. OrbitController.resetToHome —
+     * раньше здесь был orbit.update(), который просто пересчитывал ТЕКУЩЕЕ,
+     * уже смещённое панорамированием/зумом состояние, то есть кнопка
+     * фактически никуда не "центрировала"). Если активен полёт —
+     * синхронизирует его состояние с этим видом, чтобы WASD продолжил
+     * движение от свежей позиции, а не от старой. */
     function recenter(): void {
-      orbit.update();
+      orbit.resetToHome();
       if (activeMode === 'fly') syncFlyFromOrbit();
     }
 
     const copcHandles: CopcStreamHandle[] = [];
+    const splatObjectUrls: string[] = [];
+    let lastStatsAt = 0;
     app.on('update', (dt: number) => {
       if (activeMode === 'fly') fly.update(dt);
-      for (const handle of copcHandles) handle.refresh(camera);
+      else orbit.tick(dt);
+      const isMoving = activeMode === 'fly' ? fly.isInteracting() : orbit.isInteracting();
+      for (const handle of copcHandles) handle.refresh(camera, isMoving);
+
+      // Раз в полсекунды — обновление текста индикатора достаточно частое
+      // для "живого" ощущения, но не нагружает DOM каждый кадр.
+      const now = performance.now();
+      if (statsOverlay.style.display !== 'none' && now - lastStatsAt > 500) {
+        lastStatsAt = now;
+        const fps = Math.round((app as any).stats.frame.fps);
+        const vram = (app as any).stats.vram;
+        const vramMb = ((vram.vb + vram.ib + vram.tex) / (1024 * 1024)).toFixed(1);
+        const lines = [`FPS: ${fps}`, `VRAM: ${vramMb} МБ`];
+        for (let i = 0; i < copcHandles.length; i++) {
+          const s = copcHandles[i].getStats();
+          lines.push(`COPC ${i + 1}: ${s.loadedNodes} узлов, ${s.loadedPoints.toLocaleString('ru-RU')} точек`);
+        }
+        statsOverlay.textContent = lines.join('\n');
+      }
     });
 
     applyCameraSettings(cameraSettings);
@@ -227,7 +336,30 @@ export async function loadTourScene(
       unsubscribeSettings,
       detachNavigation: () => (activeMode === 'orbit' ? orbit.detach() : fly.detach()),
       copcHandles,
+      splatObjectUrls,
+      annotations,
+      camera,
+      canvas,
+      get collisionMesh() {
+        return collisionMesh;
+      },
     };
+
+    // Коллайдер грузится параллельно с моделью (не блокирует появление
+    // сплатов на экране) — готов он будет позже, Walk просто без коллизий
+    // до этого момента (см. updateFlyCollision).
+    if (collisionUrl) {
+      loadCollisionMesh(pc, app, collisionUrl)
+        .then((mesh) => {
+          if (!isCurrent()) {
+            mesh?.dispose();
+            return;
+          }
+          collisionMesh = mesh;
+          updateFlyCollision();
+        })
+        .catch((err) => console.error('Walk: не удалось загрузить коллайдер', err));
+    }
 
     if (modelType === 'pointcloud') {
       // Центрирование/distance выставляет только первый файл (как и раньше
@@ -280,11 +412,23 @@ export async function loadTourScene(
         (d) => orbit.setDistance(d),
         () => orbit.update(),
         isCurrent,
-        showProgress
+        showProgress,
+        sogUrls,
+        splatObjectUrls
       );
     }
     if (isCurrent()) {
+      // Снимок "домашнего" вида делаем ПОСЛЕ того, как загрузчик
+      // отработал и выставил итоговые target/distance — это и есть тот
+      // вид, к которому дальше будет возвращать кнопка "Центрировать".
+      orbit.captureHome();
       recenter();
+      const sphere = orbit.getHomeSphere();
+      annotations.setPickSphere(sphere.center, sphere.radius);
+      // COPC-туры (реальные точки) — точный пикинг вместо сферы, см.
+      // annotations.ts/pickPoint. Пусто для сплатов/legacy LAS без COPC —
+      // там остаётся только сфера.
+      annotations.setCopcHandles(copcHandles);
     }
     hideProgress();
   } catch (e) {

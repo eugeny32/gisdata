@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/app/lib/auth.php';
+require __DIR__ . '/app/lib/tour_files.php';
 $admin = require_admin_role('admin');
 
 $pdo = db();
@@ -32,82 +33,8 @@ function pg_upload_large_object(PDO $pgPdo, string $localFile): int
     return (int)$oid;
 }
 
-/**
- * Чистит сплат-файл (.ply) от двух типов шума, на которые жаловался
- * пользователь — "единичные гауссианы без соседей, закрывающие просмотр
- * свечением" — через CLI @playcanvas/splat-transform (GPU-вокселизация),
- * установленный на сервере по SSH в этой же сессии:
- *   1) -V scale_*,lt,N — гигантские по размеру отдельные сплаты (в реальном
- *      туре встречались sca le до 18-26м при медиане ~0.02м — они и дают тот
- *      самый "глоу", и из-за них раздувается bounding box для вокселизации
- *      на шаге 2, так что без этого шага -G падает с RangeError на больших
- *      сценах);
- *   2) -G — стандартный voxel-based фильтр "точек без соседей" из самого
- *      инструмента.
- * Жёстко прописанные пути — это конкретная установка на ЭТОМ сервере
- * (Windows, see SSH-сессию), а не переносимая конфигурация; на машине, где
- * splat-transform не установлен (например, локальная дев-среда), node.exe
- * по этому пути просто не существует — функция тихо пропускает шаг,
- * исходный файл остаётся как был (это значит "без денойза", не ошибка).
- * Если сам процесс упал (RangeError на экстремально большом экстенте,
- * таймаут и т.п.) — тоже тихо оставляем оригинал: денойз — это улучшение
- * качества, а не обязательное условие создания тура.
- */
-function denoise_splat_ply_if_possible(string $absolutePath): void
-{
-    $nodeExe = 'C:\\Program Files\\nodejs\\node.exe';
-    $cliScript = 'C:\\Users\\admin\\AppData\\Roaming\\npm\\node_modules\\@playcanvas\\splat-transform\\bin\\cli.mjs';
-    if (!is_file($nodeExe) || !is_file($cliScript) || !is_file($absolutePath)) {
-        return;
-    }
-
-    $tmpOut = $absolutePath . '.denoised.ply';
-    $cmd = sprintf(
-        '%s %s %s -N -V scale_0,lt,2 -V scale_1,lt,2 -V scale_2,lt,2 -G %s -w',
-        escapeshellarg($nodeExe),
-        escapeshellarg($cliScript),
-        escapeshellarg($absolutePath),
-        escapeshellarg($tmpOut)
-    );
-
-    $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-    if (!is_resource($proc)) {
-        return;
-    }
-    // PHP-овский max_execution_time (по умолчанию 120с в php.ini) считает
-    // именно это время ожидания дочернего процесса и обрывает скрипт
-    // ("Fatal error: Maximum execution time exceeded") раньше, чем
-    // успевает сработать наш собственный 300-секундный $deadline ниже —
-    // set_time_limit() двигает лимит именно с этого момента.
-    set_time_limit(330);
-    stream_set_blocking($pipes[1], false);
-    stream_set_blocking($pipes[2], false);
-    $deadline = time() + 300; // не должно занимать больше пары минут на реальных файлах туров
-    do {
-        // Прогресс-бар инструмента пишет в stdout/stderr часто — если не
-        // вычитывать пайпы, буфер (на Windows ~64КБ) заполняется и дочерний
-        // процесс блокируется на записи, то есть зависает не из-за реальной
-        // работы, а из-за того, что никто не читает его вывод. Содержимое
-        // нам не нужно, просто дренируем.
-        fread($pipes[1], 65536);
-        fread($pipes[2], 65536);
-        usleep(200000);
-        $status = proc_get_status($proc);
-    } while ($status['running'] && time() < $deadline);
-    if ($status['running']) {
-        proc_terminate($proc);
-    }
-    fclose($pipes[1]);
-    fclose($pipes[2]);
-    proc_close($proc);
-
-    if (!$status['running'] && $status['exitcode'] === 0 && is_file($tmpOut)) {
-        unlink($absolutePath);
-        rename($tmpOut, $absolutePath);
-    } elseif (is_file($tmpOut)) {
-        unlink($tmpOut); // неудачный/частичный результат — не подменяем оригинал
-    }
-}
+// denoise_splat_ply_if_possible/strip_unsupported_ply_header_lines —
+// см. app/lib/tour_files.php (общие с tour_user_upload.php).
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Если размер запроса превышает post_max_size, PHP молча обнуляет $_POST
@@ -134,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lon         = (float)($_POST['lon'] ?? 0);
         $existingFileName = trim((string)($_POST['existing_file'] ?? ''));
         $isEnabled   = isset($_POST['is_enabled']) ? 1 : 0;
+        $isPublic    = isset($_POST['is_public']) ? 1 : 0;
         $groupIdRaw  = (string)($_POST['group_id'] ?? '');
         $newGroupName = trim((string)($_POST['new_group_name'] ?? ''));
 
@@ -235,6 +163,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($newFiles as $f) {
                     if ($f['file_format'] === 'ply') {
                         denoise_splat_ply_if_possible($uploadDir . $f['file_path']);
+                        // После денойза (best-effort, может быть пропущен/не
+                        // удался) — гарантированно чистим заголовок, иначе
+                        // PlayCanvas откажется парсить файл целиком.
+                        strip_unsupported_ply_header_lines($uploadDir . $f['file_path']);
                     }
                 }
 
@@ -246,37 +178,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($filePath !== null) {
                         $stmt = $pdo->prepare(
                             'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon,
-                                file_path=:file_path, file_format=:file_format, is_enabled=:is_enabled, group_id=:group_id
+                                file_path=:file_path, file_format=:file_format, is_enabled=:is_enabled,
+                                is_public=:is_public, group_id=:group_id
                              WHERE id=:id'
                         );
                         $stmt->execute([
                             'id' => $id, 'name' => $name, 'description' => $description ?: null,
                             'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
-                            'file_format' => $fileFormat, 'is_enabled' => $isEnabled, 'group_id' => $groupId,
+                            'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
+                            'is_public' => $isPublic, 'group_id' => $groupId,
                         ]);
                         // Новый набор файлов полностью заменяет старые доп. файлы тура.
                         $pdo->prepare('DELETE FROM tour_files WHERE tour_id = :id')->execute(['id' => $id]);
                     } else {
                         $stmt = $pdo->prepare(
-                            'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon, is_enabled=:is_enabled, group_id=:group_id
+                            'UPDATE tours SET name=:name, description=:description, lat=:lat, lon=:lon,
+                                is_enabled=:is_enabled, is_public=:is_public, group_id=:group_id
                              WHERE id=:id'
                         );
                         $stmt->execute([
                             'id' => $id, 'name' => $name, 'description' => $description ?: null,
-                            'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled, 'group_id' => $groupId,
+                            'lat' => $lat, 'lon' => $lon, 'is_enabled' => $isEnabled,
+                            'is_public' => $isPublic, 'group_id' => $groupId,
                         ]);
                     }
                     $tourId = $id;
                 } else {
                     $stmt = $pdo->prepare(
-                        'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, created_by, group_id)
-                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :created_by, :group_id)
+                        'INSERT INTO tours (name, description, lat, lon, file_path, file_format, is_enabled, is_public, created_by, group_id)
+                         VALUES (:name, :description, :lat, :lon, :file_path, :file_format, :is_enabled, :is_public, :created_by, :group_id)
                          RETURNING id'
                     );
                     $stmt->execute([
                         'name' => $name, 'description' => $description ?: null,
                         'lat' => $lat, 'lon' => $lon, 'file_path' => $filePath,
-                        'file_format' => $fileFormat, 'is_enabled' => $isEnabled,
+                        'file_format' => $fileFormat, 'is_enabled' => $isEnabled, 'is_public' => $isPublic,
                         'created_by' => $admin['id'], 'group_id' => $groupId,
                     ]);
                     $tourId = (int)$stmt->fetchColumn();
@@ -522,95 +458,34 @@ require __DIR__ . '/app/views/_head.php';
     <div class="alert alert-danger"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div class="card surface-card mb-4">
-    <div class="card-body">
-      <h2 class="h6 mb-3"><?= $edit ? 'Изменить тур' : 'Добавить тур' ?></h2>
-      <form method="post" action="/tours.php" enctype="multipart/form-data" class="row g-3" id="tourForm">
-        <input type="hidden" name="action" value="save">
-        <input type="hidden" name="id" value="<?= (int)($edit['id'] ?? 0) ?>">
-
-        <div class="col-md-6">
-          <label class="form-label small">Название*</label>
-          <input type="text" name="name" class="form-control" required value="<?= htmlspecialchars($edit['name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Описание</label>
-          <input type="text" name="description" class="form-control" value="<?= htmlspecialchars($edit['description'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small">Широта (lat)*</label>
-          <input type="text" name="lat" class="form-control" required value="<?= htmlspecialchars((string)($edit['lat'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small">Долгота (lon)*</label>
-          <input type="text" name="lon" class="form-control" required value="<?= htmlspecialchars((string)($edit['lon'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
-        </div>
-        <div class="col-md-3 form-check mt-4">
-          <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>>
-          <label class="form-check-label" for="isEnabled">Показывать на карте</label>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Группа</label>
-          <select name="group_id" id="tourGroupSelect" class="form-select">
-            <option value="">Без группы</option>
-            <?php foreach ($tourGroups as $g): ?>
-              <option value="<?= (int)$g['id'] ?>" <?= (int)($edit['group_id'] ?? 0) === (int)$g['id'] ? 'selected' : '' ?>><?= htmlspecialchars($g['name'], ENT_QUOTES, 'UTF-8') ?></option>
-            <?php endforeach; ?>
-            <option value="new">+ Новая группа...</option>
-          </select>
-          <div class="form-text">Файлы новых туров складываются в подпапку своей группы — упорядочивает хранилище по мере роста числа туров.</div>
-        </div>
-        <div class="col-md-6 d-none" id="tourNewGroupWrap">
-          <label class="form-label small">Название новой группы</label>
-          <input type="text" name="new_group_name" id="tourNewGroupName" class="form-control" placeholder="Например: Объекты ЕКБ 2026">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat — 3DGS, или .las — облако точек LiDAR)</label>
-          <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
-          <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — облако точек LiDAR, просмотр на карте работает (отдельный рендер, не через 3DGS).</div>
-          <?php if ($edit && $edit['file_path']): ?>
-            <div class="form-text">
-              Текущие файлы: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?><?= $editExtraCount ? ' + ещё ' . $editExtraCount : '' ?>.
-              Оставьте поле пустым, чтобы не менять.
-            </div>
-          <?php endif; ?>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label small">Или файл(ы) уже на сервере (uploads/tours/...), если залиты по FTP — по одному имени на строку</label>
-          <textarea name="existing_file" class="form-control" rows="3" placeholder="model_part1.ply&#10;model_part2.ply"></textarea>
-        </div>
-
-        <div class="col-12 d-none" id="tourUploadProgressWrap">
-          <div class="progress" style="height: 22px">
-            <div class="progress-bar" id="tourUploadProgressBar" role="progressbar" style="width: 0%">0%</div>
-          </div>
-        </div>
-        <div class="col-12 d-flex gap-2">
-          <button type="submit" class="btn btn-primary" id="tourFormSubmit"><?= $edit ? 'Сохранить' : 'Добавить' ?></button>
-          <?php if ($edit): ?><a href="/tours.php" class="btn btn-outline-secondary">Отмена</a><?php endif; ?>
-        </div>
-      </form>
-    </div>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Туры (3DGS)</h2>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#tourFormModal" id="tourAddBtn"><i class="bi bi-plus-lg"></i> Добавить тур</button>
   </div>
 
-  <div class="card surface-card">
+  <?php
+    // Блоки по группам — отдельная карточка+таблица на каждую группу (а не
+    // одна большая таблица с разделительными строками, как было раньше),
+    // по запросу пользователя. Группировка с сервера уже отсортирована
+    // (group_name IS NULL в конец) — здесь только разбивка на блоки.
+    $toursByGroup = [];
+    foreach ($tours as $t) {
+        $key = $t['group_name'] ?? '__no_group__';
+        $toursByGroup[$key]['name'] = $t['group_name'] ?? 'Без группы';
+        $toursByGroup[$key]['tours'][] = $t;
+    }
+  ?>
+  <?php foreach ($toursByGroup as $group): ?>
+  <div class="card surface-card mb-3">
     <div class="card-body">
-      <h2 class="h6 mb-3">Список туров</h2>
-      <div class="table-responsive">
+      <h3 class="h6 mb-3"><i class="bi bi-folder2"></i> <?= htmlspecialchars($group['name'], ENT_QUOTES, 'UTF-8') ?> <span class="text-secondary small">(<?= count($group['tours']) ?>)</span></h3>
+      <div class="table-responsive overflow-y-visible">
         <table class="table table-clean align-middle">
           <thead>
-            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>PostGIS</th><th></th></tr>
+            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>Публичный</th><th>PostGIS</th><th></th></tr>
           </thead>
           <tbody>
-          <?php $currentGroupName = false; // false, не null — отличаем "ещё не печатали" от "группа без имени" ?>
-          <?php foreach ($tours as $t): ?>
-            <?php if ($t['group_name'] !== $currentGroupName): $currentGroupName = $t['group_name']; ?>
-              <tr class="table-group-divider">
-                <td colspan="6" class="bg-body-tertiary fw-semibold small py-1">
-                  <i class="bi bi-folder2"></i> <?= htmlspecialchars($currentGroupName ?? 'Без группы', ENT_QUOTES, 'UTF-8') ?>
-                </td>
-              </tr>
-            <?php endif; ?>
+          <?php foreach ($group['tours'] as $t): ?>
             <tr>
               <td><?= htmlspecialchars($t['name'], ENT_QUOTES, 'UTF-8') ?></td>
               <td><?= htmlspecialchars($t['lat'] . ', ' . $t['lon'], ENT_QUOTES, 'UTF-8') ?></td>
@@ -627,6 +502,7 @@ require __DIR__ . '/app/views/_head.php';
                 <?php endif; ?>
               </td>
               <td><?= $t['is_enabled'] ? '<span class="badge text-bg-success">да</span>' : '<span class="badge text-bg-secondary">нет</span>' ?></td>
+              <td><?= $t['is_public'] ? '<span class="badge text-bg-info">да</span>' : '<span class="badge text-bg-secondary">нет</span>' ?></td>
               <td>
                 <?php if ($t['pg_synced_at']): ?>
                   <span class="badge text-bg-success" title="<?= htmlspecialchars($t['pg_connection_name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">выгружено <?= htmlspecialchars(substr($t['pg_synced_at'], 0, 16), ENT_QUOTES, 'UTF-8') ?></span>
@@ -636,10 +512,6 @@ require __DIR__ . '/app/views/_head.php';
                   <span class="badge text-bg-secondary">не выгружено</span>
                 <?php endif; ?>
                 <?php if ($pgConnections && $t['file_path']): ?>
-                <!-- Кнопка отправки формы вынесена в общую группу кнопок
-                     справа (атрибут form= — позволяет кнопке быть вне
-                     формы и всё равно её отправлять), здесь остаётся
-                     только выбор подключения + прогресс-бар выгрузки. -->
                 <form method="post" action="/tours.php" id="syncPgForm<?= (int)$t['id'] ?>" class="sync-pg-form d-flex gap-1 mt-1">
                   <input type="hidden" name="action" value="sync_pg">
                   <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
@@ -655,30 +527,202 @@ require __DIR__ . '/app/views/_head.php';
                 <?php endif; ?>
               </td>
               <td class="text-end">
-                <?php if ($pgConnections && $t['file_path']): ?>
-                  <button type="submit" form="syncPgForm<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-primary" title="Выгрузить в PostGIS"><i class="bi bi-cloud-upload"></i></button>
-                <?php endif; ?>
-                <a href="/tour_files.php?tour_id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-secondary" title="Доп. файлы (части модели)"><i class="bi bi-stack"></i></a>
-                <a href="/tours.php?edit=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
-                <form method="post" action="/tours.php" class="d-inline" onsubmit="return confirm('Удалить тур и файл модели?');">
-                  <input type="hidden" name="action" value="delete">
-                  <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
-                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
-                </form>
+                <!-- Все действия — в одно контекстное меню (значок + текст
+                     у каждого пункта) вместо ряда отдельных кнопок-иконок,
+                     по запросу пользователя. У "Выгрузить в PostGIS" нет
+                     отдельного пункта — она отправляет ту же форму выше
+                     (нужен выбор подключения рядом), у остальных действий
+                     такой зависимости нет. -->
+                <div class="dropdown">
+                  <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false" title="Действия"><i class="bi bi-three-dots-vertical"></i></button>
+                  <ul class="dropdown-menu dropdown-menu-end">
+                    <?php if ($pgConnections && $t['file_path']): ?>
+                    <li><button type="submit" form="syncPgForm<?= (int)$t['id'] ?>" class="dropdown-item"><i class="bi bi-cloud-upload me-2"></i>Выгрузить в PostGIS</button></li>
+                    <?php endif; ?>
+                    <li><a class="dropdown-item" href="/tour_files.php?tour_id=<?= (int)$t['id'] ?>"><i class="bi bi-stack me-2"></i>Доп. файлы (части модели)</a></li>
+                    <li><a class="dropdown-item" href="/tours.php?edit=<?= (int)$t['id'] ?>"><i class="bi bi-pencil me-2"></i>Изменить</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                      <form method="post" action="/tours.php" onsubmit="return confirm('Удалить тур и файл модели?');">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                        <button type="submit" class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Удалить</button>
+                      </form>
+                    </li>
+                  </ul>
+                </div>
               </td>
             </tr>
           <?php endforeach; ?>
-          <?php if (!$tours): ?>
-            <tr><td colspan="6" class="text-muted">Туров пока нет</td></tr>
-          <?php endif; ?>
           </tbody>
         </table>
       </div>
     </div>
   </div>
+  <?php endforeach; ?>
+  <?php if (!$tours): ?>
+    <div class="card surface-card"><div class="card-body text-muted">Туров пока нет</div></div>
+  <?php endif; ?>
+
+  <div class="modal fade" id="tourFormModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="tourFormModalTitle"><?= $edit ? 'Изменить тур' : 'Добавить тур' ?></h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form method="post" action="/tours.php" enctype="multipart/form-data" class="row g-3" id="tourForm">
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="id" value="<?= (int)($edit['id'] ?? 0) ?>">
+
+            <div class="col-md-6">
+              <label class="form-label small">Название*</label>
+              <input type="text" name="name" class="form-control" required value="<?= htmlspecialchars($edit['name'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Описание</label>
+              <input type="text" name="description" class="form-control" value="<?= htmlspecialchars($edit['description'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Широта (lat)*</label>
+              <input type="text" name="lat" class="form-control" required value="<?= htmlspecialchars((string)($edit['lat'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Долгота (lon)*</label>
+              <input type="text" name="lon" class="form-control" required value="<?= htmlspecialchars((string)($edit['lon'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="col-md-3 form-check mt-4">
+              <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" <?= empty($edit) || !empty($edit['is_enabled']) ? 'checked' : '' ?>>
+              <label class="form-check-label" for="isEnabled">Показывать на карте</label>
+            </div>
+            <div class="col-md-3 form-check mt-4">
+              <input type="checkbox" name="is_public" class="form-check-input" id="isPublic" <?= !empty($edit['is_public']) ? 'checked' : '' ?>>
+              <label class="form-check-label" for="isPublic">Опубликован (ссылка без входа)</label>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Группа</label>
+              <select name="group_id" id="tourGroupSelect" class="form-select">
+                <option value="">Без группы</option>
+                <?php foreach ($tourGroups as $g): ?>
+                  <option value="<?= (int)$g['id'] ?>" <?= (int)($edit['group_id'] ?? 0) === (int)$g['id'] ? 'selected' : '' ?>><?= htmlspecialchars($g['name'], ENT_QUOTES, 'UTF-8') ?></option>
+                <?php endforeach; ?>
+                <option value="new">+ Новая группа...</option>
+              </select>
+              <div class="form-text">Файлы новых туров складываются в подпапку своей группы — упорядочивает хранилище по мере роста числа туров.</div>
+            </div>
+            <div class="col-md-6 d-none" id="tourNewGroupWrap">
+              <label class="form-label small">Название новой группы</label>
+              <input type="text" name="new_group_name" id="tourNewGroupName" class="form-control" placeholder="Например: Объекты ЕКБ 2026">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat — 3DGS, или .las — облако точек LiDAR)</label>
+              <input type="file" name="model_files[]" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
+              <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — облако точек LiDAR, просмотр на карте работает (отдельный рендер, не через 3DGS).</div>
+              <?php if ($edit && $edit['file_path']): ?>
+                <div class="form-text">
+                  Текущие файлы: <?= htmlspecialchars($edit['file_path'], ENT_QUOTES, 'UTF-8') ?><?= $editExtraCount ? ' + ещё ' . $editExtraCount : '' ?>.
+                  Оставьте поле пустым, чтобы не менять.
+                </div>
+              <?php endif; ?>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Или файл(ы) уже на сервере (uploads/tours/...), если залиты по FTP — по одному имени на строку</label>
+              <textarea name="existing_file" class="form-control" rows="3" placeholder="model_part1.ply&#10;model_part2.ply"></textarea>
+            </div>
+
+            <div class="col-12 d-none" id="tourUploadProgressWrap">
+              <div class="progress" style="height: 22px">
+                <div class="progress-bar" id="tourUploadProgressBar" role="progressbar" style="width: 0%">0%</div>
+              </div>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button type="submit" class="btn btn-primary" id="tourFormSubmit"><?= $edit ? 'Сохранить' : 'Добавить' ?></button>
+              <a href="/tours.php" class="btn btn-outline-secondary">Отмена</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
 <?php
-$extraScripts = <<<'HTML'
+$extraScripts = '<script>window.tourFormShouldOpen = ' . ($edit ? 'true' : 'false') . ';</script>' . <<<'HTML'
 <script>
+// window.tourFormShouldOpen (не const/let!) — ниже форма перерисовывает
+// саму себя через document.write(xhr.responseText) при сабмите (см.
+// дальше), то есть этот инлайн-скрипт выполняется повторно НА ТОЙ ЖЕ
+// странице без настоящей навигации; let/const тут падали с "Identifier
+// has already been declared", поскольку document.write не создаёт новый
+// JS-контекст — старые лексические объявления остаются. Свойство
+// window можно переприсваивать сколько угодно раз без этой проблемы.
+//
+// Если открыли страницу по ссылке "Изменить" (?edit=ID) — модалка с формой
+// должна сама открыться, а не остаться скрытой за обычной кнопкой
+// "Добавить тур" (раньше форма была всегда видна сверху страницы).
+if (window.tourFormShouldOpen) {
+  document.addEventListener('DOMContentLoaded', () => {
+    new bootstrap.Modal(document.getElementById('tourFormModal')).show();
+  });
+}
+
+// Контекстное меню действий тура визуально пряталось за карточкой
+// СЛЕДУЮЩЕЙ группы: у каждого блока группы свой backdrop-filter (см.
+// .card в style.css) — а backdrop-filter/filter/transform создают новый
+// containing block для position:absolute/fixed потомков (см. спецификацию
+// CSS Filter Effects), то есть меню, даже с z-index:1000 от Bootstrap,
+// может выигрывать z-index-битву только ВНУТРИ своей карточки — следующая
+// карточка просто рисуется поверх неё как отдельный stacking context,
+// независимо от z-index внутри первой. position:fixed тут не спасает —
+// та же причина (backdrop-filter ловит fixed-потомков точно так же, как
+// и absolute). Рабочее решение — "портал": на время показа переносить сам
+// элемент меню в конец <body>, где он гарантированно красится последним
+// (после всех карточек), и возвращать на место при скрытии.
+(function () {
+  document.querySelectorAll('.dropdown-menu').forEach((menu) => {
+    const toggle = menu.previousElementSibling;
+    if (!toggle || !toggle.matches('[data-bs-toggle="dropdown"]')) return;
+    let placeholder = null;
+    // 'shown.bs.dropdown' (ПОСЛЕ показа), не 'show.bs.dropdown' (до) — на
+    // момент show у меню ещё нет класса .show, значит display:none и
+    // offsetWidth=0; расчёт left по нулевой ширине прижимал бы меню
+    // тонкой полоской к правому краю кнопки (без видимого текста пунктов
+    // — именно это и наблюдалось на первом проходе фикса).
+    toggle.parentElement.addEventListener('shown.bs.dropdown', () => {
+      placeholder = document.createComment('dropdown-portal-placeholder');
+      menu.parentNode.insertBefore(placeholder, menu);
+      // Сброс инлайн-стилей ДО переноса и замера — на некоторых страницах
+      // (где меню до этого уже было показано раньше, либо Bootstrap/Popper
+      // успел проставить свои собственные inset/width до того, как сюда
+      // долетел этот хендлер) offsetWidth мог замеряться с остаточным
+      // width/inset от предыдущего раза, и меню "растягивалось" на всю
+      // ширину после переноса в body — баг воспроизводился не везде и не
+      // всегда, поэтому здесь явная зачистка перед каждым замером.
+      menu.style.width = '';
+      menu.style.maxWidth = '';
+      menu.style.inset = '';
+      document.body.appendChild(menu);
+      const rect = toggle.getBoundingClientRect();
+      const width = menu.offsetWidth;
+      menu.style.position = 'fixed';
+      menu.style.top = rect.bottom + 'px';
+      menu.style.left = (rect.right - width) + 'px';
+      menu.style.width = width + 'px';
+      menu.style.margin = '0';
+    });
+    toggle.parentElement.addEventListener('hidden.bs.dropdown', () => {
+      if (placeholder && placeholder.parentNode) {
+        placeholder.parentNode.insertBefore(menu, placeholder);
+        placeholder.remove();
+      }
+      menu.style.position = '';
+      menu.style.top = '';
+      menu.style.left = '';
+      menu.style.width = '';
+      menu.style.margin = '';
+    });
+  });
+})();
+
 // Обычная HTML-форма не показывает прогресс загрузки файла вообще — браузер
 // просто "висит" до конца запроса. Перехватываем submit и шлём через XHR,
 // чтобы получить реальный прогресс (xhr.upload.onprogress), а результат
@@ -723,9 +767,30 @@ $extraScripts = <<<'HTML'
       }
     };
     xhr.onload = function () {
-      document.open();
-      document.write(xhr.responseText);
-      document.close();
+      // Ошибка валидации — сервер НЕ делает редирект, просто заново
+      // рендерит ту же страницу с alert-danger внутри; в этом случае
+      // document.write нужен, чтобы показать сообщение без двойной формы.
+      // При УСПЕХЕ сервер отдаёт `Location: /tours.php`, XHR прозрачно
+      // идёт по редиректу — но document.write поверх уже загруженной
+      // страницы НЕ настоящая навигация: старые let/const-объявления из
+      // <script> остаются в JS-контексте (см. window.tourFormShouldOpen
+      // выше) и состояние Bootstrap-модалки (backdrop, класс modal-open)
+      // не сбрасывается корректно — после такого "сохранения" модалка
+      // редактирования открывалась заново пустой. Настоящая навигация
+      // (location.href) полностью пересоздаёт документ и эту проблему не
+      // имеет вообще.
+      // Маркер собран из 2 кусков НЕ случайно: если написать его целиком
+      // одной строкой, эта самая строка кода (она же часть HTML-ответа
+      // любой загрузки этой страницы, включая успешную) сама содержала бы
+      // искомую подстроку — проверка всегда совпадала бы сама с собой.
+      var errorMarker = 'class="alert ' + 'alert-danger"';
+      if (xhr.responseText.indexOf(errorMarker) !== -1) {
+        document.open();
+        document.write(xhr.responseText);
+        document.close();
+      } else {
+        window.location.href = '/tours.php';
+      }
     };
     xhr.onerror = function () {
       submitBtn.disabled = false;

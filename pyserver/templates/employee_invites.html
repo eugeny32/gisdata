@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Приглашения сотрудников{% endblock %}
+{% block page_icon %}bi-envelope-paper{% endblock %}
+{% block page_title %}Приглашения сотрудников{% endblock %}
+{% block content %}
+  {% if created_link %}
+    <div class="alert alert-success">
+      Приглашение создано. Отправьте эту ссылку сотруднику (действует 7 дней):<br>
+      <div class="input-group mt-2" style="max-width: 560px">
+        <input type="text" class="form-control" id="inviteLink" value="{{ created_link }}" readonly>
+        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('inviteLink').value)">Копировать</button>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="card surface-card mb-4">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Создать приглашение</h2>
+      <form method="post" action="{% url 'employee_invites' %}" class="row g-3">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="create">
+        <div class="col-md-3">
+          <label class="form-label small">Роль</label>
+          <select name="role" class="form-select">
+            <option value="viewer">Просмотр</option>
+            <option value="admin">Администратор</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">Email (опционально)</label>
+          <input type="email" name="email" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">Имя (опционально)</label>
+          <input type="text" name="full_name" class="form-control">
+        </div>
+        <div class="col-md-1 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100">Создать</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Приглашения</h2>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle">
+          <thead><tr><th>Роль</th><th>Email / имя</th><th>Создано</th><th>Действует до</th><th>Статус</th><th></th></tr></thead>
+          <tbody>
+          {% for row in invites %}
+            {% with i=row.obj %}
+            <tr>
+              <td>{% if i.role == "admin" %}Администратор{% else %}Просмотр{% endif %}</td>
+              <td>{{ i.full_name|default:"" }}{% if i.email %} &lt;{{ i.email }}&gt;{% endif %}</td>
+              <td>{{ i.created_at }}</td>
+              <td>{{ i.expires_at }}</td>
+              <td>
+                {% if row.is_used %}<span class="badge text-bg-success">Использовано</span>
+                {% elif row.is_expired %}<span class="badge text-bg-secondary">Просрочено</span>
+                {% else %}<span class="badge text-bg-warning">Ожидает</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if row.is_revocable %}
+                <form method="post" action="{% url 'employee_invites' %}" class="d-inline" onsubmit="return confirm('Отозвать приглашение?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="revoke">
+                  <input type="hidden" name="id" value="{{ i.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Отозвать</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% endwith %}
+          {% empty %}
+            <tr><td colspan="6" class="text-muted">Нет приглашений</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

@@ -117,6 +117,61 @@ function rgen_range(array $a, array $b): float
 }
 
 /**
+ * Поворот ECEF-координат спутника на угол вращения Земли за время полёта
+ * сигнала (эффект Саньяка) — переводит позицию, посчитанную в системе
+ * координат момента ИЗЛУЧЕНИЯ, в систему координат момента ПРИЁМА (та же,
+ * в которой заданы координаты приёмника). Сверено с эталонным генератором
+ * SiGOGbcst (`xpr = x*cos(WE*tau) + y*sin(WE*tau)`, `ypr = -x*sin(WE*tau) + y*cos(WE*tau)`).
+ */
+function rgen_sagnac_rotate(array $pos, float $tau, float $omegaE): array
+{
+    $theta = $omegaE * $tau;
+    $cosT = cos($theta);
+    $sinT = sin($theta);
+    return [
+        $pos[0] * $cosT + $pos[1] * $sinT,
+        -$pos[0] * $sinT + $pos[1] * $cosT,
+        $pos[2],
+    ];
+}
+
+/**
+ * Координаты спутника (метры, ECEF момента ПРИЁМА) с учётом времени
+ * прохождения сигнала (light-time) — до этой правки генератор считал
+ * позицию спутника прямо в момент эпохи наблюдения $tRecv, как если бы
+ * сигнал долетал до приёмника мгновенно. Реально приёмник в момент
+ * $tRecv видит спутник там, где он был ~70-90мс РАНЬШЕ (на момент
+ * излучения $tRecv-$tau), а сами координаты дополнительно нужно повернуть
+ * на угол вращения Земли за это время (см. rgen_sagnac_rotate) — без этой
+ * пары поправок геометрическая дальность систематически смещена на
+ * порядка скорость_спутника*tau (для GPS ~3.9км/с * 0.075с ≈ 270м).
+ * Сверено с эталонным генератором SiGOGbcst (SUBROUTINE INTORB, итерация
+ * по tau с порогом сходимости в этой же логике).
+ *
+ * @param callable $satPosFn (array $eph, float $unixUtc): array{0:float,1:float,2:float,...}
+ *   возвращает координаты спутника на заданный момент (доп. элементы
+ *   массива после индекса 2, например Ek у GPS, передаются через как есть).
+ * @return array{0:float,1:float,2:float} скорректированные ECEF-координаты момента приёма
+ */
+function rgen_sat_position_at_reception(callable $satPosFn, array $eph, float $tRecv, array $recvEcef, float $omegaE, ?array &$rawPos = null): array
+{
+    $tau = 0.075; // начальное приближение — типичная задержка GPS/ГЛОНАСС
+    $rawPos = $satPosFn($eph, $tRecv - $tau);
+    $corrected = rgen_sagnac_rotate($rawPos, $tau, $omegaE);
+    for ($i = 0; $i < 10; $i++) {
+        $newTau = rgen_range($recvEcef, $corrected) / RGEN_C;
+        if (abs($newTau - $tau) < 1.0e-9) {
+            $tau = $newTau;
+            break;
+        }
+        $tau = $newTau;
+        $rawPos = $satPosFn($eph, $tRecv - $tau);
+        $corrected = rgen_sagnac_rotate($rawPos, $tau, $omegaE);
+    }
+    return $corrected;
+}
+
+/**
  * Целочисленная неоднозначность фазы (циклы) — случайная, но ПОСТОЯННАЯ на
  * весь сеанс для каждого спутника, отдельно L1/L2 (у настоящего приёмника
  * она именно такая — устанавливается в момент захвата сигнала и держится,
@@ -145,33 +200,74 @@ function rgen_gps_clock_bias_sec(array $eph, float $t): float
 }
 
 /**
- * Часы спутника ГЛОНАСС (сек) на момент $t. ВАЖНО: поле в RINEX-эфемериде
- * (смещение 23 в строке записи) по спецификации называется "-TauN" — то
- * есть в файле уже лежит -τn, а не τn (см. RINEX 3.04, таблица A8). Формула
- * коррекции часов спутника — dts = -(значение из файла) + gamma_n*dt (так
- * же, как в RTKLIB: `-eph.taun + eph.gamn*dt`, где eph.taun там — это
- * именно сырое значение из навигационного сообщения, без изменений).
- * Раньше здесь стояло "+eph['tau_n']" без смены знака — ошибка получалась
- * вдвое больше истинного τn (знак не просто отсутствовал, а был обратным),
- * специфична для ГЛОНАСС — это могло "растаскивать" совместное GPS+ГЛОНАСС
- * автономное решение по кодам от истинных координат (TBC: "координаты
- * базовой станции недостаточно близки к истинным").
+ * Часы спутника ГЛОНАСС (сек) на момент $t. ИСТОРИЯ ПРАВКИ — этот знак уже
+ * меняли один раз (на "-eph['tau_n'] + gamma_n*dt", в предположении, что
+ * это совпадает с конвенцией RTKLIB), но живой тест с rnx2rtkp (RTKLIB)
+ * сейчас доказал, что именно ТА версия даёт систематическую ошибку высоты
+ * в десятки километров, дрейфующую по времени — притом что та же пара
+ * light-time/Sagnac-поправок и геометрия (проверено отдельно — радиус
+ * орбиты ГЛОНАСС стабилен и физически верен) у GPS с аналогичной по
+ * структуре формулой (af0+af1*dt+af2*dt^2, БЕЗ дополнительной смены знака)
+ * сошлась до ~1м по горизонтали и ~11м по высоте. Возвращаем знак к
+ * "+eph['tau_n']" (без инверсии) — это и есть та версия, с которой
+ * rnx2rtkp сходится к истинным координатам станции стабильно на всём
+ * 30-минутном интервале (проверено отдельно с GLONASS-only набором
+ * спутников, чтобы исключить влияние GPS).
  */
 function rgen_glonass_clock_bias_sec(array $eph, float $t): float
 {
     $dt = $t - $eph['tb_unix'];
-    return -$eph['tau_n'] + $eph['gamma_n'] * $dt;
+    return $eph['tau_n'] - $eph['gamma_n'] * $dt;
 }
 
 /**
- * Простая тропосферная задержка (метры): зенитная задержка ~2.3 м,
- * масштабируется как 1/sin(угол места) — стандартное приближение, без
- * учёта давления/температуры/влажности (для синтетических данных этого
- * достаточно, важно само наличие эффекта, а не точная его величина).
+ * Тропосферная задержка (метры) — модифицированная модель Hopfield (Seeber,
+ * 1993), перенесённая из эталонного генератора SiGOGbcst (FUNCTION SEEBER2)
+ * вместо прежней плоской "2.3/sin(угол)". Раздельные сухая/влажная
+ * составляющие, с учётом высоты приёмника над землёй (сферическое
+ * приближение радиусом 6371км, как и в SiGOG — не строгая геодезическая
+ * высота) и отдельной функцией отображения для каждой составляющей.
+ * Давление/температура/влажность — те же стандартные значения, что и в
+ * SiGOG (1013.25 мбар, 20°C, 50% — не запрашиваются у пользователя).
  */
-function rgen_tropo_delay_m(float $elevationDeg): float
+function rgen_tropo_delay_m(float $elevationDeg, array $ecef): float
 {
-    return 2.3 / sin(deg2rad(max($elevationDeg, 5.0)));
+    $elDeg = max($elevationDeg, 5.0);
+    $pressureMb = 1013.25;
+    $tempC = 20.0;
+    $humidityPct = 50.0;
+    $tempK = $tempC + 273.15;
+
+    $earthR = 6371.0e3;
+    $r = sqrt($ecef[0] ** 2 + $ecef[1] ** 2 + $ecef[2] ** 2);
+    $h = $r - $earthR;
+
+    $pv = $humidityPct / 100.0 * exp(-37.2465 + 0.213166 * $tempK - 0.256908e-3 * $tempK ** 2);
+    // Та же защитная проверка единиц, что и в оригинале SiGOG (SEEBER2) —
+    // переносим как есть, не пытаясь "улучшить" проверенную формулу.
+    if ($pv > 1.0) {
+        $pv /= 100.0;
+    }
+
+    $hd = 40136.0 + 148.72 * $tempC;
+    $hw = 11.0e3;
+
+    $nd0 = 155.2e-7 * $hd * $pressureMb / $tempK;
+    $nw0 = 1.0e-6 * $hw / 5.0 * (-12.96 * $tempK + 3.718e5) * $pv / ($tempK ** 2);
+
+    $nd0 *= (($hd - $h) / $hd) ** 5;
+    $nw0 *= (($hw - $h) / $hw) ** 5;
+    if ($h > $hd) {
+        $nd0 = 0.0;
+    }
+    if ($h > $hw) {
+        $nw0 = 0.0;
+    }
+
+    $facd = 1.0 / sin(deg2rad(sqrt($elDeg ** 2 + 6.25)));
+    $facw = 1.0 / sin(deg2rad(sqrt($elDeg ** 2 + 2.25)));
+
+    return $nd0 * $facd + $nw0 * $facw;
 }
 
 // Зенитная ионосферная задержка L1 (метры) — фиксированная (НЕ случайная на
@@ -214,6 +310,31 @@ function rgen_snr_db(float $elevationDeg): float
 }
 
 /**
+ * Однозначный индикатор силы сигнала (1-9) по спецификации RINEX 2/3 —
+ * пишется ВПРИТЫК к каждому значению наблюдения (вторая цифра после LLI,
+ * формат F14.3,I1,I1). Раньше у нас это поле было ВСЕГДА пустым (см.
+ * историю в rgen_format_obs_line) — сверено байт-в-байт со старым реальным
+ * файлом CHC, где оно тоже было пустым, но более новый реальный рабочий
+ * файл (приёмник South GNSS, успешно даёт Fix в TBC между несколькими
+ * станциями) имеет этот индикатор заполненным на каждой записи без
+ * исключений. Раз у НАШИХ файлов он пустой на 100% наблюдений во ВСЕХ
+ * вариантах — возможно, именно эта "стопроцентная пустота" выглядит для
+ * TBC как признак недостоверных/повреждённых данных.
+ */
+function rgen_snr_flag(float $snrDb): int
+{
+    if ($snrDb < 12.0) return 1;
+    if ($snrDb < 18.0) return 2;
+    if ($snrDb < 24.0) return 3;
+    if ($snrDb < 30.0) return 4;
+    if ($snrDb < 36.0) return 5;
+    if ($snrDb < 42.0) return 6;
+    if ($snrDb < 48.0) return 7;
+    if ($snrDb < 54.0) return 8;
+    return 9;
+}
+
+/**
  * Геометрическая дальность + часы спутника + тропосфера для всех видимых
  * (выше маски возвышения) спутников на момент $t. Часы ПРИЁМНИКА и
  * ионосфера (она зависит от частоты, а здесь дальность одна на оба
@@ -229,26 +350,44 @@ function rgen_compute_visible_ranges(array $eph, array $ecef, float $t): array
         if ($best === null) {
             continue;
         }
-        $pos = rgen_gps_sat_position($best, $t);
+        // Light-time + Саньяк (см. rgen_sat_position_at_reception) — позиция
+        // спутника на момент ИЗЛУЧЕНИЯ, повёрнутая в ECEF момента ПРИЁМА
+        // (которая и сравнивается с координатами приёмника). $rawPos —
+        // позиция БЕЗ поворота Саньяка, нужна только чтобы достать Ek (4-й
+        // элемент) для релятивистской поправки ниже.
+        $rawPos = null;
+        $pos = rgen_sat_position_at_reception('rgen_gps_sat_position', $best, $t, $ecef, RGEN_GPS_OMEGA_E, $rawPos);
         $elevDeg = rgen_elevation_deg($ecef, $pos);
         if ($elevDeg < RGEN_ELEVATION_MASK_DEG) {
             continue;
         }
-        $satClockM = RGEN_C * rgen_gps_clock_bias_sec($best, $t);
-        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg), 'elevDeg' => $elevDeg];
+        $satClockM = RGEN_C * (rgen_gps_clock_bias_sec($best, $t) + rgen_gps_relativistic_correction_sec($best, $rawPos[3]));
+        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg, $ecef), 'elevDeg' => $elevDeg];
     }
     foreach ($eph['glonass'] as $sat => $records) {
         $best = rgen_pick_glonass_ephemeris($records, $t);
         if ($best === null) {
             continue;
         }
-        $pos = rgen_glonass_sat_position($best, $t);
+        // ГЛОНАСС: та же пара поправок (light-time/Саньяк), но БЕЗ отдельной
+        // релятивистской поправки часов — в отличие от GPS, у ГЛОНАСС нет
+        // эталонной (SiGOG и т.п.) проверенной формулы под рукой, добавлять
+        // непроверенную численно лучше не рисковать.
+        $pos = rgen_sat_position_at_reception('rgen_glonass_sat_position', $best, $t, $ecef, RGEN_GLO_OMEGA_E);
         $elevDeg = rgen_elevation_deg($ecef, $pos);
         if ($elevDeg < RGEN_ELEVATION_MASK_DEG) {
             continue;
         }
         $satClockM = RGEN_C * rgen_glonass_clock_bias_sec($best, $t);
-        $ranges[$sat] = ['range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg), 'elevDeg' => $elevDeg];
+        $ranges[$sat] = [
+            'range' => rgen_range($ecef, $pos) - $satClockM + rgen_tropo_delay_m($elevDeg, $ecef),
+            'elevDeg' => $elevDeg,
+            // FDMA-литера нужна вызывающему коду для расчёта ИМЕННО ЭТОГО
+            // спутника длины волны L1/L2 (см. RGEN_GLO_F1_STEP в
+            // Constants.php) — без неё фаза для разных литер ГЛОНАСС
+            // считается с слегка неверным масштабом.
+            'freqChannel' => (int)($best['freq_channel'] ?? 0),
+        ];
     }
     return $ranges;
 }
@@ -306,13 +445,32 @@ function rgen_build_rinex2_header(string $stationName, array $ecef, int $startUn
     $out .= rgen_header_line(sprintf('%6d%6d', 1, 1), 'WAVELENGTH FACT L1/2');
     $out .= rgen_build_obs_types_header_lines(RGEN_RINEX2_OBS_TYPES);
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
-    // Сверено байт-в-байт с реальным рабочим файлом (RP1 2390.25O,
-    // принимается TBC) — там метка времени именно "GPS", не "UTC". Моя
-    // более ранняя попытка поменять это была неверной — откатываю.
+    // ИСТОРИЯ ЭТОЙ СТРОКИ (см. подробный комментарий у rgen_gpst_unix в
+    // Constants.php): сдвиг меток на GPST включали, откатывали и включили
+    // обратно. Откат БЕЗ сдвига был проверен повторно живым тестом RTKLIB
+    // (rnx2rtkp single-point) — высота решения снова уходит на десятки км
+    // и плывёт по времени, то есть без сдвига геометрия объективно
+    // неверна для любого строгого по времени обработчика. Реальный прогон
+    // через TBC ПОСЛЕ отката (без сдвига) тоже не заработал — другая
+    // формулировка той же ошибки ("координаты базовой станции
+    // недостаточно близки к истинным"), то есть откат не помог TBC, а
+    // только сломал то, что было физически верно. Возвращаем сдвиг —
+    // GPST-метки нужны для самосогласованности данных в принципе, а
+    // проблема TBC, судя по всему, отдельная и не связана с этим конкретным
+    // числом (она фигурирует в комментариях этого файла ещё с прошлых
+    // сессий, до сегодняшних правок).
+    $firstObsGpst = rgen_gpst_unix($startUnix);
     $out .= rgen_header_line(
-        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $startUnix), (int)gmdate('n', $startUnix), (int)gmdate('j', $startUnix), (int)gmdate('G', $startUnix), (int)gmdate('i', $startUnix), (float)gmdate('s', $startUnix), ''),
+        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
+    // Сверено с реальным рабочим файлом (приёмник South GNSS, "EKB2...
+    // MN/MO.rnx", успешно даёт Fix в TBC) — там этот заголовок ЕСТЬ, у нас
+    // не было вовсе. Раз вся эта эпопея была про рассинхрон GPST/UTC,
+    // отсутствие явного "сколько секунд координации" могло заставлять TBC
+    // использовать своё значение по умолчанию (которое могло не совпасть с
+    // нашим RGEN_GPS_UTC_LEAP_SECONDS).
+    $out .= rgen_header_line(sprintf('%6d', RGEN_GPS_UTC_LEAP_SECONDS), 'LEAP SECONDS');
     $out .= rgen_header_line('', 'END OF HEADER');
     return $out;
 }
@@ -329,20 +487,35 @@ function rgen_format_sat_list_lines(string $epochPrefix, array $satIds): string
     return $out;
 }
 
-function rgen_format_obs_line(array $values): string
+/**
+ * @param array<int, int|null> $flags индикатор силы сигнала 1-9 (см.
+ *        rgen_snr_flag) на ту же позицию, что и $values; null/отсутствие —
+ *        поле остаётся пустым (как раньше, для незадействованных типов).
+ */
+function rgen_format_obs_line(array $values, array $flags = []): string
 {
-    // LLI и SSI — ОБА пустые (сверено байт-в-байт с реальными рабочими
-    // файлами: между значениями ровно 4 пробела — 2 пустых флага текущего
-    // значения + 2 ведущих пробела следующего F14.3, а не 3, как было при
-    // LLI='0'). 17 типов наблюдений (см. RGEN_RINEX2_OBS_TYPES) — максимум
-    // 5 значений на строку данных (RINEX 2.11), остаток переносится на
-    // следующую строку БЕЗ какого-либо префикса — именно так устроен
-    // настоящий файл с приёмника CHC (4 строки на спутник: 5+5+5+2).
+    // LLI всегда пустой (флаг потери цикла — для синтетических данных без
+    // реальных перерывов сигнала это корректно пишется как "неизвестно",
+    // не как 0). SSI/индикатор силы сигнала — раньше тоже был всегда
+    // пустым (сверено байт-в-байт со старым файлом CHC — там тоже пустой),
+    // теперь заполняется через $flags там, где он передан (см.
+    // rgen_snr_flag) — по новому образцу реального файла South GNSS,
+    // у которого это поле заполнено всегда. 17 типов наблюдений (см.
+    // RGEN_RINEX2_OBS_TYPES) — максимум 5 значений на строку данных
+    // (RINEX 2.11), остаток переносится на следующую строку БЕЗ
+    // какого-либо префикса — именно так устроен настоящий файл с
+    // приёмника CHC (4 строки на спутник: 5+5+5+2).
     $out = '';
-    foreach (array_chunk($values, 5) as $chunk) {
+    foreach (array_chunk($values, 5) as $i => $chunk) {
+        $flagChunk = array_slice($flags, $i * 5, count($chunk));
         $line = '';
-        foreach ($chunk as $v) {
-            $line .= $v === null ? str_repeat(' ', 16) : sprintf('%14.3f', $v) . '  ';
+        foreach ($chunk as $j => $v) {
+            if ($v === null) {
+                $line .= str_repeat(' ', 16);
+                continue;
+            }
+            $flag = $flagChunk[$j] ?? null;
+            $line .= sprintf('%14.3f', $v) . ' ' . ($flag !== null ? (string)$flag : ' ');
         }
         $out .= $line . "\r\n";
     }
@@ -360,10 +533,11 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         $eph['glonass'] = [];
     }
     $intervalSec = 5.0;
+    // ГЛОНАСС-длины волн считаются ПЕР-СПУТНИКОВО внутри цикла ниже (FDMA,
+    // см. RGEN_GLO_F1_STEP в Constants.php) — здесь только GPS, общая для
+    // всех спутников системы (CDMA, одна несущая на все PRN).
     $lambdaGps1 = RGEN_C / RGEN_GPS_F1;
     $lambdaGps2 = RGEN_C / RGEN_GPS_F2;
-    $lambdaGlo1 = RGEN_C / RGEN_GLO_F1;
-    $lambdaGlo2 = RGEN_C / RGEN_GLO_F2;
     $ambiguities = rgen_generate_ambiguities($eph);
 
     // Смещение часов приёмника — раньше было до ±2000 м (~6.7 мкс), теперь
@@ -390,11 +564,22 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         $clockOffsetM = $clockBiasM + $clockDriftMPerSec * ($t - $startUnix);
 
         $epochRows = []; // satId => [C1, L1, D1, S1, P2, L2, D2, S2, C2, C5, L5, D5, S5, C7, L7, D7, S7]
+        $epochFlags = []; // satId => индикаторы силы сигнала (см. rgen_snr_flag) на тех же позициях
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
-            [$lambda1, $lambda2] = $isGlo ? [$lambdaGlo1, $lambdaGlo2] : [$lambdaGps1, $lambdaGps2];
-            [$f1, $f2] = $isGlo ? [RGEN_GLO_F1, RGEN_GLO_F2] : [RGEN_GPS_F1, RGEN_GPS_F2];
+            // ГЛОНАСС — FDMA, своя несущая на КАЖДЫЙ спутник (литера
+            // freqChannel, -7..+6, см. RGEN_GLO_F1_STEP в Constants.php),
+            // а не одна номинальная частота на все спутники сразу.
+            if ($isGlo) {
+                $k = $info['freqChannel'] ?? 0;
+                $f1 = RGEN_GLO_F1 + $k * RGEN_GLO_F1_STEP;
+                $f2 = RGEN_GLO_F2 + $k * RGEN_GLO_F2_STEP;
+            } else {
+                [$f1, $f2] = [RGEN_GPS_F1, RGEN_GPS_F2];
+            }
+            $lambda1 = RGEN_C / $f1;
+            $lambda2 = RGEN_C / $f2;
 
             // Ионосфера: код запаздывает (+iono), фаза спешит (-iono), по
             // частоте L2 задержка больше, чем на L1 (~в (f1/f2)^2 раз) —
@@ -417,6 +602,13 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
             // эти диапазоны для GPS/ГЛОНАСС, см. примечание у
             // RGEN_RINEX2_OBS_TYPES).
             $epochRows[$sat] = [$c1, $l1, $d1, $s1, $p2, $l2, $d2, $s2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            // Сверено байт-в-байт с реальным файлом (EKB2/ARTI): индикатор
+            // силы сигнала стоит ТОЛЬКО у фазовых наблюдений (L1/L2) — у
+            // кода (C1/P2), допплера (D1/D2) и самого SNR-наблюдения
+            // (S1/S2) он всегда пуст, даже в настоящем файле.
+            $flag1 = rgen_snr_flag($s1);
+            $flag2 = rgen_snr_flag($s2);
+            $epochFlags[$sat] = [null, $flag1, null, null, null, $flag2, null, null, null, null, null, null, null, null, null, null, null];
         }
 
         ksort($epochRows);
@@ -429,10 +621,13 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
         // то есть импорт проходил). Значит TBC ожидает именно эту раскладку
         // колонок (с лишним пробелом перед годом), а не строго
         // спецификационную — возвращаем %3d.
+        // GPST, не сырой UTC — см. подробную историю у TIME OF FIRST OBS в
+        // rgen_build_rinex2_header выше и у rgen_gpst_unix в Constants.php.
+        $tGpst = rgen_gpst_unix((int)$t);
         $epochPrefix = sprintf(
             '%3d%3d%3d%3d%3d%11.7f%3d%3d',
-            (int)gmdate('y', $t), (int)gmdate('n', $t), (int)gmdate('j', $t),
-            (int)gmdate('G', $t), (int)gmdate('i', $t), (float)gmdate('s', $t) + $frac,
+            (int)gmdate('y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
+            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
             0, count($epochRows)
         );
         // В однородном GPS-файле (gpsOnly) спутники пишутся просто
@@ -442,8 +637,8 @@ function rgen_build_rinex2_obs(string $stationName, array $ecef, int $startUnix,
             ? array_map(fn($s) => sprintf('%3d', (int)substr($s, 1)), array_keys($epochRows))
             : array_keys($epochRows);
         $out .= rgen_format_sat_list_lines($epochPrefix, $satIdsForList);
-        foreach ($epochRows as $vals) {
-            $out .= rgen_format_obs_line($vals);
+        foreach ($epochRows as $sat => $vals) {
+            $out .= rgen_format_obs_line($vals, $epochFlags[$sat]);
         }
     }
 
@@ -472,11 +667,11 @@ function rgen_build_glonass_slot_freq_lines(array $glonassEph): string
     return $out;
 }
 
-function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUnix, float $intervalSec, array $eph, bool $gpsOnly = false): string
+function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUnix, float $intervalSec, array $eph, bool $gpsOnly = false, float $rinexVersion = 3.04): string
 {
     $sysLabel = $gpsOnly ? 'G (GPS)' : 'M (MIXED)';
     $out = '';
-    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', 3.04, '', 'OBSERVATION DATA', $sysLabel), 'RINEX VERSION / TYPE');
+    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', $rinexVersion, '', 'OBSERVATION DATA', $sysLabel), 'RINEX VERSION / TYPE');
     $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', 'gisdata-rinex-synth', 'gisdata', gmdate('Ymd His', time()) . ' UTC'), 'PGM / RUN BY / DATE');
     $out .= rgen_header_line('Synthetic RINEX (artificial test data, not real observations)', 'COMMENT');
     $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NAME');
@@ -485,55 +680,77 @@ function rgen_build_rinex3_header(string $stationName, array $ecef, int $startUn
     $out .= rgen_header_line(sprintf('%-20s%-20s', '1', RGEN_ANTENNA_TYPE), 'ANT # / TYPE');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', $ecef[0], $ecef[1], $ecef[2]), 'APPROX POSITION XYZ');
     $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', 0.0, 0.0, 0.0), 'ANTENNA: DELTA H/E/N');
-    $out .= rgen_header_line('G    6 C1C L1C C2P L2P S1C S2P', 'SYS / # / OBS TYPES');
+    // L2-код: "W" у GPS (Z-tracking — современные приёмники не трекают
+    // P(Y)-код напрямую, см. реальные файлы EKB2/ARTI: "C2W L2W"), "C" у
+    // ГЛОНАСС (у него нет той же схемы защиты кода, что у GPS, поэтому
+    // там C/A-код и на L2 — "C2C L2C" в тех же реальных файлах). Раньше
+    // здесь было "C2P L2P" для обеих систем — устаревшее обозначение,
+    // которого не было ни у одного реального рабочего файла.
+    $out .= rgen_header_line('G    6 C1C L1C C2W L2W S1C S2W', 'SYS / # / OBS TYPES');
     if (!$gpsOnly) {
-        $out .= rgen_header_line('R    6 C1C L1C C2P L2P S1C S2P', 'SYS / # / OBS TYPES');
+        $out .= rgen_header_line('R    6 C1C L1C C2C L2C S1C S2C', 'SYS / # / OBS TYPES');
         $out .= rgen_build_glonass_slot_freq_lines($eph['glonass']);
     }
     $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
-    // См. примечание про метку времени в rgen_build_rinex2_header — "GPS",
-    // не "UTC" (сверено с реальным рабочим файлом).
+    // См. подробную историю про метку времени в rgen_build_rinex2_header
+    // выше — "GPS" (не "UTC"), числа — в GPST (rgen_gpst_unix).
+    $firstObsGpst = rgen_gpst_unix($startUnix);
     $out .= rgen_header_line(
-        sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $startUnix), (int)gmdate('n', $startUnix), (int)gmdate('j', $startUnix), (int)gmdate('G', $startUnix), (int)gmdate('i', $startUnix), (float)gmdate('s', $startUnix), ''),
+        sprintf('%6d%6d%6d%6d%6d%14.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
         'TIME OF FIRST OBS'
     );
+    // См. примечание у rgen_build_rinex2_header — сверено с реальным
+    // рабочим файлом, у нас этого заголовка не было вовсе.
+    $out .= rgen_header_line(sprintf('%6d', RGEN_GPS_UTC_LEAP_SECONDS), 'LEAP SECONDS');
     $out .= rgen_header_line('', 'END OF HEADER');
     return $out;
 }
 
-function rgen_format_obs_line_rinex3(string $satId, array $values): string
+/**
+ * @param array<int, int|null> $flags см. rgen_format_obs_line.
+ */
+function rgen_format_obs_line_rinex3(string $satId, array $values, array $flags = []): string
 {
-    // LLI/SSI пустые — см. примечание в rgen_format_obs_line (сверено с
-    // реальным рабочим RINEX2-файлом; для RINEX3 эталона нет, но логика
-    // поля та же).
+    // LLI пустой, SSI/индикатор силы сигнала — из $flags там, где передан
+    // (см. rgen_snr_flag и подробную историю в rgen_format_obs_line).
     $line = $satId;
-    foreach ($values as $v) {
-        $line .= $v === null ? str_repeat(' ', 16) : sprintf('%14.3f', $v) . '  ';
+    foreach ($values as $i => $v) {
+        if ($v === null) {
+            $line .= str_repeat(' ', 16);
+            continue;
+        }
+        $flag = $flags[$i] ?? null;
+        $line .= sprintf('%14.3f', $v) . ' ' . ($flag !== null ? (string)$flag : ' ');
     }
     return $line . "\r\n";
 }
 
 /**
- * Строит полный текст RINEX 3.04 OBS-файла для одной станции.
+ * Строит полный текст RINEX 3.04/4.00 OBS-файла для одной станции —
+ * структура наблюдений (формат строк эпох/измерений с 3-символьными
+ * кодами C1C/L1C/...) у RINEX 4.00 для OBS-файлов та же, что и у 3.04,
+ * меняется только номер версии в заголовке (RINEX VERSION / TYPE) —
+ * содержательная разница 4.00 в основном про NAV-файлы (см.
+ * rgen_filter_nav_to_rinex4 в NavFile.php).
  *
  * @param array{gps: array, glonass: array} $eph объединённые эфемериды (см. rgen_merge_ephemerides)
  */
-function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph, bool $gpsOnly = false): string
+function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph, bool $gpsOnly = false, float $rinexVersion = 3.04): string
 {
     if ($gpsOnly) {
         $eph['glonass'] = [];
     }
     $intervalSec = 5.0;
+    // ГЛОНАСС-длины волн считаются ПЕР-СПУТНИКОВО внутри цикла ниже (FDMA,
+    // см. RGEN_GLO_F1_STEP в Constants.php).
     $lambdaGps1 = RGEN_C / RGEN_GPS_F1;
     $lambdaGps2 = RGEN_C / RGEN_GPS_F2;
-    $lambdaGlo1 = RGEN_C / RGEN_GLO_F1;
-    $lambdaGlo2 = RGEN_C / RGEN_GLO_F2;
     $ambiguities = rgen_generate_ambiguities($eph);
 
     $clockBiasM = mt_rand(-200, 200) / 1.0;
     $clockDriftMPerSec = mt_rand(-3, 3) / 1000.0;
 
-    $out = rgen_build_rinex3_header($stationName, $ecef, $startUnix, $intervalSec, $eph, $gpsOnly);
+    $out = rgen_build_rinex3_header($stationName, $ecef, $startUnix, $intervalSec, $eph, $gpsOnly, $rinexVersion);
 
     for ($t = $startUnix; $t <= $endUnix; $t += (int)$intervalSec) {
         $ranges = rgen_compute_visible_ranges($eph, $ecef, (float)$t);
@@ -542,12 +759,20 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
         }
         $clockOffsetM = $clockBiasM + $clockDriftMPerSec * ($t - $startUnix);
 
-        $epochRows = []; // satId => [C1C, L1C, C2P, L2P, S1C, S2P]
+        $epochRows = []; // satId => [C1C, L1C, C2W/C2C, L2W/L2C, S1C, S2W/S2C] — см. метки в заголовке
+        $epochFlags = [];
         foreach ($ranges as $sat => $info) {
             $range = $info['range'];
             $isGlo = $sat[0] === 'R';
-            [$lambda1, $lambda2] = $isGlo ? [$lambdaGlo1, $lambdaGlo2] : [$lambdaGps1, $lambdaGps2];
-            [$f1, $f2] = $isGlo ? [RGEN_GLO_F1, RGEN_GLO_F2] : [RGEN_GPS_F1, RGEN_GPS_F2];
+            if ($isGlo) {
+                $k = $info['freqChannel'] ?? 0;
+                $f1 = RGEN_GLO_F1 + $k * RGEN_GLO_F1_STEP;
+                $f2 = RGEN_GLO_F2 + $k * RGEN_GLO_F2_STEP;
+            } else {
+                [$f1, $f2] = [RGEN_GPS_F1, RGEN_GPS_F2];
+            }
+            $lambda1 = RGEN_C / $f1;
+            $lambda2 = RGEN_C / $f2;
 
             $ionoL1 = RGEN_IONO_ZENITH_L1_M * rgen_iono_mapping($info['elevDeg']);
             $ionoL2 = $ionoL1 * ($f1 / $f2) ** 2;
@@ -560,18 +785,133 @@ function rgen_build_rinex3_obs(string $stationName, array $ecef, int $startUnix,
             $s1 = rgen_snr_db($info['elevDeg']);
             $s2 = rgen_snr_db($info['elevDeg']);
             $epochRows[$sat] = [$c1, $l1, $c2, $l2, $s1, $s2];
+            // См. примечание у rgen_build_rinex2_obs — флаг только у фазы.
+            $flag1 = rgen_snr_flag($s1);
+            $flag2 = rgen_snr_flag($s2);
+            $epochFlags[$sat] = [null, $flag1, null, $flag2, null, null];
         }
 
         ksort($epochRows);
         $frac = $t - floor($t);
+        // GPST — см. подробную историю выше.
+        $tGpst = rgen_gpst_unix((int)$t);
         $out .= sprintf(
             "> %4d %02d %02d %02d %02d%11.7f  0%3d\r\n",
-            (int)gmdate('Y', $t), (int)gmdate('n', $t), (int)gmdate('j', $t),
-            (int)gmdate('G', $t), (int)gmdate('i', $t), (float)gmdate('s', $t) + $frac,
+            (int)gmdate('Y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
+            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
             count($epochRows)
         );
         foreach ($epochRows as $sat => $vals) {
-            $out .= rgen_format_obs_line_rinex3($sat, $vals);
+            $out .= rgen_format_obs_line_rinex3($sat, $vals, $epochFlags[$sat]);
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * Набор типов наблюдений для режима "Gisdata" — ровно тот, что в примере
+ * самого эталонного SiGOGbcst (input.txt: "rp1  C1P1P2L1L2"), а не 17 типов
+ * CHC из RGEN_RINEX2_OBS_TYPES (тот набор — под другую, нашу основную
+ * задачу имитации конкретного приёмника, здесь не нужен).
+ */
+const RGEN_GISDATA_OBS_TYPES = ['C1', 'P1', 'P2', 'L1', 'L2'];
+
+function rgen_build_gisdata_header(string $stationName, array $ecef, int $startUnix, float $intervalSec): string
+{
+    $out = '';
+    // RINEX 2.11, система GPS — сам эталонный SiGOGbcst пишет 2.10 и
+    // только GPS; версию RINEX берём 2.11 (как и наш основной CHC-режим),
+    // систему — строго GPS, т.к. SiGOGbcst ГЛОНАСС не считает вовсе.
+    $out .= rgen_header_line(sprintf('%9.2f%11s%-20s%-20s', 2.11, '', 'OBSERVATION DATA', 'G (GPS)'), 'RINEX VERSION / TYPE');
+    $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', 'gisdata-rinex-gisdata', 'gisdata', gmdate('Ymd His', time()) . ' UTC'), 'PGM / RUN BY / DATE');
+    $out .= rgen_header_line('Gisdata-mode synthetic RINEX: no iono, no noise, no ambiguity', 'COMMENT');
+    $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NAME');
+    $out .= rgen_header_line(substr($stationName, 0, 60), 'MARKER NUMBER');
+    $out .= rgen_header_line(sprintf('%-20s%-40s', 'SYNTH', 'gisdata'), 'OBSERVER / AGENCY');
+    $out .= rgen_header_line(sprintf('%-20s%-20s%-20s', '1', 'GISDATA', '1.0'), 'REC # / TYPE / VERS');
+    $out .= rgen_header_line(sprintf('%-20s%-20s', '1', 'GISDATA'), 'ANT # / TYPE');
+    $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', $ecef[0], $ecef[1], $ecef[2]), 'APPROX POSITION XYZ');
+    $out .= rgen_header_line(sprintf('%14.4f%14.4f%14.4f', 0.0, 0.0, 0.0), 'ANTENNA: DELTA H/E/N');
+    $out .= rgen_header_line(sprintf('%6d%6d', 1, 1), 'WAVELENGTH FACT L1/2');
+    $out .= rgen_build_obs_types_header_lines(RGEN_GISDATA_OBS_TYPES);
+    $out .= rgen_header_line(sprintf('%10.3f', $intervalSec), 'INTERVAL');
+    $firstObsGpst = rgen_gpst_unix($startUnix);
+    $out .= rgen_header_line(
+        sprintf('%6d%6d%6d%6d%6d%13.7f%5sGPS', (int)gmdate('Y', $firstObsGpst), (int)gmdate('n', $firstObsGpst), (int)gmdate('j', $firstObsGpst), (int)gmdate('G', $firstObsGpst), (int)gmdate('i', $firstObsGpst), (float)gmdate('s', $firstObsGpst), ''),
+        'TIME OF FIRST OBS'
+    );
+    // См. примечание у rgen_build_rinex2_header — сверено с реальным
+    // рабочим файлом, у нас этого заголовка не было вовсе.
+    $out .= rgen_header_line(sprintf('%6d', RGEN_GPS_UTC_LEAP_SECONDS), 'LEAP SECONDS');
+    $out .= rgen_header_line('', 'END OF HEADER');
+    return $out;
+}
+
+/**
+ * Строит RINEX 2.11 OBS строго по логике/математике эталонного SiGOGbcst —
+ * это режим "Gisdata": отдельный, самостоятельный режим генератора
+ * (выбирается на форме), не заменяющий и не меняющий основной
+ * (rgen_build_rinex2_obs/rinex3): только GPS (SiGOGbcst ГЛОНАСС не
+ * поддерживает), геометрическая дальность с light-time/Sagnac,
+ * релятивистской поправкой и тропосферой Hopfield/Seeber (то же, что
+ * считает rgen_compute_visible_ranges — это были методы, перенесённые из
+ * SiGOG в основной генератор) — БЕЗ ионосферы, БЕЗ шума измерений и БЕЗ
+ * целочисленной неоднозначности фазы: код и фаза берутся из ОДНОЙ и той же
+ * скорректированной дальности (см. SiGOGbcst, SUBROUTINE rinex:
+ * vto(cto)=dist(i)*alp(cto), alp=1 для кода, alp=f/c для фазы — никакого
+ * отдельного слагаемого неоднозначности или шума там нет). Координаты
+ * станции — ECEF в метрах, как и во всех остальных режимах генератора
+ * (внутренние величины везде в метрах; SiGOGbcst исторически принимал
+ * координаты в км только в своём собственном входном файле — здесь in/out
+ * уже в метрах, доп. перевода не требуется).
+ *
+ * @param array{gps: array, glonass: array} $eph объединённые эфемериды (см. rgen_merge_ephemerides)
+ */
+function rgen_build_gisdata_obs(string $stationName, array $ecef, int $startUnix, int $endUnix, array $eph): string
+{
+    $eph['glonass'] = [];
+    $intervalSec = 5.0;
+    $lambda1 = RGEN_C / RGEN_GPS_F1;
+    $lambda2 = RGEN_C / RGEN_GPS_F2;
+
+    $out = rgen_build_gisdata_header($stationName, $ecef, $startUnix, $intervalSec);
+
+    for ($t = $startUnix; $t <= $endUnix; $t += (int)$intervalSec) {
+        $ranges = rgen_compute_visible_ranges($eph, $ecef, (float)$t);
+        if (!$ranges) {
+            continue;
+        }
+        $epochRows = []; // satId => [C1, P1, P2, L1, L2]
+        $epochFlags = [];
+        foreach ($ranges as $sat => $info) {
+            // $range уже включает геометрию + часы спутника + тропосферу
+            // (см. rgen_compute_visible_ranges) — без иono, без шума, без
+            // неоднозначности: ровно SiGOG-логика.
+            $range = $info['range'];
+            $epochRows[$sat] = [$range, $range, $range, $range / $lambda1, $range / $lambda2];
+            // SiGOG-логика не считает SNR вовсе — индикатор силы сигнала
+            // (см. rgen_snr_flag) для записи в файл берём из той же
+            // элевационной модели, что и остальные режимы (rgen_snr_db),
+            // без добавления шума в сами измерения дальности/фазы. Флаг —
+            // только у фазы (L1/L2, индексы 3 и 4), см. примечание у
+            // rgen_build_rinex2_obs (сверено байт-в-байт с реальным
+            // файлом: у кода/допплера/SNR-наблюдения он всегда пуст).
+            $flag1 = rgen_snr_flag(rgen_snr_db($info['elevDeg']));
+            $epochFlags[$sat] = [null, null, null, $flag1, $flag1];
+        }
+        ksort($epochRows);
+        $frac = $t - floor($t);
+        $tGpst = rgen_gpst_unix((int)$t);
+        $epochPrefix = sprintf(
+            '%3d%3d%3d%3d%3d%11.7f%3d%3d',
+            (int)gmdate('y', $tGpst), (int)gmdate('n', $tGpst), (int)gmdate('j', $tGpst),
+            (int)gmdate('G', $tGpst), (int)gmdate('i', $tGpst), (float)gmdate('s', $tGpst) + $frac,
+            0, count($epochRows)
+        );
+        $out .= rgen_format_sat_list_lines($epochPrefix, array_keys($epochRows));
+        foreach ($epochRows as $sat => $vals) {
+            $out .= rgen_format_obs_line($vals, $epochFlags[$sat]);
         }
     }
 

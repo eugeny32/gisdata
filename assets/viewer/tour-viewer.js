@@ -37,8 +37,17 @@ function createNavCubeGizmo(pc, app) {
   }
   const gizmoCamera = new pc.Entity("gizmoCamera");
   gizmoCamera.addComponent("camera", {
-    clearColor: new pc.Color(0, 0, 0, 0),
-    clearColorBuffer: true,
+    // clearColorBuffer: true (как было) ЗАТИРАЛ пиксели модели в области
+    // вьюпорта штурвала своим clearColor ПЕРЕД отрисовкой кубика — отсюда
+    // сплошной чёрный квадрат в углу вместо прозрачного оверлея прямо на
+    // модели (alpha 0 у clearColor не помогает: канвас всё равно физически
+    // перезатирается, а не компонуется по альфе). Не очищаем цвет вообще —
+    // кубик рисуется НАД уже отрендеренной картинкой основной камеры, а не
+    // в "обнулённом" прямоугольнике. Глубину чистим (clearDepthBuffer),
+    // иначе кубик мог бы некорректно перекрываться остатками depth-буфера
+    // основной камеры в этой же области экрана.
+    clearColorBuffer: false,
+    clearDepthBuffer: true,
     layers: [gizmoLayer.id],
     priority: 1,
     // рисуется после основной камеры — поверх неё
@@ -102,15 +111,61 @@ function createNavCubeGizmo(pc, app) {
   return { updateTransform, handlePointerDown };
 }
 const AXIS_FIX_ROTATION = [-0.7071, 0, 0, 0.7071];
-async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTransform, isCurrent, showProgress) {
+const CACHE_NAME = "gisdata-splat-cache-v1";
+async function resolveSplatUrl(url, onProgress) {
+  if (typeof caches === "undefined" || typeof fetch === "undefined") return url;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(url);
+    if (cached) {
+      const blob2 = await cached.blob();
+      onProgress(blob2.size, blob2.size);
+      return URL.createObjectURL(blob2);
+    }
+    const response = await fetch(url);
+    if (!response.ok || !response.body) return url;
+    const total = Number(response.headers.get("content-length")) || 0;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      onProgress(received, total || received);
+    }
+    const blob = new Blob(chunks);
+    await cache.put(url, new Response(blob)).catch(() => {
+    });
+    return URL.createObjectURL(blob);
+  } catch {
+    return url;
+  }
+}
+async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTransform, isCurrent, showProgress, sogUrls = [], outObjectUrls = []) {
   let fileIndex = 0;
-  for (const url of urls) {
+  for (const rawUrl of urls) {
     if (!isCurrent()) return;
+    const networkUrl = sogUrls[fileIndex] || rawUrl;
     fileIndex++;
     const filePrefix = urls.length > 1 ? `Файл ${fileIndex} из ${urls.length}: ` : "";
     showProgress(`${filePrefix}Загрузка модели...`, 0);
+    const resolvedUrl = await resolveSplatUrl(networkUrl, (received, total) => {
+      const pct = total ? received / total * 100 : 0;
+      showProgress(`${filePrefix}Загрузка модели... ${Math.round(pct)}%`, pct);
+    });
+    if (!isCurrent()) return;
+    if (resolvedUrl.startsWith("blob:")) outObjectUrls.push(resolvedUrl);
     await new Promise((resolve, reject) => {
-      const asset = new pc.Asset("splat-" + fileIndex, "gsplat", { url, filename: url.split("/").pop() });
+      const asset = new pc.Asset("splat-" + fileIndex, "gsplat", {
+        url: resolvedUrl,
+        // filename (а не url) определяет выбор парсера по расширению
+        // (PlyParser/SogBundleParser/...) — см. ResourceLoader.load в
+        // движке: url.original = asset.file.filename. blob:-URL у
+        // расширения не имеет, поэтому имя берём из ИСХОДНОГО сетевого URL.
+        filename: networkUrl.split("/").pop()
+      });
       app.assets.add(asset);
       asset.on("progress", (received, total) => {
         const pct = total ? received / total * 100 : 0;
@@ -146,19 +201,34 @@ async function loadSplatFiles(pc, app, urls, target, setDistance, updateCameraTr
     });
   }
 }
-function createPointCloudMaterial(pc, pointSizePx) {
+const COLOR_MODE_INDEX = {
+  rgb: 0,
+  height: 1,
+  intensity: 2,
+  classification: 3
+};
+function createPointCloudMaterial(pc, pointSizePx, bounds2 = { min: [0, 0, 0], max: [1, 1, 1] }) {
   const material = new pc.ShaderMaterial({
     uniqueName: "GisdataLasPointCloudShader",
-    attributes: { aPosition: pc.SEMANTIC_POSITION, aColor: pc.SEMANTIC_COLOR },
+    attributes: {
+      aPosition: pc.SEMANTIC_POSITION,
+      aColor: pc.SEMANTIC_COLOR,
+      aTexCoord0: pc.SEMANTIC_TEXCOORD0
+    },
     vertexGLSL: `
       attribute vec3 aPosition;
       attribute vec4 aColor;
+      attribute vec2 aTexCoord0;
       uniform mat4 matrix_model;
       uniform mat4 matrix_viewProjection;
       uniform float uPointSize;
       varying vec4 vColor;
+      varying vec2 vIntensityClass;
+      varying vec3 vLocalPos;
       void main(void) {
         vColor = aColor;
+        vIntensityClass = aTexCoord0;
+        vLocalPos = aPosition;
         vec4 worldPos = matrix_model * vec4(aPosition, 1.0);
         gl_Position = matrix_viewProjection * worldPos;
         gl_PointSize = uPointSize;
@@ -167,14 +237,114 @@ function createPointCloudMaterial(pc, pointSizePx) {
     fragmentGLSL: `
       precision mediump float;
       varying vec4 vColor;
+      varying vec2 vIntensityClass;
+      varying vec3 vLocalPos;
+      uniform float uColorMode;
+      uniform vec2 uHeightRange;
+      uniform float uClipActive;
+      uniform vec3 uClipMin;
+      uniform vec3 uClipMax;
+      uniform float uSectionActive;
+      uniform vec3 uSectionNormal;
+      uniform float uSectionD;
+
+      vec3 hslToRgb(float h, float s, float l) {
+        float k0 = mod(0.0 + h * 12.0, 12.0);
+        float k8 = mod(8.0 + h * 12.0, 12.0);
+        float k4 = mod(4.0 + h * 12.0, 12.0);
+        float a = s * min(l, 1.0 - l);
+        float r = l - a * max(-1.0, min(min(k0 - 3.0, 9.0 - k0), 1.0));
+        float g = l - a * max(-1.0, min(min(k8 - 3.0, 9.0 - k8), 1.0));
+        float b = l - a * max(-1.0, min(min(k4 - 3.0, 9.0 - k4), 1.0));
+        return vec3(r, g, b);
+      }
+
+      // ASPRS LAS classification codes — упрощённая палитра под самые
+      // частые классы; всё неперечисленное — серый (как "unclassified").
+      vec3 classificationColor(float c) {
+        int cls = int(c + 0.5);
+        if (cls == 2) return vec3(0.55, 0.40, 0.20); // ground
+        if (cls == 3) return vec3(0.55, 0.85, 0.35); // low vegetation
+        if (cls == 4) return vec3(0.30, 0.65, 0.25); // medium vegetation
+        if (cls == 5) return vec3(0.10, 0.45, 0.15); // high vegetation
+        if (cls == 6) return vec3(0.90, 0.55, 0.20); // building
+        if (cls == 7) return vec3(0.90, 0.10, 0.80); // noise
+        if (cls == 9) return vec3(0.20, 0.50, 0.95); // water
+        return vec3(0.6, 0.6, 0.6); // 0/1/unclassified/прочее
+      }
+
       void main(void) {
-        gl_FragColor = vColor;
+        if (uClipActive > 0.5) {
+          if (vLocalPos.x < uClipMin.x || vLocalPos.x > uClipMax.x ||
+              vLocalPos.y < uClipMin.y || vLocalPos.y > uClipMax.y ||
+              vLocalPos.z < uClipMin.z || vLocalPos.z > uClipMax.z) {
+            discard;
+          }
+        }
+        // Сечение по линии (2 клика на модели, см. annotations.ts/map.php)
+        // — вертикальная плоскость через эти 2 точки, а не оси X/Y/Z как у
+        // uClipMin/Max выше: режет под любым углом, как линия разреза в
+        // BIM/CAD, а не только параллельно сторонам bounding box.
+        if (uSectionActive > 0.5 && dot(vLocalPos, uSectionNormal) > uSectionD) {
+          discard;
+        }
+        vec3 color;
+        if (uColorMode < 0.5) {
+          color = vColor.rgb;
+        } else if (uColorMode < 1.5) {
+          float extent = max(uHeightRange.y - uHeightRange.x, 0.0001);
+          float t = clamp((vLocalPos.z - uHeightRange.x) / extent, 0.0, 1.0);
+          color = hslToRgb((1.0 - t) * 0.66, 0.8, 0.5);
+        } else if (uColorMode < 2.5) {
+          color = vec3(clamp(vIntensityClass.x, 0.0, 1.0));
+        } else {
+          color = classificationColor(vIntensityClass.y);
+        }
+        gl_FragColor = vec4(color, 1.0);
       }
     `
   });
   material.setParameter("uPointSize", pointSizePx);
+  material.setParameter("uColorMode", 0);
+  material.setParameter("uHeightRange", new Float32Array([bounds2.min[2], bounds2.max[2]]));
+  material.setParameter("uClipActive", 0);
+  material.setParameter("uClipMin", new Float32Array(bounds2.min));
+  material.setParameter("uClipMax", new Float32Array(bounds2.max));
+  material.setParameter("uSectionActive", 0);
+  material.setParameter("uSectionNormal", new Float32Array([1, 0, 0]));
+  material.setParameter("uSectionD", 0);
   material.update();
+  material.gisdataBounds = bounds2;
   return material;
+}
+function setPointCloudColorMode(material, mode) {
+  material.setParameter("uColorMode", COLOR_MODE_INDEX[mode]);
+  material.update();
+}
+function setPointCloudClip(material, active, box) {
+  const bounds2 = material.gisdataBounds;
+  if (!bounds2) return;
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clipMin = [
+    lerp(bounds2.min[0], bounds2.max[0], box.min[0]),
+    lerp(bounds2.min[1], bounds2.max[1], box.min[1]),
+    lerp(bounds2.min[2], bounds2.max[2], box.min[2])
+  ];
+  const clipMax = [
+    lerp(bounds2.min[0], bounds2.max[0], box.max[0]),
+    lerp(bounds2.min[1], bounds2.max[1], box.max[1]),
+    lerp(bounds2.min[2], bounds2.max[2], box.max[2])
+  ];
+  material.setParameter("uClipActive", active ? 1 : 0);
+  material.setParameter("uClipMin", new Float32Array(clipMin));
+  material.setParameter("uClipMax", new Float32Array(clipMax));
+  material.update();
+}
+function setPointCloudSection(material, active, normal, d) {
+  material.setParameter("uSectionActive", active ? 1 : 0);
+  material.setParameter("uSectionNormal", new Float32Array(normal));
+  material.setParameter("uSectionD", d);
+  material.update();
 }
 function hslToRgb(h, s, l) {
   const k = (n) => (n + h * 12) % 12;
@@ -255,10 +425,20 @@ async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTra
       updateCameraTransform();
     }
     const positions = new Float32Array(count * 3);
+    const bounds2 = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
     for (let i = 0; i < count; i++) {
-      positions[i * 3] = pos[i * 3] - centerOffset.x;
-      positions[i * 3 + 1] = pos[i * 3 + 1] - centerOffset.y;
-      positions[i * 3 + 2] = pos[i * 3 + 2] - centerOffset.z;
+      const x = pos[i * 3] - centerOffset.x;
+      const y = pos[i * 3 + 1] - centerOffset.y;
+      const z = pos[i * 3 + 2] - centerOffset.z;
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = y;
+      positions[i * 3 + 2] = z;
+      if (x < bounds2.min[0]) bounds2.min[0] = x;
+      if (y < bounds2.min[1]) bounds2.min[1] = y;
+      if (z < bounds2.min[2]) bounds2.min[2] = z;
+      if (x > bounds2.max[0]) bounds2.max[0] = x;
+      if (y > bounds2.max[1]) bounds2.max[1] = y;
+      if (z > bounds2.max[2]) bounds2.max[2] = z;
     }
     const colorAttr = data.attributes.COLOR_0 && data.attributes.COLOR_0.value;
     const colors = new Uint8Array(count * 4);
@@ -294,11 +474,19 @@ async function loadLasFiles(pc, app, urls, _target, setDistance, updateCameraTra
         colors[i * 4 + 3] = 255;
       }
     }
+    const intensityAttr = data.attributes.intensity && data.attributes.intensity.value;
+    const classAttr = data.attributes.classification && data.attributes.classification.value;
+    const intensityClass = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      intensityClass[i * 2] = intensityAttr ? intensityAttr[i] / 65535 : 0;
+      intensityClass[i * 2 + 1] = classAttr ? classAttr[i] : 0;
+    }
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, count);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, pointSizePx);
+    const material = createPointCloudMaterial(pc, pointSizePx, bounds2);
     outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity("las-" + fileIndex);
@@ -947,8 +1135,8 @@ var browserPonyfill = { exports: {} };
         return headers;
       }
       Body.call(Request.prototype);
-      function Response(bodyInit, options) {
-        if (!(this instanceof Response)) {
+      function Response2(bodyInit, options) {
+        if (!(this instanceof Response2)) {
           throw new TypeError('Please use the "new" operator, this DOM object constructor cannot be called as a function.');
         }
         if (!options) {
@@ -965,28 +1153,28 @@ var browserPonyfill = { exports: {} };
         this.url = options.url || "";
         this._initBody(bodyInit);
       }
-      Body.call(Response.prototype);
-      Response.prototype.clone = function() {
-        return new Response(this._bodyInit, {
+      Body.call(Response2.prototype);
+      Response2.prototype.clone = function() {
+        return new Response2(this._bodyInit, {
           status: this.status,
           statusText: this.statusText,
           headers: new Headers(this.headers),
           url: this.url
         });
       };
-      Response.error = function() {
-        var response = new Response(null, { status: 200, statusText: "" });
+      Response2.error = function() {
+        var response = new Response2(null, { status: 200, statusText: "" });
         response.ok = false;
         response.status = 0;
         response.type = "error";
         return response;
       };
       var redirectStatuses = [301, 302, 303, 307, 308];
-      Response.redirect = function(url, status) {
+      Response2.redirect = function(url, status) {
         if (redirectStatuses.indexOf(status) === -1) {
           throw new RangeError("Invalid status code");
         }
-        return new Response(null, { status, headers: { location: url } });
+        return new Response2(null, { status, headers: { location: url } });
       };
       exports2.DOMException = g.DOMException;
       try {
@@ -1024,7 +1212,7 @@ var browserPonyfill = { exports: {} };
             options.url = "responseURL" in xhr ? xhr.responseURL : options.headers.get("X-Request-URL");
             var body = "response" in xhr ? xhr.response : xhr.responseText;
             setTimeout(function() {
-              resolve(new Response(body, options));
+              resolve(new Response2(body, options));
             }, 0);
           };
           xhr.onerror = function() {
@@ -1094,11 +1282,11 @@ var browserPonyfill = { exports: {} };
         g.fetch = fetch2;
         g.Headers = Headers;
         g.Request = Request;
-        g.Response = Response;
+        g.Response = Response2;
       }
       exports2.Headers = Headers;
       exports2.Request = Request;
-      exports2.Response = Response;
+      exports2.Response = Response2;
       exports2.fetch = fetch2;
       Object.defineProperty(exports2, "__esModule", { value: true });
       return exports2;
@@ -4581,208 +4769,104 @@ async function loadPointDataView(filename, copc2, node, { lazPerf: lazPerf2, inc
   exports.Las = __importStar2(las);
   __exportStar(utils$1, exports);
 })(lib);
-const POINT_BUDGET = 4e6;
-const WORKER_POOL_SIZE = 3;
-const REFRESH_INTERVAL_MS = 300;
-const SCREEN_SIZE_THRESHOLD = 0.2;
-function nodeBounds(key2, cube2) {
-  const [d, x, y, z] = key2;
-  const cells = 2 ** d;
-  const sx = (cube2[3] - cube2[0]) / cells;
-  const sy = (cube2[4] - cube2[1]) / cells;
-  const sz = (cube2[5] - cube2[2]) / cells;
-  return [
-    cube2[0] + x * sx,
-    cube2[1] + y * sy,
-    cube2[2] + z * sz,
-    cube2[0] + (x + 1) * sx,
-    cube2[1] + (y + 1) * sy,
-    cube2[2] + (z + 1) * sz
-  ];
-}
-function boundsSphere(b) {
-  const cx = (b[0] + b[3]) / 2;
-  const cy = (b[1] + b[4]) / 2;
-  const cz = (b[2] + b[5]) / 2;
-  const dx = b[3] - b[0];
-  const dy = b[4] - b[1];
-  const dz = b[5] - b[2];
-  return { center: [cx, cy, cz], radius: Math.sqrt(dx * dx + dy * dy + dz * dz) / 2 };
-}
-async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCameraTransform, isCurrent, showProgress, pointSizePx, outMaterials) {
-  const absoluteUrl = new URL(url, window.location.origin).toString();
-  showProgress("Загрузка заголовка COPC...", 0);
-  const copc2 = await lib.Copc.create(absoluteUrl);
-  if (!isCurrent()) return { refresh: () => {
-  }, dispose: () => {
-  } };
-  const cube2 = copc2.info.cube;
-  const dataMin = copc2.header.min;
-  const dataMax = copc2.header.max;
-  const centerOffset = [
-    (dataMin[0] + dataMax[0]) / 2,
-    (dataMin[1] + dataMax[1]) / 2,
-    (dataMin[2] + dataMax[2]) / 2
-  ];
-  const centeredCube = [
-    cube2[0] - centerOffset[0],
-    cube2[1] - centerOffset[1],
-    cube2[2] - centerOffset[2],
-    cube2[3] - centerOffset[0],
-    cube2[4] - centerOffset[1],
-    cube2[5] - centerOffset[2]
-  ];
-  const halfExtent = Math.max(dataMax[0] - dataMin[0], dataMax[1] - dataMin[1], dataMax[2] - dataMin[2]) / 2;
-  setDistance(Math.max(halfExtent * 1.8, 0.5));
-  updateCameraTransform();
-  const root = new pc.Entity("copc-root");
-  root.setLocalRotation(...AXIS_FIX_ROTATION);
-  app.root.addChild(root);
-  const material = createPointCloudMaterial(pc, pointSizePx);
-  outMaterials.push(material);
-  let nodes = {};
-  let pages = {};
-  const rootPage = await lib.Copc.loadHierarchyPage(absoluteUrl, copc2.info.rootHierarchyPage);
-  nodes = { ...nodes, ...rootPage.nodes };
-  pages = { ...pages, ...rootPage.pages };
-  if (!isCurrent()) return { refresh: () => {
-  }, dispose: () => {
-  } };
-  const loaded = /* @__PURE__ */ new Map();
-  const pendingKeys = /* @__PURE__ */ new Set();
-  let hasColorDecided = null;
-  const zRange = [dataMin[2] - centerOffset[2], dataMax[2] - centerOffset[2]];
-  const workers = [];
-  for (let i = 0; i < WORKER_POOL_SIZE; i++) {
-    const worker = new Worker(new URL(
-      /* @vite-ignore */
-      "/assets/viewer/assets/copcWorker-yHYaF0eo.js",
-      import.meta.url
-    ), { type: "module" });
-    worker.onerror = (e) => console.error("COPC: ошибка воркера:", e.message || e);
-    workers.push(worker);
-  }
-  let nextWorker = 0;
-  let nextRequestId = 1;
-  const pendingRequests = /* @__PURE__ */ new Map();
-  function disposeNode(key2) {
-    const entry = loaded.get(key2);
-    if (!entry) return;
-    entry.entity.destroy();
-    loaded.delete(key2);
-  }
-  function buildEntity(key2, node, positions, colors) {
-    if (!isCurrent()) return;
-    const mesh = new pc.Mesh(app.graphicsDevice);
-    mesh.setPositions(positions);
-    mesh.setColors32(colors);
-    mesh.update(pc.PRIMITIVE_POINTS, true);
-    const meshInstance = new pc.MeshInstance(mesh, material);
-    const entity = new pc.Entity("copc-node-" + key2);
-    entity.addComponent("render", { meshInstances: [meshInstance] });
-    root.addChild(entity);
-    loaded.set(key2, { entity, pointCount: node.pointCount });
-  }
-  function requestNode(key2, node) {
-    if (loaded.has(key2) || pendingKeys.has(key2)) return;
-    pendingKeys.add(key2);
-    const id = nextRequestId++;
-    pendingRequests.set(id, { key: key2, node });
-    const request = { id, url: absoluteUrl, copc: copc2, node, hasColor: hasColorDecided, zRange, centerOffset };
-    workers[nextWorker].postMessage(request);
-    nextWorker = (nextWorker + 1) % workers.length;
-  }
-  for (const worker of workers) {
-    worker.onmessage = (e) => {
-      const { id, positions, colors, pointCount, hasColor, error } = e.data;
-      const pending = pendingRequests.get(id);
-      pendingRequests.delete(id);
-      if (!pending) return;
-      pendingKeys.delete(pending.key);
-      if (error || !positions || !colors || pointCount === void 0) {
-        console.error("COPC: не удалось загрузить узел", pending.key, error);
-        return;
+const DB_NAME = "gisdata-copc-cache";
+const STORE_NAME = "nodes";
+const DB_VERSION = 1;
+const MAX_CACHED_NODES = 8e3;
+const PRUNE_BATCH = 500;
+let dbPromise = null;
+function openDb() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve) => {
+    if (typeof indexedDB === "undefined") {
+      resolve(null);
+      return;
+    }
+    let req;
+    try {
+      req = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch {
+      resolve(null);
+      return;
+    }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        const store = db.createObjectStore(STORE_NAME, { keyPath: ["url", "key"] });
+        store.createIndex("lastAccess", "lastAccess");
       }
-      if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
-      buildEntity(pending.key, pending.node, positions, colors);
     };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+  return dbPromise;
+}
+async function getCachedNode(url, key2) {
+  const db = await openDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get([url, key2]);
+      req.onsuccess = () => {
+        const row = req.result;
+        if (!row) {
+          resolve(null);
+          return;
+        }
+        store.put({ ...row, lastAccess: Date.now() });
+        resolve({
+          positions: row.positions,
+          colors: row.colors,
+          intensityClass: row.intensityClass,
+          pointCount: row.pointCount,
+          hasColor: row.hasColor
+        });
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+let putCount = 0;
+async function putCachedNode(url, key2, data) {
+  const db = await openDb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put({ url, key: key2, ...data, lastAccess: Date.now() });
+  } catch {
+    return;
   }
-  let lastRefreshAt = 0;
-  let refreshInFlight = false;
-  async function doRefresh(camera) {
-    if (!isCurrent()) return;
-    const camComp = camera.camera;
-    const vp = new pc.Mat4().mul2(camComp.projectionMatrix, camComp.viewMatrix);
-    const frustum = new pc.Frustum();
-    frustum.setFromMat4(vp);
-    const camPos = camera.getPosition();
-    const screenHeight = app.graphicsDevice.height || 1;
-    const fovRad = camComp.fov * Math.PI / 180;
-    const selected = /* @__PURE__ */ new Set();
-    let budgetUsed = 0;
-    const stack = ["0-0-0-0"];
-    while (stack.length) {
-      const keyStr = stack.pop();
-      const node = nodes[keyStr];
-      const page = pages[keyStr];
-      if (!node && !page) continue;
-      const key2 = lib.Key.create(keyStr);
-      const bounds2 = nodeBounds(key2, centeredCube);
-      const sphere = boundsSphere(bounds2);
-      const localCenter = new pc.Vec3(...sphere.center);
-      const worldCenter = root.getWorldTransform().transformPoint(localCenter);
-      const containment = frustum.containsSphere(new pc.BoundingSphere(worldCenter, sphere.radius));
-      if (containment === 0) continue;
-      const distance = worldCenter.distance(camPos);
-      const angularSize = distance > 1e-6 ? sphere.radius / distance : Infinity;
-      const screenSize = screenHeight > 0 ? angularSize / Math.tan(fovRad / 2) : 0;
-      if (node) {
-        selected.add(keyStr);
-        budgetUsed += node.pointCount;
-      }
-      const wantsDescend = screenSize > SCREEN_SIZE_THRESHOLD && budgetUsed < POINT_BUDGET;
-      if (!wantsDescend) continue;
-      if (page && !node) {
-        const subtree = await lib.Copc.loadHierarchyPage(absoluteUrl, page);
-        if (!isCurrent()) return;
-        nodes = { ...nodes, ...subtree.nodes };
-        pages = { ...pages, ...subtree.pages };
-        stack.push(keyStr);
-        continue;
-      }
-      for (const step2 of lib.Step.list()) {
-        const childKey = lib.Key.toString(lib.Key.step(key2, step2));
-        if (nodes[childKey] || pages[childKey]) stack.push(childKey);
-      }
-    }
-    let dispatchBudget = Array.from(loaded.values()).reduce((sum, n) => sum + n.pointCount, 0);
-    for (const key2 of selected) {
-      const node = nodes[key2];
-      if (!node || loaded.has(key2)) continue;
-      if (dispatchBudget + node.pointCount > POINT_BUDGET) continue;
-      dispatchBudget += node.pointCount;
-      requestNode(key2, node);
-    }
-    for (const key2 of Array.from(loaded.keys())) {
-      if (!selected.has(key2)) disposeNode(key2);
-    }
+  putCount++;
+  if (putCount % 200 === 0) {
+    void pruneIfNeeded(db);
   }
-  function refresh(camera) {
-    const now = performance.now();
-    if (refreshInFlight || now - lastRefreshAt < REFRESH_INTERVAL_MS) return;
-    lastRefreshAt = now;
-    refreshInFlight = true;
-    doRefresh(camera).finally(() => {
-      refreshInFlight = false;
+}
+async function pruneIfNeeded(db) {
+  try {
+    const count = await new Promise((resolve) => {
+      const req = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).count();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(0);
     });
+    if (count <= MAX_CACHED_NODES) return;
+    const toDelete = Math.min(PRUNE_BATCH, count - MAX_CACHED_NODES);
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const index = tx.objectStore(STORE_NAME).index("lastAccess");
+    let deleted = 0;
+    const cursorReq = index.openCursor();
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result;
+      if (!cursor || deleted >= toDelete) return;
+      cursor.delete();
+      deleted++;
+      cursor.continue();
+    };
+  } catch {
   }
-  function dispose() {
-    for (const worker of workers) worker.terminate();
-    for (const key2 of Array.from(loaded.keys())) disposeNode(key2);
-    root.destroy();
-  }
-  showProgress("COPC: подгрузка по области видимости...", 100);
-  return { refresh, dispose };
 }
 const DEFAULT_CAMERA_SETTINGS = {
   fov: 45,
@@ -4794,7 +4878,17 @@ const DEFAULT_CAMERA_SETTINGS = {
   moveSpeed: 5,
   pointSizePx: 2,
   edlEnabled: false,
-  navigationMode: "orbit"
+  navigationMode: "orbit",
+  colorMode: "rgb",
+  clipEnabled: false,
+  clipMin: [0, 0, 0],
+  clipMax: [1, 1, 1],
+  showStats: false,
+  pointBudget: 1e7,
+  sectionEnabled: false,
+  sectionNormal: [1, 0, 0],
+  sectionD: 0,
+  exposure: 1
 };
 const STORAGE_KEY = "gisdata.tourViewer.cameraSettings.v1";
 function loadFromStorage() {
@@ -4828,23 +4922,510 @@ function setCameraSettings(partial) {
 function getCameraSettings() {
   return cameraSettings;
 }
+const WORKER_POOL_SIZE = 6;
+const REFRESH_INTERVAL_MS = 300;
+const SCREEN_SIZE_THRESHOLD = 0.12;
+const COARSE_ALWAYS_DEPTH = 2;
+const MOVING_THRESHOLD_MULTIPLIER = 2.5;
+const MOVING_BUDGET_DIVISOR = 4;
+const MOVING_RESTORE_DELAY_MS = 400;
+const IDLE_PREFETCH_DELAY_MS = 600;
+const IDLE_PREFETCH_BATCH = 2;
+function nodeBounds(key2, cube2) {
+  const [d, x, y, z] = key2;
+  const cells = 2 ** d;
+  const sx = (cube2[3] - cube2[0]) / cells;
+  const sy = (cube2[4] - cube2[1]) / cells;
+  const sz = (cube2[5] - cube2[2]) / cells;
+  return [
+    cube2[0] + x * sx,
+    cube2[1] + y * sy,
+    cube2[2] + z * sz,
+    cube2[0] + (x + 1) * sx,
+    cube2[1] + (y + 1) * sy,
+    cube2[2] + (z + 1) * sz
+  ];
+}
+function boundsSphere(b) {
+  const cx = (b[0] + b[3]) / 2;
+  const cy = (b[1] + b[4]) / 2;
+  const cz = (b[2] + b[5]) / 2;
+  const dx = b[3] - b[0];
+  const dy = b[4] - b[1];
+  const dz = b[5] - b[2];
+  return { center: [cx, cy, cz], radius: Math.sqrt(dx * dx + dy * dy + dz * dz) / 2 };
+}
+async function loadCopcPointCloud(pc, app, url, _target, setDistance, updateCameraTransform, isCurrent, showProgress, pointSizePx, outMaterials) {
+  const absoluteUrl = new URL(url, window.location.origin).toString();
+  showProgress("Загрузка заголовка COPC...", 0);
+  const copc2 = await lib.Copc.create(absoluteUrl);
+  if (!isCurrent()) {
+    return {
+      refresh: () => {
+      },
+      dispose: () => {
+      },
+      getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }),
+      pickNearestPoint: () => null
+    };
+  }
+  const cube2 = copc2.info.cube;
+  const dataMin = copc2.header.min;
+  const dataMax = copc2.header.max;
+  const centerOffset = [
+    (dataMin[0] + dataMax[0]) / 2,
+    (dataMin[1] + dataMax[1]) / 2,
+    (dataMin[2] + dataMax[2]) / 2
+  ];
+  const centeredCube = [
+    cube2[0] - centerOffset[0],
+    cube2[1] - centerOffset[1],
+    cube2[2] - centerOffset[2],
+    cube2[3] - centerOffset[0],
+    cube2[4] - centerOffset[1],
+    cube2[5] - centerOffset[2]
+  ];
+  const halfExtent = Math.max(dataMax[0] - dataMin[0], dataMax[1] - dataMin[1], dataMax[2] - dataMin[2]) / 2;
+  setDistance(Math.max(halfExtent * 1.8, 0.5));
+  updateCameraTransform();
+  const root = new pc.Entity("copc-root");
+  root.setLocalRotation(...AXIS_FIX_ROTATION);
+  app.root.addChild(root);
+  const bounds2 = {
+    min: [dataMin[0] - centerOffset[0], dataMin[1] - centerOffset[1], dataMin[2] - centerOffset[2]],
+    max: [dataMax[0] - centerOffset[0], dataMax[1] - centerOffset[1], dataMax[2] - centerOffset[2]]
+  };
+  const heightRange = [bounds2.min[2], bounds2.max[2]];
+  const material = createPointCloudMaterial(pc, pointSizePx, bounds2);
+  outMaterials.push(material);
+  let nodes = {};
+  let pages = {};
+  const rootPage = await lib.Copc.loadHierarchyPage(absoluteUrl, copc2.info.rootHierarchyPage);
+  nodes = { ...nodes, ...rootPage.nodes };
+  pages = { ...pages, ...rootPage.pages };
+  if (!isCurrent()) {
+    return {
+      refresh: () => {
+      },
+      dispose: () => {
+      },
+      getStats: () => ({ loadedNodes: 0, loadedPoints: 0 }),
+      pickNearestPoint: () => null
+    };
+  }
+  const loaded = /* @__PURE__ */ new Map();
+  const pendingKeys = /* @__PURE__ */ new Set();
+  let hasColorDecided = null;
+  const missCounts = /* @__PURE__ */ new Map();
+  const MISS_THRESHOLD = 4;
+  const dataCache = /* @__PURE__ */ new Map();
+  const alwaysKeys = /* @__PURE__ */ new Set();
+  const workers = [];
+  for (let i = 0; i < WORKER_POOL_SIZE; i++) {
+    const worker = new Worker(new URL(
+      /* @vite-ignore */
+      "/assets/viewer/assets/copcWorker-DMw_CXjC.js",
+      import.meta.url
+    ), { type: "module" });
+    worker.onerror = (e) => console.error("COPC: ошибка воркера:", e.message || e);
+    workers.push(worker);
+  }
+  let nextWorker = 0;
+  let nextRequestId = 1;
+  const pendingRequests = /* @__PURE__ */ new Map();
+  function disposeNode(key2) {
+    const entry = loaded.get(key2);
+    if (!entry) return;
+    entry.entity.destroy();
+    loaded.delete(key2);
+  }
+  function buildEntity(key2, node, positions, colors, intensityClass) {
+    if (!isCurrent()) return;
+    const mesh = new pc.Mesh(app.graphicsDevice);
+    mesh.setPositions(positions);
+    mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, node.pointCount);
+    mesh.update(pc.PRIMITIVE_POINTS, true);
+    const meshInstance = new pc.MeshInstance(mesh, material);
+    const entity = new pc.Entity("copc-node-" + key2);
+    entity.addComponent("render", { meshInstances: [meshInstance] });
+    root.addChild(entity);
+    loaded.set(key2, { entity, pointCount: node.pointCount });
+  }
+  function dispatchToWorker(key2, node, render) {
+    const id = nextRequestId++;
+    pendingRequests.set(id, { key: key2, node, render });
+    const request = { id, url: absoluteUrl, copc: copc2, node, hasColor: hasColorDecided, zRange: heightRange, centerOffset };
+    workers[nextWorker].postMessage(request);
+    nextWorker = (nextWorker + 1) % workers.length;
+  }
+  function requestNode(key2, node) {
+    if (loaded.has(key2) || pendingKeys.has(key2)) return;
+    pendingKeys.add(key2);
+    const cachedInMemory = dataCache.get(key2);
+    if (cachedInMemory) {
+      pendingKeys.delete(key2);
+      if (hasColorDecided === null) hasColorDecided = cachedInMemory.hasColor;
+      buildEntity(key2, node, cachedInMemory.positions, cachedInMemory.colors, cachedInMemory.intensityClass);
+      return;
+    }
+    getCachedNode(absoluteUrl, key2).then((cached) => {
+      if (!isCurrent()) {
+        pendingKeys.delete(key2);
+        return;
+      }
+      if (cached) {
+        dataCache.set(key2, cached);
+        pendingKeys.delete(key2);
+        if (hasColorDecided === null) hasColorDecided = cached.hasColor;
+        buildEntity(key2, node, cached.positions, cached.colors, cached.intensityClass);
+        return;
+      }
+      dispatchToWorker(key2, node, true);
+    });
+  }
+  function prefetchNode(key2, node) {
+    if (loaded.has(key2) || pendingKeys.has(key2) || dataCache.has(key2)) return;
+    pendingKeys.add(key2);
+    getCachedNode(absoluteUrl, key2).then((cached) => {
+      if (!isCurrent()) {
+        pendingKeys.delete(key2);
+        return;
+      }
+      if (cached) {
+        dataCache.set(key2, cached);
+        pendingKeys.delete(key2);
+        return;
+      }
+      dispatchToWorker(key2, node, false);
+    });
+  }
+  for (const worker of workers) {
+    worker.onmessage = (e) => {
+      const { id, positions, colors, intensityClass, pointCount, hasColor, error } = e.data;
+      const pending = pendingRequests.get(id);
+      pendingRequests.delete(id);
+      if (!pending) return;
+      pendingKeys.delete(pending.key);
+      if (error || !positions || !colors || !intensityClass || pointCount === void 0) {
+        console.error("COPC: не удалось загрузить узел", pending.key, error);
+        return;
+      }
+      if (hasColorDecided === null && hasColor !== void 0) hasColorDecided = hasColor;
+      const resolvedHasColor = hasColor ?? false;
+      const cacheEntry = { positions, colors, intensityClass, pointCount, hasColor: resolvedHasColor };
+      dataCache.set(pending.key, cacheEntry);
+      void putCachedNode(absoluteUrl, pending.key, cacheEntry);
+      if (pending.render) buildEntity(pending.key, pending.node, positions, colors, intensityClass);
+    };
+  }
+  async function loadAlwaysCoarseLayer() {
+    const stack = ["0-0-0-0"];
+    while (stack.length) {
+      if (!isCurrent()) return;
+      const keyStr = stack.pop();
+      const key2 = lib.Key.create(keyStr);
+      if (key2[0] > COARSE_ALWAYS_DEPTH) continue;
+      const node = nodes[keyStr];
+      const page = pages[keyStr];
+      if (!node && !page) continue;
+      if (node) {
+        alwaysKeys.add(keyStr);
+        requestNode(keyStr, node);
+      }
+      if (page && !node) {
+        const subtree = await lib.Copc.loadHierarchyPage(absoluteUrl, page);
+        if (!isCurrent()) return;
+        nodes = { ...nodes, ...subtree.nodes };
+        pages = { ...pages, ...subtree.pages };
+        stack.push(keyStr);
+        continue;
+      }
+      if (key2[0] === COARSE_ALWAYS_DEPTH) continue;
+      for (const step2 of lib.Step.list()) {
+        const childKey = lib.Key.toString(lib.Key.step(key2, step2));
+        if (nodes[childKey] || pages[childKey]) stack.push(childKey);
+      }
+    }
+  }
+  await loadAlwaysCoarseLayer();
+  let lastRefreshAt = 0;
+  let refreshInFlight = false;
+  let lastMovingAt = 0;
+  async function doRefresh(camera, isMoving) {
+    if (!isCurrent()) return;
+    const camComp = camera.camera;
+    const vp = new pc.Mat4().mul2(camComp.projectionMatrix, camComp.viewMatrix);
+    const frustum = new pc.Frustum();
+    frustum.setFromMat4(vp);
+    const camPos = camera.getPosition();
+    const screenHeight = app.graphicsDevice.height || 1;
+    const fovRad = camComp.fov * Math.PI / 180;
+    const pointBudget = cameraSettings.pointBudget;
+    if (isMoving) lastMovingAt = performance.now();
+    const effectivelyMoving = performance.now() - lastMovingAt < MOVING_RESTORE_DELAY_MS;
+    const isIdle = !effectivelyMoving && performance.now() - lastMovingAt > IDLE_PREFETCH_DELAY_MS;
+    const effectiveThreshold = effectivelyMoving ? SCREEN_SIZE_THRESHOLD * MOVING_THRESHOLD_MULTIPLIER : SCREEN_SIZE_THRESHOLD;
+    const effectiveBudget = effectivelyMoving ? Math.max(pointBudget / MOVING_BUDGET_DIVISOR, 2e5) : pointBudget;
+    const selected = /* @__PURE__ */ new Map();
+    let budgetUsed = 0;
+    const prefetchCandidates = [];
+    const PREFETCH_SCAN_LIMIT = 200;
+    const stack = ["0-0-0-0"];
+    while (stack.length) {
+      const keyStr = stack.pop();
+      const node = nodes[keyStr];
+      const page = pages[keyStr];
+      if (!node && !page) continue;
+      const key2 = lib.Key.create(keyStr);
+      const isCoarseAlways = key2[0] <= COARSE_ALWAYS_DEPTH;
+      const bounds22 = nodeBounds(key2, centeredCube);
+      const sphere = boundsSphere(bounds22);
+      const localCenter = new pc.Vec3(...sphere.center);
+      const worldCenter = root.getWorldTransform().transformPoint(localCenter);
+      const containment = frustum.containsSphere(new pc.BoundingSphere(worldCenter, sphere.radius));
+      if (isCoarseAlways && node) {
+        const entry = loaded.get(keyStr);
+        if (entry) entry.entity.enabled = containment !== 0;
+      }
+      if (containment === 0 && !isCoarseAlways) {
+        if (isIdle && node && !loaded.has(keyStr) && !dataCache.has(keyStr) && prefetchCandidates.length < PREFETCH_SCAN_LIMIT) {
+          prefetchCandidates.push(keyStr);
+        }
+        continue;
+      }
+      const distance = worldCenter.distance(camPos);
+      const angularSize = distance > 1e-6 ? sphere.radius / distance : Infinity;
+      const screenSize = screenHeight > 0 ? angularSize / Math.tan(fovRad / 2) : 0;
+      if (node && !isCoarseAlways) {
+        selected.set(keyStr, distance);
+        budgetUsed += node.pointCount;
+      }
+      const wantsDescend = isCoarseAlways || screenSize > effectiveThreshold && budgetUsed < effectiveBudget;
+      if (!wantsDescend) continue;
+      if (page && !node) {
+        const subtree = await lib.Copc.loadHierarchyPage(absoluteUrl, page);
+        if (!isCurrent()) return;
+        nodes = { ...nodes, ...subtree.nodes };
+        pages = { ...pages, ...subtree.pages };
+        stack.push(keyStr);
+        continue;
+      }
+      for (const step2 of lib.Step.list()) {
+        const childKey = lib.Key.toString(lib.Key.step(key2, step2));
+        if (nodes[childKey] || pages[childKey]) stack.push(childKey);
+      }
+    }
+    const notLoadedKeys = Array.from(selected.keys()).filter((k) => !loaded.has(k));
+    for (let i = notLoadedKeys.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [notLoadedKeys[i], notLoadedKeys[j]] = [notLoadedKeys[j], notLoadedKeys[i]];
+    }
+    const candidates = [
+      ...Array.from(selected.entries()).filter(([k]) => loaded.has(k)),
+      ...notLoadedKeys.map((k) => [k, selected.get(k)])
+    ];
+    let dispatchBudget = 0;
+    for (const [key2] of candidates) {
+      const node = nodes[key2];
+      if (!node) continue;
+      if (loaded.has(key2)) {
+        dispatchBudget += node.pointCount;
+        continue;
+      }
+      if (dispatchBudget + node.pointCount > effectiveBudget) continue;
+      dispatchBudget += node.pointCount;
+      requestNode(key2, node);
+    }
+    if (isIdle) {
+      for (const key2 of prefetchCandidates.slice(0, IDLE_PREFETCH_BATCH)) {
+        const node = nodes[key2];
+        if (node) prefetchNode(key2, node);
+      }
+    }
+    for (const key2 of selected.keys()) {
+      missCounts.delete(key2);
+    }
+    for (const key2 of Array.from(loaded.keys())) {
+      if (selected.has(key2) || alwaysKeys.has(key2)) continue;
+      const misses = (missCounts.get(key2) ?? 0) + 1;
+      if (misses >= MISS_THRESHOLD) {
+        missCounts.delete(key2);
+        disposeNode(key2);
+      } else {
+        missCounts.set(key2, misses);
+      }
+    }
+  }
+  function refresh(camera, isMoving) {
+    const now = performance.now();
+    if (refreshInFlight || now - lastRefreshAt < REFRESH_INTERVAL_MS) return;
+    lastRefreshAt = now;
+    refreshInFlight = true;
+    doRefresh(camera, isMoving).finally(() => {
+      refreshInFlight = false;
+    });
+  }
+  function dispose() {
+    for (const worker of workers) worker.terminate();
+    for (const key2 of Array.from(loaded.keys())) disposeNode(key2);
+    root.destroy();
+  }
+  function getStats() {
+    let loadedPoints = 0;
+    for (const entry of loaded.values()) loadedPoints += entry.pointCount;
+    return { loadedNodes: loaded.size, loadedPoints };
+  }
+  const axisFixInv = new pc.Quat(...AXIS_FIX_ROTATION).clone().invert();
+  function pickNearestPoint(camera, canvas, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
+    const py = (clientY - rect.top) / rect.height * canvas.clientHeight;
+    const camComp = camera.camera;
+    const nearWorld = camComp.screenToWorld(px, py, camComp.nearClip);
+    const farWorld = camComp.screenToWorld(px, py, camComp.farClip);
+    const rayOrigin = axisFixInv.transformVector(nearWorld.clone());
+    const rayDir = axisFixInv.transformVector(farWorld.clone().sub(nearWorld)).normalize();
+    const fovRad = camComp.fov * Math.PI / 180;
+    const screenHeight = app.graphicsDevice.height || 1;
+    const worldPerPixelAtT = (t) => 2 * t * Math.tan(fovRad / 2) / screenHeight;
+    const PICK_RADIUS_PX = 10;
+    let bestT = Infinity;
+    let bestLocal = null;
+    for (const [key2, entry] of loaded) {
+      if (!entry.entity.enabled) continue;
+      const cached = dataCache.get(key2);
+      if (!cached) continue;
+      const pos = cached.positions;
+      const n = pos.length / 3;
+      for (let i = 0; i < n; i++) {
+        const qx = pos[i * 3] - rayOrigin.x;
+        const qy = pos[i * 3 + 1] - rayOrigin.y;
+        const qz = pos[i * 3 + 2] - rayOrigin.z;
+        const t = qx * rayDir.x + qy * rayDir.y + qz * rayDir.z;
+        if (t < 0 || t >= bestT) continue;
+        const perpX = qx - rayDir.x * t;
+        const perpY = qy - rayDir.y * t;
+        const perpZ = qz - rayDir.z * t;
+        const perpSq = perpX * perpX + perpY * perpY + perpZ * perpZ;
+        const maxPerp = worldPerPixelAtT(t) * PICK_RADIUS_PX;
+        if (perpSq <= maxPerp * maxPerp) {
+          bestT = t;
+          bestLocal = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
+        }
+      }
+    }
+    if (!bestLocal) return null;
+    return root.getWorldTransform().transformPoint(new pc.Vec3(bestLocal[0], bestLocal[1], bestLocal[2]));
+  }
+  showProgress("COPC: подгрузка по области видимости...", 100);
+  return { refresh, dispose, getStats, pickNearestPoint };
+}
+async function loadCollisionMesh(pc, app, url) {
+  var _a;
+  const asset = new pc.Asset("collision-mesh", "container", { url });
+  app.assets.add(asset);
+  await new Promise((resolve, reject) => {
+    asset.on("load", () => resolve());
+    asset.on("error", (err) => reject(new Error(String(err))));
+    app.assets.load(asset);
+  });
+  const rotQuat = new pc.Quat(...AXIS_FIX_ROTATION);
+  const rotated = new pc.Vec3();
+  const triangles = [];
+  const resource = asset.resource;
+  for (const renderAsset of resource.renders ?? []) {
+    const meshes = ((_a = renderAsset.resource) == null ? void 0 : _a.meshes) ?? [];
+    for (const mesh of meshes) {
+      const positions = [];
+      const indices = [];
+      mesh.getPositions(positions);
+      mesh.getIndices(indices);
+      for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i] * 3;
+        const b = indices[i + 1] * 3;
+        const c = indices[i + 2] * 3;
+        for (const idx of [a, b, c]) {
+          rotated.set(positions[idx], positions[idx + 1], positions[idx + 2]);
+          rotQuat.transformVector(rotated, rotated);
+          triangles.push(rotated.x, rotated.y, rotated.z);
+        }
+      }
+    }
+  }
+  asset.unload();
+  app.assets.remove(asset);
+  if (triangles.length === 0) return null;
+  const tri = new Float32Array(triangles);
+  function raycast(origin, direction, maxDistance) {
+    const [ox, oy, oz] = origin;
+    const [dx, dy, dz] = direction;
+    const EPS = 1e-7;
+    let nearest = null;
+    for (let i = 0; i < tri.length; i += 9) {
+      const ax = tri[i], ay = tri[i + 1], az = tri[i + 2];
+      const bx = tri[i + 3], by = tri[i + 4], bz = tri[i + 5];
+      const cx = tri[i + 6], cy = tri[i + 7], cz = tri[i + 8];
+      const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+      const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+      const px = dy * e2z - dz * e2y;
+      const py = dz * e2x - dx * e2z;
+      const pz = dx * e2y - dy * e2x;
+      const det = e1x * px + e1y * py + e1z * pz;
+      if (Math.abs(det) < EPS) continue;
+      const invDet = 1 / det;
+      const tx = ox - ax, ty = oy - ay, tz = oz - az;
+      const u = (tx * px + ty * py + tz * pz) * invDet;
+      if (u < 0 || u > 1) continue;
+      const qx = ty * e1z - tz * e1y;
+      const qy = tz * e1x - tx * e1z;
+      const qz = tx * e1y - ty * e1x;
+      const v = (dx * qx + dy * qy + dz * qz) * invDet;
+      if (v < 0 || u + v > 1) continue;
+      const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+      if (t < EPS || t > maxDistance) continue;
+      if (nearest === null || t < nearest) nearest = t;
+    }
+    return nearest;
+  }
+  return {
+    raycast,
+    dispose() {
+      tri.fill(0);
+    }
+  };
+}
 class OrbitController {
   constructor(pc, camera, gizmo) {
     this.distance = 5;
     this.yaw = 45;
     this.pitch = -20;
+    this.homeDistance = 5;
+    this.homeYaw = 45;
+    this.homePitch = -20;
+    this.anim = null;
     this.canvas = null;
     this.dragButton = null;
     this.lastX = 0;
     this.lastY = 0;
+    this.touchPoints = /* @__PURE__ */ new Map();
+    this.pinchStartDistance = 0;
+    this.pinchStartCameraDistance = 0;
     this.onPointerDown = (e) => {
       if (!this.canvas) return;
+      if (e.pointerType === "touch") {
+        this.touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.touchPoints.size === 2) {
+          this.dragButton = null;
+          this.pinchStartDistance = this.touchDistance();
+          this.pinchStartCameraDistance = this.distance;
+          return;
+        }
+      }
       if (e.button === 0) {
         const hit = this.gizmo.handlePointerDown(e, this.canvas);
         if (hit) {
-          this.yaw = hit.yaw;
-          this.pitch = hit.pitch;
-          this.update();
+          this.animateTo(hit.yaw, hit.pitch, this.distance, this.target, 0.6);
           return;
         }
       }
@@ -4853,13 +5434,25 @@ class OrbitController {
       this.lastX = e.clientX;
       this.lastY = e.clientY;
     };
-    this.onPointerUp = () => {
+    this.onPointerUp = (e) => {
+      this.touchPoints.delete(e.pointerId);
       this.dragButton = null;
     };
     this.onContextMenu = (e) => {
       e.preventDefault();
     };
     this.onPointerMove = (e) => {
+      if (e.pointerType === "touch" && this.touchPoints.has(e.pointerId)) {
+        this.touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.touchPoints.size === 2) {
+          const dist = this.touchDistance();
+          if (this.pinchStartDistance > 1e-3) {
+            this.distance = Math.max(0.05, this.pinchStartCameraDistance * (this.pinchStartDistance / dist));
+            this.update();
+          }
+          return;
+        }
+      }
       if (this.dragButton === null) return;
       const dx = e.clientX - this.lastX;
       const dy = e.clientY - this.lastY;
@@ -4874,15 +5467,33 @@ class OrbitController {
       }
       this.update();
     };
+    this.lastWheelAt = 0;
     this.onWheel = (e) => {
       e.preventDefault();
       this.distance = Math.max(0.05, this.distance * (1 + e.deltaY * 1e-3 * cameraSettings.zoomSpeed));
+      this.lastWheelAt = performance.now();
       this.update();
     };
     this.pc = pc;
     this.camera = camera;
     this.gizmo = gizmo;
     this.target = new pc.Vec3(0, 0, 0);
+    this.homeTarget = new pc.Vec3(0, 0, 0);
+  }
+  touchDistance() {
+    const points = Array.from(this.touchPoints.values());
+    if (points.length < 2) return 0;
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  }
+  /** Камера сейчас в движении (драг/пинч/недавнее колесо/анимация
+   * перехода) — читается copcLoader.ts через tourViewer.ts, чтобы на время
+   * движения снижать требуемую детализацию COPC-стриминга (см.
+   * MOVING_THRESHOLD_MULTIPLIER там). Колесо мыши — мгновенное событие, не
+   * "удержание", поэтому считаем "в движении" ещё немного ПОСЛЕ него
+   * (иначе одиночный скролл не успел бы попасть в окно сниженной
+   * детализации, в которой и есть весь смысл). */
+  isInteracting() {
+    return this.dragButton !== null || this.touchPoints.size > 0 || this.anim !== null || performance.now() - this.lastWheelAt < 250;
   }
   /** Панорамирование правой кнопкой — двигает target (а с ним и всю
    * орбиту) в плоскости экрана камеры. Масштаб смещения привязан к
@@ -4904,6 +5515,7 @@ class OrbitController {
   }
   detach() {
     this.dragButton = null;
+    this.touchPoints.clear();
     if (!this.canvas) return;
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointerup", this.onPointerUp);
@@ -4914,6 +5526,66 @@ class OrbitController {
   }
   setDistance(d) {
     this.distance = d;
+  }
+  /** Зовётся загрузчиком модели ОДИН раз сразу после того, как он
+   * посчитал target/distance для свежезагруженной модели (см.
+   * tourViewer.ts) — это и есть тот самый "начальный вид", к которому
+   * должна возвращать кнопка "Центрировать". */
+  captureHome() {
+    this.homeTarget.copy(this.target);
+    this.homeDistance = this.distance;
+    this.homeYaw = this.yaw;
+    this.homePitch = this.pitch;
+  }
+  /** "Сфера модели" — центр и радиус, под которые подогнана камера при
+   * captureHome() (target/distance, теми же коэффициентами, что и framing
+   * самой камеры, см. copcLoader.ts/splatLoader.ts/lasLoader.ts). Используется
+   * только как ГРУБОЕ приближение поверхности модели для пикинга аннотаций
+   * (annotations.ts) — у PlayCanvas нет настоящего picking для облака точек/
+   * сплатов, см. комментарий там. */
+  getHomeSphere() {
+    return { center: this.homeTarget.clone(), radius: this.homeDistance };
+  }
+  /** Кнопка "Центрировать" (Home) — в отличие от update(), не пересчитывает
+   * ТЕКУЩЕЕ состояние, а плавно анимирует переход к снимку captureHome(). */
+  resetToHome() {
+    this.animateTo(this.homeYaw, this.homePitch, this.homeDistance, this.homeTarget, 0.7);
+  }
+  /** Запускает плавный переход к новому yaw/pitch/distance/target —
+   * see this.anim/tick(). Текущее значение становится точкой отправления,
+   * повторный вызов во время уже идущей анимации просто переопределяет
+   * цель (не складывает анимации друг на друга). */
+  animateTo(toYaw, toPitch, toDistance, toTarget, durationSec) {
+    let deltaYaw = toYaw - this.yaw;
+    deltaYaw = ((deltaYaw + 180) % 360 + 360) % 360 - 180;
+    this.anim = {
+      fromYaw: this.yaw,
+      fromPitch: this.pitch,
+      fromDistance: this.distance,
+      fromTarget: this.target.clone(),
+      toYaw: this.yaw + deltaYaw,
+      toPitch,
+      toDistance,
+      toTarget: toTarget.clone(),
+      elapsed: 0,
+      duration: Math.max(durationSec, 1e-3)
+    };
+  }
+  /** Зовётся каждый кадр из tourViewer.ts, пока активен орбитальный режим —
+   * без активной анимации (this.anim === null) это no-op. dt — секунды
+   * (как у app.on('update', dt), см. FlyController.update). */
+  tick(dt) {
+    if (!this.anim) return;
+    const a = this.anim;
+    a.elapsed += dt;
+    const t = Math.min(1, a.elapsed / a.duration);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    this.yaw = a.fromYaw + (a.toYaw - a.fromYaw) * eased;
+    this.pitch = a.fromPitch + (a.toPitch - a.fromPitch) * eased;
+    this.distance = a.fromDistance + (a.toDistance - a.fromDistance) * eased;
+    this.target.lerp(a.fromTarget, a.toTarget, eased);
+    this.update();
+    if (t >= 1) this.anim = null;
   }
   /** Пересчитывает позицию камеры из target/distance/yaw/pitch и двигает
    * штурвал в ту же ориентацию — единая точка входа и для пользовательского
@@ -4931,6 +5603,7 @@ class OrbitController {
   }
 }
 const MOVE_KEYS = /* @__PURE__ */ new Set(["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight"]);
+const COLLISION_SKIN = 0.05;
 class FlyController {
   // pc принимается, но не используется напрямую (camera.forward/right/up и
   // setEulerAngles — обычные методы Entity, без отдельных pc.* вызовов) —
@@ -4938,6 +5611,7 @@ class FlyController {
   constructor(_pc, camera, gizmo) {
     this.yaw = 0;
     this.pitch = 0;
+    this.collisionMesh = null;
     this.canvas = null;
     this.dragButton = null;
     this.lastX = 0;
@@ -4993,6 +5667,12 @@ class FlyController {
     this.camera = camera;
     this.gizmo = gizmo;
   }
+  /** Камера сейчас в движении (драг или зажата клавиша WASD/Space/Shift) —
+   * читается copcLoader.ts через tourViewer.ts (см. OrbitController.
+   * isInteracting() — тот же смысл, для режима полёта/прогулки). */
+  isInteracting() {
+    return this.dragButton !== null || this.pressedKeys.size > 0;
+  }
   attach(canvas) {
     this.canvas = canvas;
     canvas.addEventListener("pointerdown", this.onPointerDown);
@@ -5032,15 +5712,183 @@ class FlyController {
   update(dt) {
     if (this.pressedKeys.size === 0) return;
     const speed = cameraSettings.moveSpeed * dt;
-    const pos = this.camera.getPosition().clone();
+    const oldPos = this.camera.getPosition().clone();
+    const pos = oldPos.clone();
     if (this.pressedKeys.has("KeyW")) pos.add(this.camera.forward.clone().mulScalar(speed));
     if (this.pressedKeys.has("KeyS")) pos.add(this.camera.forward.clone().mulScalar(-speed));
     if (this.pressedKeys.has("KeyD")) pos.add(this.camera.right.clone().mulScalar(speed));
     if (this.pressedKeys.has("KeyA")) pos.add(this.camera.right.clone().mulScalar(-speed));
     if (this.pressedKeys.has("Space")) pos.add(this.camera.up.clone().mulScalar(speed));
     if (this.pressedKeys.has("ShiftLeft") || this.pressedKeys.has("ShiftRight")) pos.add(this.camera.up.clone().mulScalar(-speed));
+    if (this.collisionMesh) {
+      const delta = pos.clone().sub(oldPos);
+      const distance = delta.length();
+      if (distance > 1e-6) {
+        const dir = delta.clone().mulScalar(1 / distance);
+        const hit = this.collisionMesh.raycast(
+          [oldPos.x, oldPos.y, oldPos.z],
+          [dir.x, dir.y, dir.z],
+          distance + COLLISION_SKIN
+        );
+        if (hit !== null) {
+          const safeDistance = Math.max(0, hit - COLLISION_SKIN);
+          pos.copy(oldPos).add(dir.mulScalar(safeDistance));
+        }
+      }
+    }
     this.camera.setPosition(pos);
   }
+}
+function createAnnotationManager(pc, app) {
+  const axisFix = new pc.Quat(...AXIS_FIX_ROTATION);
+  const axisFixInv = axisFix.clone().invert();
+  function localToWorld(p) {
+    return axisFix.transformVector(new pc.Vec3(p[0], p[1], p[2]));
+  }
+  function worldToLocal(v) {
+    const r = axisFixInv.transformVector(v.clone());
+    return [r.x, r.y, r.z];
+  }
+  let layers = [];
+  let drawingPreview = null;
+  let pickSphere = null;
+  function setPickSphere(center, radius) {
+    pickSphere = { center: center.clone(), radius: Math.max(radius, 1e-3) };
+  }
+  let copcHandles = [];
+  function setCopcHandles(handles) {
+    copcHandles = handles;
+  }
+  function setLayers(next) {
+    layers = next;
+  }
+  function setDrawingPreview(points, color) {
+    drawingPreview = points && points.length ? { points, color } : null;
+  }
+  function colorOf(hex) {
+    const c = new pc.Color();
+    c.fromString(hex);
+    return c;
+  }
+  function drawCross(center, color, size) {
+    const { x, y, z } = center;
+    app.drawLine(new pc.Vec3(x - size, y, z), new pc.Vec3(x + size, y, z), color, true);
+    app.drawLine(new pc.Vec3(x, y - size, z), new pc.Vec3(x, y + size, z), color, true);
+    app.drawLine(new pc.Vec3(x, y, z - size), new pc.Vec3(x, y, z + size), color, true);
+  }
+  function drawPolyline(points, color, closed) {
+    if (points.length < 2) return;
+    const worldPts = points.map(localToWorld);
+    for (let i = 0; i + 1 < worldPts.length; i++) {
+      app.drawLine(worldPts[i], worldPts[i + 1], color, true);
+    }
+    if (closed && worldPts.length > 2) {
+      app.drawLine(worldPts[worldPts.length - 1], worldPts[0], color, true);
+    }
+  }
+  function markerSize() {
+    return pickSphere ? Math.max(pickSphere.radius * 0.015, 0.01) : 0.05;
+  }
+  function renderFrame() {
+    const size = markerSize();
+    for (const layer of layers) {
+      if (!layer.visible) continue;
+      const color = colorOf(layer.color);
+      for (const anno of layer.annotations) {
+        if (!anno.coordinates.length) continue;
+        if (anno.geomType === "point") {
+          drawCross(localToWorld(anno.coordinates[0]), color, size);
+        } else {
+          drawPolyline(anno.coordinates, color, anno.geomType === "polygon");
+        }
+      }
+    }
+    if (drawingPreview) {
+      drawPolyline(drawingPreview.points, colorOf(drawingPreview.color), false);
+      for (const p of drawingPreview.points) drawCross(localToWorld(p), colorOf(drawingPreview.color), size * 0.6);
+    }
+  }
+  app.on("update", renderFrame);
+  function pickPoint(camera, canvas, clientX, clientY) {
+    if (copcHandles.length) {
+      let best = null;
+      let bestDistSq = Infinity;
+      for (const handle of copcHandles) {
+        const hit2 = handle.pickNearestPoint(camera, canvas, clientX, clientY);
+        if (!hit2) continue;
+        const distSq = hit2.clone().sub(camera.getPosition()).lengthSq();
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = hit2;
+        }
+      }
+      if (best) return worldToLocal(best);
+    }
+    if (!pickSphere) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
+    const py = (clientY - rect.top) / rect.height * canvas.clientHeight;
+    const camComp = camera.camera;
+    const near = camComp.screenToWorld(px, py, camComp.nearClip);
+    const far = camComp.screenToWorld(px, py, camComp.farClip);
+    const dir = far.clone().sub(near).normalize();
+    const oc = near.clone().sub(pickSphere.center);
+    const b = oc.dot(dir);
+    const c = oc.dot(oc) - pickSphere.radius * pickSphere.radius;
+    const disc = b * b - c;
+    if (disc < 0) return null;
+    const sqrtDisc = Math.sqrt(disc);
+    let t = -b - sqrtDisc;
+    if (t < 0) t = -b + sqrtDisc;
+    if (t < 0) return null;
+    const hit = near.clone().add(dir.clone().mulScalar(t));
+    return worldToLocal(hit);
+  }
+  function pickGroundPoint(camera, canvas, clientX, clientY) {
+    if (!pickSphere) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) / rect.width * canvas.clientWidth;
+    const py = (clientY - rect.top) / rect.height * canvas.clientHeight;
+    const camComp = camera.camera;
+    const near = camComp.screenToWorld(px, py, camComp.nearClip);
+    const far = camComp.screenToWorld(px, py, camComp.farClip);
+    const dir = far.clone().sub(near);
+    if (Math.abs(dir.y) < 1e-6) return null;
+    const t = (pickSphere.center.y - near.y) / dir.y;
+    if (t < 0) return null;
+    const hit = near.clone().add(dir.mulScalar(t));
+    return worldToLocal(hit);
+  }
+  function pickVertex(camera, canvas, clientX, clientY, thresholdPx = 14) {
+    const rect = canvas.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    const camComp = camera.camera;
+    let best = null;
+    let bestDist = thresholdPx;
+    for (const layer of layers) {
+      if (!layer.visible) continue;
+      for (const anno of layer.annotations) {
+        for (let i = 0; i < anno.coordinates.length; i++) {
+          const world = localToWorld(anno.coordinates[i]);
+          const screen = camComp.worldToScreen(world, new pc.Vec3());
+          if (!screen) continue;
+          const sx = screen.x / canvas.clientWidth * rect.width;
+          const sy = screen.y / canvas.clientHeight * rect.height;
+          const dist = Math.hypot(sx - px, sy - py);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = { layerId: layer.id, annotationId: anno.id, pointIndex: i };
+          }
+        }
+      }
+    }
+    return best;
+  }
+  function dispose() {
+    app.off("update", renderFrame);
+  }
+  return { setPickSphere, setCopcHandles, setLayers, setDrawingPreview, pickPoint, pickGroundPoint, pickVertex, dispose };
 }
 function escapeHtml(s) {
   const div = document.createElement("div");
@@ -5066,6 +5914,7 @@ function hideViewerError() {
 let currentApp = null;
 let generation = 0;
 function disposeTourViewer() {
+  var _a;
   if (!currentApp) return;
   const entry = currentApp;
   currentApp = null;
@@ -5073,6 +5922,9 @@ function disposeTourViewer() {
     entry.unsubscribeSettings();
     entry.detachNavigation();
     for (const handle of entry.copcHandles) handle.dispose();
+    (_a = entry.collisionMesh) == null ? void 0 : _a.dispose();
+    for (const url of entry.splatObjectUrls) URL.revokeObjectURL(url);
+    entry.annotations.dispose();
     entry.resizeObserver.disconnect();
     entry.app.destroy();
   } catch (e) {
@@ -5082,7 +5934,27 @@ function recenterTourCamera() {
   if (!currentApp) return;
   currentApp.recenter();
 }
-async function loadTourScene(urls, modelType, copcUrls = []) {
+function pickTourPoint(clientX, clientY) {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+function pickTourGroundPoint(clientX, clientY) {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickGroundPoint(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+function pickTourAnnotationVertex(clientX, clientY) {
+  if (!currentApp) return null;
+  return currentApp.annotations.pickVertex(currentApp.camera, currentApp.canvas, clientX, clientY);
+}
+function setTourAnnotationLayers(layers) {
+  if (!currentApp) return;
+  currentApp.annotations.setLayers(layers);
+}
+function setTourDrawingPreview(points, color) {
+  if (!currentApp) return;
+  currentApp.annotations.setDrawingPreview(points, color);
+}
+async function loadTourScene(urls, modelType, copcUrls = [], sogUrls = [], collisionUrl = null) {
   hideViewerError();
   generation++;
   const myGeneration = generation;
@@ -5096,6 +5968,7 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
   canvas.style.width = "100%";
   canvas.style.height = "100%";
   canvas.style.display = "block";
+  canvas.style.touchAction = "none";
   container.appendChild(canvas);
   const progressWrap = document.createElement("div");
   progressWrap.className = "position-absolute top-50 start-50 translate-middle p-3 rounded text-center";
@@ -5113,6 +5986,18 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
   function hideProgress() {
     progressWrap.remove();
   }
+  const statsOverlay = document.createElement("div");
+  statsOverlay.className = "position-absolute bottom-0 end-0 m-2 p-2 rounded";
+  statsOverlay.style.zIndex = "1090";
+  statsOverlay.style.background = "rgba(0,0,0,.6)";
+  statsOverlay.style.color = "#bbb";
+  statsOverlay.style.fontSize = "11px";
+  statsOverlay.style.fontFamily = "monospace";
+  statsOverlay.style.lineHeight = "1.4";
+  statsOverlay.style.pointerEvents = "none";
+  statsOverlay.style.whiteSpace = "pre";
+  statsOverlay.style.display = cameraSettings.showStats ? "block" : "none";
+  container.appendChild(statsOverlay);
   try {
     let resizeCanvasToContainer = function() {
       app.resizeCanvas(container.clientWidth || 300, container.clientHeight || 300);
@@ -5122,15 +6007,23 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
       camComp.nearClip = settings.nearClip;
       camComp.farClip = settings.farClip;
       camComp.projection = settings.projection === "orthographic" ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
+      app.scene.exposure = settings.exposure;
       for (const material of lasMaterials) {
         material.setParameter("uPointSize", settings.pointSizePx);
-        material.update();
+        setPointCloudColorMode(material, settings.colorMode);
+        setPointCloudClip(material, settings.clipEnabled, { min: settings.clipMin, max: settings.clipMax });
+        setPointCloudSection(material, settings.sectionEnabled, settings.sectionNormal, settings.sectionD);
       }
+      statsOverlay.style.display = settings.showStats ? "block" : "none";
       setNavigationModeInternal(settings.navigationMode);
       if (activeMode === "orbit") orbit.update();
+    }, updateFlyCollision = function() {
+      fly.collisionMesh = requestedMode === "walk" ? collisionMesh : null;
     }, syncFlyFromOrbit = function() {
       fly.syncFrom(camera.getPosition(), orbit.yaw, orbit.pitch);
     }, setNavigationModeInternal = function(mode) {
+      requestedMode = mode;
+      updateFlyCollision();
       const next = mode === "orbit" ? "orbit" : "fly";
       if (next === activeMode) return;
       if (activeMode === "orbit") orbit.detach();
@@ -5144,7 +6037,7 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
         fly.attach(canvas);
       }
     }, recenter = function() {
-      orbit.update();
+      orbit.resetToHome();
       if (activeMode === "fly") syncFlyFromOrbit();
     };
     const pc = await import("playcanvas");
@@ -5175,16 +6068,36 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
     const gizmo = createNavCubeGizmo(pc, app);
     const orbit = new OrbitController(pc, camera, gizmo);
     const fly = new FlyController(pc, camera, gizmo);
+    const annotations = createAnnotationManager(pc, app);
     let activeMode = cameraSettings.navigationMode === "orbit" ? "orbit" : "fly";
+    let requestedMode = cameraSettings.navigationMode;
+    let collisionMesh = null;
     if (activeMode === "orbit") orbit.attach(canvas);
     else {
       syncFlyFromOrbit();
       fly.attach(canvas);
     }
     const copcHandles = [];
+    const splatObjectUrls = [];
+    let lastStatsAt = 0;
     app.on("update", (dt) => {
       if (activeMode === "fly") fly.update(dt);
-      for (const handle of copcHandles) handle.refresh(camera);
+      else orbit.tick(dt);
+      const isMoving = activeMode === "fly" ? fly.isInteracting() : orbit.isInteracting();
+      for (const handle of copcHandles) handle.refresh(camera, isMoving);
+      const now = performance.now();
+      if (statsOverlay.style.display !== "none" && now - lastStatsAt > 500) {
+        lastStatsAt = now;
+        const fps = Math.round(app.stats.frame.fps);
+        const vram = app.stats.vram;
+        const vramMb = ((vram.vb + vram.ib + vram.tex) / (1024 * 1024)).toFixed(1);
+        const lines = [`FPS: ${fps}`, `VRAM: ${vramMb} МБ`];
+        for (let i = 0; i < copcHandles.length; i++) {
+          const s = copcHandles[i].getStats();
+          lines.push(`COPC ${i + 1}: ${s.loadedNodes} узлов, ${s.loadedPoints.toLocaleString("ru-RU")} точек`);
+        }
+        statsOverlay.textContent = lines.join("\n");
+      }
     });
     applyCameraSettings(cameraSettings);
     const unsubscribeSettings = onCameraSettingsChange(applyCameraSettings);
@@ -5195,8 +6108,25 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
       recenter,
       unsubscribeSettings,
       detachNavigation: () => activeMode === "orbit" ? orbit.detach() : fly.detach(),
-      copcHandles
+      copcHandles,
+      splatObjectUrls,
+      annotations,
+      camera,
+      canvas,
+      get collisionMesh() {
+        return collisionMesh;
+      }
     };
+    if (collisionUrl) {
+      loadCollisionMesh(pc, app, collisionUrl).then((mesh) => {
+        if (!isCurrent()) {
+          mesh == null ? void 0 : mesh.dispose();
+          return;
+        }
+        collisionMesh = mesh;
+        updateFlyCollision();
+      }).catch((err) => console.error("Walk: не удалось загрузить коллайдер", err));
+    }
     if (modelType === "pointcloud") {
       let isFirstFile = true;
       const legacyUrls = [];
@@ -5253,11 +6183,17 @@ async function loadTourScene(urls, modelType, copcUrls = []) {
         (d) => orbit.setDistance(d),
         () => orbit.update(),
         isCurrent,
-        showProgress
+        showProgress,
+        sogUrls,
+        splatObjectUrls
       );
     }
     if (isCurrent()) {
+      orbit.captureHome();
       recenter();
+      const sphere = orbit.getHomeSphere();
+      annotations.setPickSphere(sphere.center, sphere.radius);
+      annotations.setCopcHandles(copcHandles);
     }
     hideProgress();
   } catch (e) {
@@ -5272,6 +6208,11 @@ const api = {
   showError: showViewerError,
   hideError: hideViewerError,
   getSettings: getCameraSettings,
-  setSettings: setCameraSettings
+  setSettings: setCameraSettings,
+  pickPoint: pickTourPoint,
+  pickGroundPoint: pickTourGroundPoint,
+  pickAnnotationVertex: pickTourAnnotationVertex,
+  setAnnotationLayers: setTourAnnotationLayers,
+  setDrawingPreview: setTourDrawingPreview
 };
 window.TourViewer = api;

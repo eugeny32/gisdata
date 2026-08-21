@@ -1,0 +1,172 @@
+<?php
+declare(strict_types=1);
+
+/**
+ * Фоновая конвертация .ply туров в SOG + коллизионный .glb (PR5, модули
+ * 1.1/2.3). Статус — по наличию файлов на диске, без отдельной таблицы
+ * (тот же подход, что bin/process_copc_conversions.php, PR4):
+ *   foo.ply
+ *   foo.ply.sog                — готовый streamed-LOD/SOG (для gsplat)
+ *   foo.ply.collision.glb      — готовый коллайдер (для Walk-режима)
+ *   foo.ply.sog.lock           — конвертация уже запущена (один lock на
+ *                                 оба выхода — см. splat_transform_worker.ps1)
+ *   foo.ply.sog.error          — последняя попытка упала, не повторяем
+ *                                 автоматически
+ *
+ * Параллельность — тот же лимит и то же обоснование, что в PR3/PR4 (см.
+ * docs/CURRENT_STATE.md, раздел 10, п.4). Запускается по расписанию
+ * (Windows Task Scheduler).
+ */
+
+require __DIR__ . '/../app/lib/db.php';
+require __DIR__ . '/../app/lib/cli.php';
+require_cli_or_token();
+
+// Было 10 (скопировано из process_copc_conversions.php без поправки на то,
+// что splat-transform заметно прожорливее по памяти на файл) — живой
+// случай на проде: 3 больших тура (~15-16M гауссиан каждый) конвертировались
+// ОДНОВРЕМЕННО и сервер СЕЛ ЦЕЛИКОМ (не просто SSH, вся машина потребовала
+// физического перезапуска), дважды подряд с одним и тем же набором файлов.
+// Совпадение маловероятно — почти наверняка совокупная память несколько
+// параллельных k-means-конвертаций больших сплатов исчерпала RAM машины.
+// Пока нет измеренного per-file потребления памяти, снижаем до
+// последовательной обработки (1) — это безопасный дефолт, а не подобранное
+// вслепую число; поднимать обратно стоит только после реального измерения
+// пиковой памяти одной конвертации.
+const MAX_CONCURRENT = 1;
+// См. тот же механизм и то же обоснование в process_copc_conversions.php —
+// живой случай на проде: перезагрузка сервера убила все процессы node.exe
+// (splat-transform) прямо посреди конвертации, .sog.lock остались лежать
+// без единого шанса на finally (сам процесс, а не только его дочерние,
+// был убит перезагрузкой) — process_splat_transforms.php считал файлы
+// "уже конвертируются" и молча пропускал их бы вечно.
+const STALL_MINUTES = 120;
+const STARTUP_GRACE_MINUTES = 15;
+const MAX_STALL_RETRIES = 3;
+
+$uploadDir = realpath(__DIR__ . '/../uploads/tours') . DIRECTORY_SEPARATOR;
+$psScript = __DIR__ . '/splat_transform_worker.ps1';
+$logDir = __DIR__ . '/../uploads/splat_transform_logs';
+if (!is_dir($logDir)) {
+    mkdir($logDir, 0777, true);
+}
+
+$pdo = db();
+$plyFiles = [];
+foreach ($pdo->query("SELECT file_path FROM tours WHERE file_format = 'ply'") as $row) {
+    $plyFiles[] = $row['file_path'];
+}
+foreach ($pdo->query("SELECT file_path FROM tour_files WHERE file_format = 'ply'") as $row) {
+    $plyFiles[] = $row['file_path'];
+}
+$plyFiles = array_unique($plyFiles);
+
+// Проход 1: см. process_copc_conversions.php — та же логика обнаружения
+// зависших/осиротевших конвертаций, здесь для .sog вместо .copc.laz.
+foreach ($plyFiles as $relativePath) {
+    $base = $uploadDir . $relativePath;
+    $lockFile = $base . '.sog.lock';
+    if (!is_file($lockFile)) {
+        continue;
+    }
+    $tmpOutput = $base . '.converting.sog';
+    $progressFile = $base . '.sog.progress';
+    $retriesFile = $base . '.sog.stall_retries';
+
+    $currentSize = is_file($tmpOutput) ? filesize($tmpOutput) : null;
+    $prev = is_file($progressFile) ? json_decode((string)file_get_contents($progressFile), true) : null;
+
+    $stalled = false;
+    if ($currentSize === null) {
+        $lockAgeMin = (time() - filemtime($lockFile)) / 60;
+        if ($lockAgeMin > STARTUP_GRACE_MINUTES) {
+            $stalled = true;
+            cli_err("Завис (нет выходного файла спустя " . round($lockAgeMin) . " мин): $relativePath");
+        }
+    } elseif ($prev !== null && $currentSize <= $prev['size'] && (time() - $prev['at']) / 60 > STALL_MINUTES) {
+        $stalled = true;
+        cli_err("Завис (выходной файл не растёт дольше " . STALL_MINUTES . " мин): $relativePath");
+    }
+
+    if ($currentSize !== null && ($prev === null || $currentSize > $prev['size'])) {
+        file_put_contents($progressFile, json_encode(['size' => $currentSize, 'at' => time()]));
+    }
+
+    if (!$stalled) {
+        continue;
+    }
+
+    $retries = is_file($retriesFile) ? (int)file_get_contents($retriesFile) : 0;
+    @unlink($lockFile);
+    @unlink($tmpOutput);
+    @unlink($progressFile);
+    if ($retries + 1 >= MAX_STALL_RETRIES) {
+        file_put_contents(
+            $base . '.sog.error',
+            "Конвертация зависала $retries раз подряд (сервер перезапускался/процесс убит без завершения) — автоматические попытки остановлены, нужно разобраться вручную."
+        );
+        @unlink($retriesFile);
+        cli_err("$relativePath: превышен лимит автоповторов ($retries), помечен как .error");
+    } else {
+        file_put_contents($retriesFile, (string)($retries + 1));
+        cli_out("$relativePath: lock снят, будет перезапущен (попытка " . ($retries + 1) . "/" . MAX_STALL_RETRIES . ")");
+    }
+}
+
+$runningCount = 0;
+foreach ($plyFiles as $relativePath) {
+    if (is_file($uploadDir . $relativePath . '.sog.lock')) {
+        $runningCount++;
+    }
+}
+cli_out("PLY-файлов в БД: " . count($plyFiles) . ", уже запущенных конвертаций (lock): $runningCount");
+
+$spawned = 0;
+foreach ($plyFiles as $relativePath) {
+    if ($runningCount + $spawned >= MAX_CONCURRENT) {
+        cli_out("Достигнут лимит параллельных конвертаций (" . MAX_CONCURRENT . ") — остальное в следующий запуск.");
+        break;
+    }
+
+    $inputPly = $uploadDir . $relativePath;
+    if (!is_file($inputPly)) {
+        continue;
+    }
+    $outputSog = $inputPly . '.sog';
+    $outputCollision = $inputPly . '.collision.glb';
+    $lockFile = $outputSog . '.lock';
+    $errorFile = $outputSog . '.error';
+
+    if (is_file($outputSog) || is_file($lockFile) || is_file($errorFile)) {
+        continue;
+    }
+
+    touch($lockFile);
+
+    $logFile = $logDir . '/' . basename($relativePath) . '.log';
+    $cmd = [
+        'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $psScript,
+        '-InputPly', $inputPly,
+        '-OutputSog', $outputSog,
+        '-OutputCollision', $outputCollision,
+        '-LockFile', $lockFile,
+        '-ErrorFile', $errorFile,
+    ];
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['file', $logFile, 'a'],
+        2 => ['file', $logFile, 'a'],
+    ];
+    $process = proc_open($cmd, $descriptors, $pipes);
+    if ($process === false) {
+        cli_err("Не удалось запустить конвертацию для $relativePath");
+        @unlink($lockFile);
+        continue;
+    }
+    fclose($pipes[0]);
+    $spawned++;
+    cli_out("Запущена конвертация: $relativePath -> {$relativePath}.sog + .collision.glb");
+}
+
+cli_out("Запущено новых конвертаций: $spawned");

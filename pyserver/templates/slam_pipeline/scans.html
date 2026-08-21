@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}SLAM: {{ project.name }}{% endblock %}
+{% block page_icon %}bi-radar{% endblock %}
+{% block page_title %}SLAM: {{ project.name }}{% endblock %}
+{% block content %}
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <a href="{% url 'slam_projects' %}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Все проекты</a>
+      <h2 class="h6 mb-0 mt-1">Сканы проекта «{{ project.name }}»</h2>
+    </div>
+    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#uploadScanModal"><i class="bi bi-upload"></i> Загрузить скан</button>
+  </div>
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-clean align-middle">
+          <thead>
+            <tr><th>Название</th><th>Статус</th><th style="min-width:280px">Шаги пайплайна</th><th>Точек</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% for row in scans %}
+            {% with scan=row.scan %}
+            <tr>
+              <td>{{ scan.name }}</td>
+              <td>
+                <span class="badge text-bg-{% if scan.status == 'completed' %}success{% elif scan.status == 'processing' %}info{% elif scan.status == 'failed' %}danger{% else %}secondary{% endif %}">{{ scan.status }}</span>
+              </td>
+              <td>
+                <div class="d-flex flex-wrap gap-1">
+                {% for s in row.steps %}
+                  <span class="badge {% if s.status == 'done' %}text-bg-success{% elif s.status == 'processing' %}text-bg-info{% elif s.status == 'error' %}text-bg-danger{% elif s.status == 'pending' %}text-bg-secondary{% elif s.status == 'skipped' %}text-bg-light{% else %}badge-not-started{% endif %}"
+                        title="{{ s.label }}{% if s.error_message %}: {{ s.error_message }}{% endif %}">
+                    {{ s.label }}
+                  </span>
+                {% endfor %}
+                </div>
+              </td>
+              <td>{% if scan.num_points != None %}{{ scan.num_points }}{% else %}—{% endif %}</td>
+              <td class="text-end">
+                {% if row.tour_id %}
+                  <a href="{% url 'tour_view' %}?tour={{ row.tour_id }}" target="_blank" class="btn btn-sm btn-outline-success"><i class="bi bi-eye"></i> Открыть</a>
+                {% endif %}
+                {% if scan.status == 'failed' %}
+                  <form method="post" action="{% url 'slam_scans' %}?project_id={{ project_id }}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="retry">
+                    <input type="hidden" name="id" value="{{ scan.id }}">
+                    <button type="submit" class="btn btn-sm btn-outline-warning"><i class="bi bi-arrow-clockwise"></i> Повторить</button>
+                  </form>
+                {% endif %}
+                <form method="post" action="{% url 'slam_scans' %}?project_id={{ project_id }}" class="d-inline"
+                      onsubmit="return confirm('{% if scan.skip_georeference %}Вернуть привязку по GPS/RTK и пересчитать geopривязку заново?{% else %}Отключить привязку по GPS/RTK — облако останется в локальных SLAM-координатах? Пересчитает georeference и build_octree.{% endif %}')">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="toggle_skip_georeference">
+                  <input type="hidden" name="id" value="{{ scan.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary"
+                          title="{% if scan.skip_georeference %}Сейчас: локальные координаты (GPS/RTK отключён) — нажмите, чтобы включить обратно{% else %}Отключить привязку по GPS/RTK, оставить локальные SLAM-координаты{% endif %}">
+                    <i class="bi {% if scan.skip_georeference %}bi-geo-alt-fill text-warning{% else %}bi-geo-alt{% endif %}"></i>
+                  </button>
+                </form>
+                <form method="post" action="{% url 'slam_scans' %}?project_id={{ project_id }}" class="d-inline" onsubmit="return confirm('Удалить скан?')">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="id" value="{{ scan.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endwith %}
+          {% empty %}
+            <tr><td colspan="5" class="text-muted">Нет сканов</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="uploadScanModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form method="post" action="{% url 'slam_scans' %}?project_id={{ project_id }}" enctype="multipart/form-data" id="uploadScanForm">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="upload">
+          <div class="modal-header">
+            <h5 class="modal-title">Новый скан</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body row g-3">
+            <div id="uploadScanError" class="col-12 alert alert-danger d-none mb-0"></div>
+            <div class="col-12">
+              <label class="form-label small">Название*</label>
+              <input type="text" name="name" class="form-control" required>
+            </div>
+            <div class="col-12">
+              <label class="form-label small">ZIP-архив (bag + calibration.yaml)</label>
+              <input type="file" name="scan_zip" class="form-control" accept=".zip">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">Или файл уже на сервере (в uploads/slam/_incoming/)</label>
+              <input type="text" name="existing_file" class="form-control" placeholder="scan_123.zip">
+            </div>
+            <div class="col-12 text-secondary small">
+              Обработка запускается автоматически (шаг compute_slam → decode_raw → ... → build_octree,
+              см. process_slam_jobs). Готовое облако появится в списке туров и здесь как кнопка «Открыть».
+              Для очень крупных архивов (единицы/десятки ГБ) браузерная загрузка может упираться в ограничения
+              сети на пути к серверу (не в лимиты самого приложения) — в этом случае надёжнее загрузить файл по
+              FTP в uploads/slam/_incoming/ и указать его имя выше.
+            </div>
+            <div class="col-12 d-none" id="uploadScanProgressWrap">
+              <div class="progress" role="progressbar" style="height: 20px">
+                <div class="progress-bar" id="uploadScanProgressBar" style="width: 0%">0%</div>
+              </div>
+              <div class="text-secondary small mt-1" id="uploadScanProgressLabel"></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" id="uploadScanCancelBtn">Закрыть</button>
+            <button type="submit" class="btn btn-primary" id="uploadScanSubmitBtn">Загрузить и обработать</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  const form = document.getElementById('uploadScanForm');
+  const fileInput = form.querySelector('input[name="scan_zip"]');
+  const errorBox = document.getElementById('uploadScanError');
+  const progressWrap = document.getElementById('uploadScanProgressWrap');
+  const progressBar = document.getElementById('uploadScanProgressBar');
+  const progressLabel = document.getElementById('uploadScanProgressLabel');
+  const submitBtn = document.getElementById('uploadScanSubmitBtn');
+  const cancelBtn = document.getElementById('uploadScanCancelBtn');
+
+  function formatBytes(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + ' ГБ';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + ' МБ';
+    return Math.round(n / 1e3) + ' КБ';
+  }
+
+  form.addEventListener('submit', function (e) {
+    if (!fileInput.files || !fileInput.files.length) {
+      return;
+    }
+    e.preventDefault();
+    errorBox.classList.add('d-none');
+    progressWrap.classList.remove('d-none');
+    submitBtn.disabled = true;
+    cancelBtn.disabled = true;
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', form.getAttribute('action'), true);
+    xhr.upload.addEventListener('progress', function (ev) {
+      if (!ev.lengthComputable) return;
+      const pct = Math.round((ev.loaded / ev.total) * 100);
+      progressBar.style.width = pct + '%';
+      progressBar.textContent = pct + '%';
+      progressLabel.textContent = formatBytes(ev.loaded) + ' из ' + formatBytes(ev.total);
+    });
+    xhr.addEventListener('load', function () {
+      window.location.reload();
+    });
+    xhr.addEventListener('error', showNetworkError);
+    xhr.addEventListener('timeout', showNetworkError);
+    xhr.upload.addEventListener('error', showNetworkError);
+
+    function showNetworkError() {
+      progressWrap.classList.add('d-none');
+      submitBtn.disabled = false;
+      cancelBtn.disabled = false;
+      errorBox.textContent = 'Загрузка прервана на сети (частая причина для крупных файлов — ' +
+        'ограничение на пути к серверу, не самого приложения). Попробуйте залить файл по FTP в ' +
+        'uploads/slam/_incoming/ и указать его имя в поле «Или файл уже на сервере».';
+      errorBox.classList.remove('d-none');
+    }
+
+    xhr.send(new FormData(form));
+  });
+})();
+</script>
+{% endblock %}

@@ -52,6 +52,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         <button type="submit" class="btn btn-primary mt-1">Войти</button>
       </form>
+      <div class="text-center mt-3">
+        <a href="/admin_login.php" class="small">Вход для сотрудников</a>
+      </div>
     </div>
   </div>
 </body>

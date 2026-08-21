@@ -78,8 +78,17 @@ export function createNavCubeGizmo(pc: PcModule, app: InstanceType<PcModule['App
 
   const gizmoCamera = new pc.Entity('gizmoCamera');
   gizmoCamera.addComponent('camera', {
-    clearColor: new pc.Color(0, 0, 0, 0),
-    clearColorBuffer: true,
+    // clearColorBuffer: true (как было) ЗАТИРАЛ пиксели модели в области
+    // вьюпорта штурвала своим clearColor ПЕРЕД отрисовкой кубика — отсюда
+    // сплошной чёрный квадрат в углу вместо прозрачного оверлея прямо на
+    // модели (alpha 0 у clearColor не помогает: канвас всё равно физически
+    // перезатирается, а не компонуется по альфе). Не очищаем цвет вообще —
+    // кубик рисуется НАД уже отрендеренной картинкой основной камеры, а не
+    // в "обнулённом" прямоугольнике. Глубину чистим (clearDepthBuffer),
+    // иначе кубик мог бы некорректно перекрываться остатками depth-буфера
+    // основной камеры в этой же области экрана.
+    clearColorBuffer: false,
+    clearDepthBuffer: true,
     layers: [gizmoLayer.id],
     priority: 1, // рисуется после основной камеры — поверх неё
     rect: new pc.Vec4(0.84, 0.03, 0.14, 0.14),

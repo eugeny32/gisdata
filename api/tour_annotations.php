@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/../app/lib/auth.php';
+require __DIR__ . '/../app/lib/tours.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -8,9 +9,14 @@ $pdo = db();
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET') {
-    // Просмотр слоёв/аннотаций доступен любому залогиненному пользователю.
-    require_login();
     $tourId = (int)($_GET['tour_id'] ?? 0);
+    // Просмотр слоёв/аннотаций — любому залогиненному, либо анонимно, если
+    // именно этот тур опубликован по прямой ссылке (см. tour_view.php).
+    // Изменяющие действия ниже (POST) остаются admin-only ВСЕГДА — публичная
+    // ссылка даёт только просмотр, никогда редактирование.
+    if (!tour_is_public($tourId)) {
+        require_login();
+    }
 
     $layersStmt = $pdo->prepare('SELECT id, name, color, is_visible, sort_order FROM tour_layers WHERE tour_id = :tour_id ORDER BY sort_order, id');
     $layersStmt->execute(['tour_id' => $tourId]);
@@ -83,6 +89,35 @@ try {
     } elseif ($action === 'delete_annotation') {
         $id = (int)($input['id'] ?? 0);
         $pdo->prepare('DELETE FROM tour_annotations WHERE id = :id')->execute(['id' => $id]);
+        echo json_encode(['ok' => true]);
+    } elseif ($action === 'update_annotation') {
+        // Частичное обновление — координаты (перетаскивание вершины) и/или
+        // layer_id (смена слоя у уже нарисованного объекта), см. map.php.
+        $id = (int)($input['id'] ?? 0);
+        if ($id <= 0) {
+            throw new InvalidArgumentException('Некорректный id аннотации');
+        }
+        $sets = [];
+        $params = ['id' => $id];
+        if (array_key_exists('coordinates', $input)) {
+            if (!is_array($input['coordinates']) || !$input['coordinates']) {
+                throw new InvalidArgumentException('Некорректные координаты');
+            }
+            $sets[] = 'coordinates = :coordinates';
+            $params['coordinates'] = json_encode($input['coordinates']);
+        }
+        if (array_key_exists('layer_id', $input)) {
+            $sets[] = 'layer_id = :layer_id';
+            $params['layer_id'] = (int)$input['layer_id'];
+        }
+        if (array_key_exists('label', $input)) {
+            $sets[] = 'label = :label';
+            $params['label'] = trim((string)$input['label']) ?: null;
+        }
+        if (!$sets) {
+            throw new InvalidArgumentException('Нет полей для обновления');
+        }
+        $pdo->prepare('UPDATE tour_annotations SET ' . implode(', ', $sets) . ' WHERE id = :id')->execute($params);
         echo json_encode(['ok' => true]);
     } else {
         http_response_code(400);

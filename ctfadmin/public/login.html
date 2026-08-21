@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Вход · CtF</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/landing.css" />
+  </head>
+  <body>
+    <main class="card">
+      <div class="logo">CtF · ВХОД</div>
+      <label class="field">
+        <span>Пароль</span>
+        <input id="pass" type="password" autocomplete="current-password" autofocus />
+      </label>
+      <div class="apps">
+        <a class="app" id="go" href="#"><b>Войти</b><span>пароль выдаёт администратор</span></a>
+      </div>
+      <p class="note" id="msg">Сервер закрыт паролем. Пароль для работы и пароль администратора разные — введите свой.</p>
+    </main>
+    <script>
+      const box = document.getElementById('pass');
+      const msg = document.getElementById('msg');
+      async function enter(e) {
+        e?.preventDefault();
+        const pass = box.value.trim();
+        if (!pass) {
+          box.focus();
+          box.classList.add('bad');
+          return;
+        }
+        msg.textContent = 'Проверяем…';
+        const r = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ pass }),
+        }).catch(() => null);
+        if (r && r.ok) {
+          const d = await r.json();
+          location.href = d.admin ? '/admin' : '/';
+          return;
+        }
+        box.classList.add('bad');
+        box.value = '';
+        box.focus();
+        msg.textContent = 'Пароль не подошёл. Попробуйте ещё раз.';
+      }
+      document.getElementById('go').addEventListener('click', enter);
+      box.addEventListener('keydown', (e) => e.key === 'Enter' && enter(e));
+      box.addEventListener('input', () => box.classList.remove('bad'));
+    </script>
+  </body>
+</html>

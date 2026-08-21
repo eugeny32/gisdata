@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Подключения БД (PostgreSQL/PostGIS){% endblock %}
+{% block page_icon %}bi-hdd-rack{% endblock %}
+{% block page_title %}Подключения БД (PostgreSQL/PostGIS){% endblock %}
+{% block content %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+  {% if test_result %}
+    <div class="alert {% if test_result.ok %}alert-success{% else %}alert-danger{% endif %}">
+      «{{ test_result.name }}»: {{ test_result.message }}
+    </div>
+  {% endif %}
+
+  <div class="card surface-card mb-4">
+    <div class="card-body">
+      <h2 class="h6 mb-3">{% if edit %}Изменить профиль{% else %}Добавить профиль подключения{% endif %}</h2>
+      <form method="post" action="{% url 'pg_connections' %}" class="row g-3">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save">
+        <input type="hidden" name="id" value="{{ edit.id|default:0 }}">
+
+        <div class="col-md-4">
+          <label class="form-label small">Название*</label>
+          <input type="text" name="name" class="form-control" required placeholder="mtccom PostGIS" value="{{ edit.name|default:'' }}">
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small">Хост*</label>
+          <input type="text" name="host" class="form-control" required placeholder="mtccom.ru" value="{{ edit.host|default:'' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Порт*</label>
+          <input type="number" name="port" class="form-control" required value="{{ edit.port|default:5432 }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">База данных*</label>
+          <input type="text" name="dbname" class="form-control" required value="{{ edit.dbname|default:'' }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">Пользователь*</label>
+          <input type="text" name="username" class="form-control" required value="{{ edit.username|default:'' }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">Пароль{% if edit %} (оставьте пустым, чтобы не менять){% else %}*{% endif %}</label>
+          <input type="password" name="password" class="form-control">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">sslmode</label>
+          <select name="sslmode" class="form-select">
+            {% for mode in sslmodes %}
+              <option value="{{ mode }}" {% if edit.sslmode|default:"prefer" == mode %}selected{% endif %}>{{ mode }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3 form-check mt-4">
+          <input type="checkbox" name="is_default" class="form-check-input" id="isDefault" {% if edit.is_default %}checked{% endif %}>
+          <label class="form-check-label" for="isDefault">Профиль по умолчанию</label>
+        </div>
+
+        <div class="col-12 d-flex gap-2">
+          <button type="submit" class="btn btn-primary">{% if edit %}Сохранить{% else %}Добавить{% endif %}</button>
+          {% if edit %}<a href="{% url 'pg_connections' %}" class="btn btn-outline-secondary">Отмена</a>{% endif %}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Профили подключения</h2>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle">
+          <thead><tr><th>Название</th><th>Хост:порт</th><th>База</th><th>Пользователь</th><th>По умолчанию</th><th></th></tr></thead>
+          <tbody>
+          {% for c in connections %}
+            <tr>
+              <td>{{ c.name }}</td>
+              <td>{{ c.host }}:{{ c.port }}</td>
+              <td>{{ c.dbname }}</td>
+              <td>{{ c.username }}</td>
+              <td>{% if c.is_default %}<span class="badge text-bg-success">да</span>{% endif %}</td>
+              <td class="text-end">
+                <form method="post" action="{% url 'pg_connections' %}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="test">
+                  <input type="hidden" name="id" value="{{ c.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-success"><i class="bi bi-plug"></i> Проверить</button>
+                </form>
+                <a href="{% url 'pg_connections' %}?edit={{ c.id }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+                <form method="post" action="{% url 'pg_connections' %}" class="d-inline" onsubmit="return confirm('Удалить профиль подключения?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="id" value="{{ c.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-muted">Профилей пока нет</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

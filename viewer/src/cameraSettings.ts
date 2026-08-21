@@ -23,9 +23,47 @@ export interface CameraSettings {
   moveSpeed: number;
   pointSizePx: number;
   edlEnabled: boolean;
-  /** 'walk' зарезервирован под PR5 (коллизии) — UI пока предлагает только
-   * orbit/fly, выбор 'walk' молча трактуется как 'fly' (см. tourViewer.ts). */
+  /** 'walk' — тот же FlyController, но с коллизиями по `-K`-коллайдеру
+   * (PR5). Если для тура нет готового .collision.glb (не сплат-тур или
+   * конвертация ещё не завершилась), молча работает как 'fly' — см.
+   * tourViewer.ts/updateFlyCollision. */
   navigationMode: 'orbit' | 'fly' | 'walk';
+  /** Режим раскраски LAS/COPC (PR6) — переключается без перезагрузки
+   * файла (см. pointCloudMaterial.ts). Для 3DGS-сплатов не действует —
+   * см. ограничение в pointCloudMaterial.ts. */
+  colorMode: 'rgb' | 'height' | 'intensity' | 'classification';
+  /** Сечения (PR7, модуль 5) — box-crop LAS/COPC. clipMin/clipMax — доли
+   * (0..1) по каждой оси, ОБЩИЕ для всех материалов тура; каждый материал
+   * переводит их в свои локальные единицы по собственному AABB (см.
+   * pointCloudMaterial.ts/setPointCloudClip) — "обрезать нижние 30%"
+   * означает нижние 30% КАЖДОГО облака, а не абсолютные координаты. Для
+   * 3DGS не действует (та же причина, что height-режим, см. раздел 13). */
+  clipEnabled: boolean;
+  clipMin: [number, number, number];
+  clipMax: [number, number, number];
+  /** Индикатор FPS/VRAM/стриминга в углу канваса (PR8). */
+  showStats: boolean;
+  /** Бюджет точек для COPC-стриминга (см. copcLoader.ts) — регулировка в
+   * духе Potree ("Point Budget"): чем выше, тем подробнее картинка и выше
+   * нагрузка на GPU/память. Живой параметр — copcLoader.ts читает его
+   * каждый тик обновления, перезагрузка тура не нужна. */
+  pointBudget: number;
+  /** Сечение по линии — задаётся 2 кликами по модели (см. map.php,
+   * window.TourViewer.pickPoint), а не слайдерами как clipMin/Max выше.
+   * normal/d — уравнение плоскости (dot(p, normal) <= d — видимая
+   * сторона) в локальном пространстве модели, общем для ВСЕХ материалов
+   * тура (см. setPointCloudSection). */
+  sectionEnabled: boolean;
+  sectionNormal: [number, number, number];
+  sectionD: number;
+  /** Экспозиция сцены (PlayCanvas app.scene.exposure, дефолт движка — 1) —
+   * прямой рычаг против "пересвеченных"/светящихся 3DGS-сплатов (частая
+   * жалоба на реальных сканах с яркими бликами/пересветом в исходных
+   * фото) — ниже 1 просто затемняет финальный рендер. Действует и на
+   * LAS/COPC тоже (это общий множитель яркости кадра, не свойство
+   * материала конкретного типа модели), но явно просили именно про
+   * "свечение сплатов". */
+  exposure: number;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -39,6 +77,16 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   pointSizePx: 2,
   edlEnabled: false,
   navigationMode: 'orbit',
+  colorMode: 'rgb',
+  clipEnabled: false,
+  clipMin: [0, 0, 0],
+  clipMax: [1, 1, 1],
+  showStats: false,
+  pointBudget: 10_000_000,
+  sectionEnabled: false,
+  sectionNormal: [1, 0, 0],
+  sectionD: 0,
+  exposure: 1,
 };
 
 const STORAGE_KEY = 'gisdata.tourViewer.cameraSettings.v1';

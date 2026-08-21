@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Генератор искусственного RINEX{% endblock %}
+{% block page_icon %}bi-magic{% endblock %}
+{% block page_title %}Генератор искусственного RINEX{% endblock %}
+{% block content %}
+  <div class="card surface-card">
+    <div class="card-body">
+      <p class="text-secondary">
+        Создаёт искусственный RINEX OBS-файл (2.11 или 3.04, GPS + ГЛОНАСС, интервал 5 с) для заданных
+        неподвижных точек по их ECEF-координатам — с часами спутника/приёмника, тропосферой,
+        ионосферой, допплером и целочисленной неоднозначностью фазы. Приёмник/антенна — всегда
+        "CHC i50", набор типов наблюдений в RINEX2 — как у настоящего приёмника CHC (17 типов).
+        На выходе .zip: наблюдения по каждой станции + broadcast-эфемериды за период (подгружаются автоматически).
+      </p>
+
+      {% if error %}
+        <div class="alert alert-danger" style="white-space: pre-line">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'rinex_generate' %}" enctype="multipart/form-data" class="row g-3">
+        {% csrf_token %}
+        <div class="col-12">
+          <label class="form-label small">Станции — по одной на строку: Имя, X, Y, Z (ECEF, метры)</label>
+          <textarea name="stations" class="form-control" rows="5" required>{{ stations_input }}</textarea>
+          <div class="form-text">Несколько станций — в архиве будет отдельный .rnx на каждую.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Начало периода (UTC)</label>
+          <input type="datetime-local" name="start" class="form-control" value="{{ start_input }}" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Конец периода (UTC)</label>
+          <input type="datetime-local" name="end" class="form-control" value="{{ end_input }}" required>
+        </div>
+        <div class="col-12">
+          <label class="form-label small">Резерв: navigation-файл вручную (.rnx / .rnx.gz), если автозагрузка эфемерид не сработает</label>
+          <input type="file" name="nav_file" class="form-control" accept=".rnx,.gz,.24n,.nav">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Версия генератора</label>
+          <select name="generator_version" id="generatorVersion" class="form-select">
+            <option value="default" {% if generator_version == "default" %}selected{% endif %}>Расширенный (по умолчанию): GPS+ГЛОНАСС, ионосфера, шум, RINEX 2/3</option>
+            <option value="gisdata" {% if generator_version == "gisdata" %}selected{% endif %}>Gisdata (эталонная физика): только GPS, без ионосферы/шума/неоднозначности фазы, RINEX 2.11</option>
+          </select>
+          <div class="form-text">Режим Gisdata — точная копия логики/математики эталонного генератора SiGOGbcst (light-time, Sagnac, релятивистская поправка, тропосфера Hopfield/Seeber), без наших дополнений (ионосфера, шум, ГЛОНАСС). Игнорирует поля "Версия RINEX" и "Только GPS" ниже.</div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Версия RINEX</label>
+          <select name="rinex_version" id="rinexVersion" class="form-select" {% if generator_version == "gisdata" %}disabled{% endif %}>
+            <option value="2" {% if rinex_version == "2" %}selected{% endif %}>2.11 (классический, набор наблюдений как у CHC)</option>
+            <option value="3" {% if rinex_version == "3" %}selected{% endif %}>3.04 (мультисистемный, современный)</option>
+            <option value="4" {% if rinex_version == "4" %}selected{% endif %}>4.00 (как у настоящих приёмников South GNSS — NAV-записи с "&gt; EPH")</option>
+          </select>
+        </div>
+        <div class="col-md-3 d-flex align-items-end">
+          <div class="form-check">
+            <input type="checkbox" class="form-check-input" name="gps_only" id="gpsOnly" value="1" {% if gps_only %}checked{% endif %} {% if generator_version == "gisdata" %}disabled{% endif %}>
+            <label class="form-check-label" for="gpsOnly">Только GPS (диагностика): файл объявляет себя "G (GPS)" и не содержит ни одной записи ГЛОНАСС</label>
+          </div>
+        </div>
+        <script>
+          document.getElementById('generatorVersion').addEventListener('change', function () {
+            var isGisdataMode = this.value === 'gisdata';
+            document.getElementById('rinexVersion').disabled = isGisdataMode;
+            document.getElementById('gpsOnly').disabled = isGisdataMode;
+          });
+        </script>
+        <div class="col-12">
+          <button type="submit" class="btn btn-primary"><i class="bi bi-magic"></i> Сгенерировать и скачать</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

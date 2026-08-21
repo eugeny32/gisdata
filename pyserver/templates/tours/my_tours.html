@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Мои туры{% endblock %}
+{% block page_icon %}bi-camera-reels{% endblock %}
+{% block page_title %}Мои туры{% endblock %}
+{% block content %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <p class="text-secondary small mb-3">
+        Туры, загруженные вами через карту (правый клик → «Добавить объект»).
+        Открыть тур в плеере можно с карты — здесь только название, описание и удаление.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle mb-0">
+          <thead><tr><th>Название</th><th class="my-tours-desc-col">Описание</th><th>Файл</th><th>Создан</th><th></th></tr></thead>
+          <tbody>
+          {% for t in tours %}
+            <tr>
+              <td><input type="text" name="name" form="updateForm{{ t.id }}" class="form-control form-control-sm" value="{{ t.name }}" required></td>
+              <td class="my-tours-desc-col"><input type="text" name="description" form="updateForm{{ t.id }}" class="form-control form-control-sm" value="{{ t.description|default:'' }}" placeholder="Без описания"></td>
+              <td class="text-secondary small">{{ t.file_format }}</td>
+              <td class="text-secondary small">{{ t.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="text-end">
+                <form id="updateForm{{ t.id }}" method="post" action="{% url 'my_tours' %}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="update">
+                  <input type="hidden" name="id" value="{{ t.id }}">
+                </form>
+                <form id="deleteForm{{ t.id }}" method="post" action="{% url 'my_tours' %}" class="d-inline" onsubmit="return confirm('Удалить тур и файл модели?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="id" value="{{ t.id }}">
+                </form>
+                <button type="submit" form="updateForm{{ t.id }}" class="btn btn-sm btn-outline-primary" title="Сохранить"><i class="bi bi-check-lg"></i></button>
+                <button type="submit" form="deleteForm{{ t.id }}" class="btn btn-sm btn-outline-danger" title="Удалить"><i class="bi bi-trash"></i></button>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="text-secondary text-center py-4">Вы пока не загрузили ни одного тура — добавьте на карте (правый клик → «Добавить объект»)</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

@@ -1,9 +1,18 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/../app/lib/auth.php';
-require_login();
+require __DIR__ . '/../app/lib/tours.php';
 
 header('Content-Type: application/json; charset=utf-8');
+
+// Полный список (без ?id=) — всегда только для залогиненных, это карта
+// кабинета, а не публичная витрина. Единичный ?id= — без логина, если
+// именно ЭТОТ тур явно опубликован (см. tours.php/is_public) — так
+// tour_view.php по прямой ссылке может подтянуть данные тура анонимно.
+$publicRequestedId = isset($_GET['id']) ? (int)$_GET['id'] : null;
+if ($publicRequestedId === null || !tour_is_public($publicRequestedId)) {
+    require_login();
+}
 
 function tour_file_url(string $filePath): string
 {
@@ -23,14 +32,44 @@ function tour_copc_url(string $filePath, string $uploadDir): ?string
     return tour_file_url($filePath . '.copc.laz');
 }
 
+// Та же логика для PLY -> SOG/коллайдер (PR5, см. bin/process_splat_transforms.php).
+function tour_sog_url(string $filePath, string $uploadDir): ?string
+{
+    if (!is_file($uploadDir . $filePath . '.sog')) {
+        return null;
+    }
+    return tour_file_url($filePath . '.sog');
+}
+
+function tour_collision_url(string $filePath, string $uploadDir): ?string
+{
+    if (!is_file($uploadDir . $filePath . '.collision.glb')) {
+        return null;
+    }
+    return tour_file_url($filePath . '.collision.glb');
+}
+
 $uploadDir = realpath(__DIR__ . '/../uploads/tours') . '/';
 
 $pdo = db();
-$rows = $pdo->query(
-    'SELECT id, name, description, lat, lon, file_path, file_format
-     FROM tours
-     WHERE is_enabled = 1'
-)->fetchAll();
+// ?id= — один тур по id (для tour_view.php, полноэкранного вьювера по
+// прямой ссылке); без параметра — весь список для карты, как раньше.
+$requestedId = $publicRequestedId;
+if ($requestedId !== null) {
+    $stmt = $pdo->prepare(
+        'SELECT id, name, description, lat, lon, file_path, file_format
+         FROM tours
+         WHERE is_enabled = 1 AND id = :id'
+    );
+    $stmt->execute(['id' => $requestedId]);
+    $rows = $stmt->fetchAll();
+} else {
+    $rows = $pdo->query(
+        'SELECT id, name, description, lat, lon, file_path, file_format
+         FROM tours
+         WHERE is_enabled = 1'
+    )->fetchAll();
+}
 
 $extraStmt = $pdo->prepare('SELECT file_path FROM tour_files WHERE tour_id = :id ORDER BY sort_order');
 
@@ -51,6 +90,16 @@ foreach ($rows as &$row) {
     // для model_type === 'pointcloud', для сплатов всегда null).
     $row['copc_urls'] = array_map(
         fn($p) => tour_copc_url($p, $uploadDir),
+        $filePaths
+    );
+    // sog_urls/collision_urls — параллельные массивы, актуальны только для
+    // model_type === 'splat' (для LAS всегда null).
+    $row['sog_urls'] = array_map(
+        fn($p) => tour_sog_url($p, $uploadDir),
+        $filePaths
+    );
+    $row['collision_urls'] = array_map(
+        fn($p) => tour_collision_url($p, $uploadDir),
         $filePaths
     );
     // model_type — чтобы map.php знал, какой рендер-пайплайн использовать

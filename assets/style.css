@@ -11,17 +11,31 @@
    "cover" тут исказил бы пропорции волн, поэтому используем "contain"
    (вписываем целиком, без обрезки и без искажения, по аналогии с оригиналом,
    адаптированной под фон на весь экран, а не маленькую панель, как в
-   pgAdmin). background-attachment: fixed — при скролле длинных таблиц волны
-   не "едут" вместе с контентом. Карточки/таблицы/сайдбар поверх него все с
-   непрозрачным фоном (см. .surface-card, .sidebar, .topbar ниже) —
-   читаемость не страдает. */
+   pgAdmin).
+   ИСПРАВЛЕНО (жалоба на лаги/дёрганость при прокрутке): раньше "неподвижный
+   при скролле" фон делался через background-attachment:fixed прямо на body
+   — в паре с backdrop-filter на sticky-сайдбаре/топбаре (см. ниже) это
+   классическая комбинация, которая на каждый кадр скролла заставляет
+   браузер перерисовывать фон ПОД ВСЕЙ страницей (fixed-фон на некоторых
+   движках/GPU не попадает в отдельный composited-слой сам по себе и тянет
+   за собой полный repaint), а не только один лёгкий composited-слой.
+   ::before с position:fixed — тот же визуальный эффект (волны не едут при
+   скролле), но как отдельный элемент он получает свой GPU-слой и не
+   требует перерисовки остальной страницы на каждый кадр. */
 body {
   background-color: #0c0f14;
+  position: relative;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
   background-image: url('/assets/wave-bg.svg');
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-  background-attachment: fixed;
+  pointer-events: none;
 }
 
 /* --- App shell: sidebar + content --- */
@@ -33,11 +47,15 @@ body {
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
-  /* "Стекло" — полупрозрачный фон + небольшое размытие (легче, чем у
-     карточек ниже, чтобы меню оставалось четко читаемым, а не "мутным"). */
-  background: rgba(22, 27, 34, 0.55);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* ИСПРАВЛЕНО (жалоба на дёрганое меню/лаги при скролле): backdrop-filter
+     раньше держался и здесь, и на .topbar — оба position:sticky, а значит
+     содержимое ПОД ними меняется на каждом кадре скролла, и браузер обязан
+     пересчитывать блюр заново каждый раз, а не один раз при отрисовке —
+     именно это (не просто "много блюра на странице") создаёт заметный джанк
+     конкретно на sticky-элементах. Вместо блюра — более непрозрачный
+     плоский фон: тот же тёмный "стеклянный" тон без пересчёта на каждый
+     кадр. */
+  background: rgba(20, 24, 31, 0.92);
   border-right: 1px solid rgba(255, 255, 255, .06);
   color: #cbd2d9;
   display: flex;
@@ -46,6 +64,22 @@ body {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+}
+/* Сворачивание сайдбара влево на десктопе (кнопка #sidebarToggle в топбаре,
+   см. _foot.php) — сам сайдбар/список пунктов не меняется, просто прячется
+   с освобождением ширины под контент (напр. для полноэкранных инструментов
+   вроде FACADE·CAD, см. facade_cad.php). Мобильное поведение (.sidebar-open,
+   ниже) не затронуто — отдельный класс, отдельный брейкпоинт. */
+@media (min-width: 992px) {
+  .sidebar { transition: width .2s ease, opacity .15s ease; }
+  .sidebar.sidebar-collapsed {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    border-right: none;
+    overflow: hidden;
+    opacity: 0;
+  }
 }
 .sidebar-brand {
   display: flex;
@@ -90,10 +124,9 @@ body {
   gap: 8px;
   padding: 10px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, .06);
-  /* Та же "стеклянная" логика, что у .sidebar — топбар визуально часть меню. */
-  background: rgba(22, 27, 34, 0.55);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* Та же логика/тот же фикс, что у .sidebar выше — sticky + backdrop-filter
+     пересчитывался на каждый кадр скролла, отсюда и был джанк топбара. */
+  background: rgba(20, 24, 31, 0.92);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -187,6 +220,18 @@ body {
    синий, а не дефолтный/случайно зелёный --- */
 .progress-bar { background-color: var(--brand) !important; }
 
+/* Bootstrap's .text-bg-light pairs a light background with black text
+   (both !important) -- correct on its own, but .text-muted's color also
+   carries !important and happens to win the cascade, replacing the black
+   text with var(--bs-secondary-color). That variable is dark-theme-aware
+   and resolves to a LIGHT gray (tuned for text on this page's dark body),
+   which lands on .text-bg-light's light badge background -- light-on-light,
+   nearly invisible (see SLAM pipeline step badges, "not started yet" state).
+   Use this instead of "text-bg-light text-muted" for any "de-emphasized,
+   not an error" badge state: colors picked for THIS page's dark surface,
+   not reused from a light-mode-oriented utility pairing. */
+.badge-not-started { background-color: rgba(255, 255, 255, .06); color: rgba(229, 231, 235, .55); }
+
 /* --- Status pills --- */
 .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; }
 .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -194,15 +239,19 @@ body {
 .status-offline { background: #6b1226; } /* бордовый */
 .status-unknown { background: #8a94a6; }
 
-/* --- Окно 3D-вьювера тура: не на весь экран, а 75% от размера окна
+/* --- Окно 3D-вьювера тура: не на весь экран, а доля размера окна
    браузера, по центру — и тот же "стеклянный" фон, что у карточек на
    остальных страницах (а не сплошной непрозрачный, как было раньше при
    modal-fullscreen). За пределами модалки остаётся видна обычная страница
-   с волнистым фоном, как везде в кабинете. */
+   с волнистым фоном, как везде в кабинете. 90% — по запросу пользователя
+   (было 75%, мало места под 3D + Settings Panel). Центрирование — классом
+   modal-dialog-centered на самом .modal-dialog (см. map.php), здесь только
+   размер; margin сюда добавлять не нужно — он мешает flex-центрированию
+   bootstrap, отсюда и был баг с нецентрированной модалкой на мобильном. */
 .tour-viewer-dialog {
-  width: 75vw;
-  max-width: 75vw;
-  height: 75vh;
+  width: 90vw;
+  max-width: 90vw;
+  height: 90vh;
 }
 .tour-viewer-dialog .modal-content {
   height: 100%;
@@ -211,27 +260,145 @@ body {
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid rgba(255, 255, 255, .06);
 }
+/* Мобильный override для .tour-viewer-dialog перенесён в блок
+   "@media (max-width: 575.98px)" ниже вместе с остальными xs-правилами. */
 
 /* --- Map --- */
 .map-card { border: none; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }
 #map { height: 70vh; min-height: 420px; }
 .map-card.map-card-sm #map { height: 280px; min-height: 280px; }
-.legend { display: flex; gap: 12px; align-items: center; padding: 12px 16px; background: var(--bs-card-bg, var(--bs-body-bg)); border-top: 1px solid var(--bs-border-color); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 16px; background: var(--bs-card-bg, var(--bs-body-bg)); border-top: 1px solid var(--bs-border-color); }
 .legend-note { margin-left: auto; color: #6b7280; font-size: 13px; }
 .station-marker span { display: block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); }
 
 /* --- Cards / tables shared --- */
-/* Карточки — тоже "стекло", но более мутное/размытое, чем меню (.sidebar/
-   .topbar выше) — больше blur, чтобы блоки выглядели подложкой, а не просто
-   тонировкой. Правим сам .card, а не только .surface-card, чтобы эффект был
-   на всех карточках (map-card, login-card и т.д.), не задавая его на каждой
-   по отдельности. */
+/* Карточки — тоже "стекло". Правим сам .card, а не только .surface-card,
+   чтобы эффект был на всех карточках (map-card, login-card и т.д.), не
+   задавая его на каждой по отдельности.
+   ИСПРАВЛЕНО (жалоба на лаги/дёрганость): blur(18px) на каждой карточке —
+   на страницах с несколькими карточками сразу (списки/таблицы) суммарная
+   стоимость композитинга заметно росла. 8px даёт почти тот же "стеклянный"
+   вид (компенсировано чуть более плотным фоном ниже), но стоит GPU
+   заметно дешевле — размытие по гауссу дороже примерно пропорционально
+   квадрату радиуса, не линейно. */
 .card {
-  background: rgba(27, 32, 40, 0.6);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: rgba(27, 32, 40, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, .06);
 }
 .surface-card { border: none; border-radius: 16px; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }
+/* .table-responsive ставит overflow-x:auto — по спецификации CSS это
+   неявно превращает И overflow-y в auto (если для оси, отличной от
+   overflow-x, явно не указано что-то своё), из-за чего контекстное меню
+   действий тура обрезалось по вертикали этим же контейнером, едва
+   показывая первый пункт. tours.php добавляет этот класс рядом —
+   принудительно держим overflow-y видимым, горизонтальный скролл (для
+   узких экранов) при этом не теряется. */
+.table-responsive.overflow-y-visible { overflow-y: visible; }
 .table-clean th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #6b7280; border-top: none; }
 .table-clean td { vertical-align: middle; }
+/* Строки таблицы — без СВОЕГО фона, чтобы сквозь них было видно тот же
+   "стеклянный" блюр карточки (.card выше), а не плоский цвет Bootstrap
+   (--bs-table-bg/--bs-table-striped-bg и т.п.) поверх него — иначе на
+   тёмной теме получается видимый шов между размытой карточкой и плоской
+   таблицей внутри неё. Селектор бьёт собственную специфичность Bootstrap
+   у ячеек (.table > :not(caption) > * > *), просто transparent не
+   перекрыл бы её. class="table-hover" не используется (см. tours.php),
+   поэтому подсветка при наведении ниже — наша же лёгкая накладка, а не
+   переопределение чужой.
+*/
+.table-clean,
+.table-clean > :not(caption) > * > * {
+  background-color: transparent !important;
+}
+.table-clean > tbody > tr:hover > * {
+  background-color: rgba(255, 255, 255, .04) !important;
+}
+
+/* Поля форм — тот же принцип: полупрозрачный однородный фон вместо
+   сплошного Bootstrap-цвета, чтобы выглядеть частью той же "стеклянной"
+   карточки, а не отдельными непрозрачными блоками на ней. */
+.form-control,
+.form-select,
+textarea.form-control {
+  background-color: rgba(255, 255, 255, .05);
+  border-color: rgba(255, 255, 255, .12);
+  color: #e5e7eb;
+}
+.form-control:focus,
+.form-select:focus {
+  background-color: rgba(255, 255, 255, .08);
+  border-color: var(--brand);
+  color: #fff;
+  box-shadow: 0 0 0 .2rem rgba(47, 111, 237, .25);
+}
+.form-control::placeholder { color: rgba(229, 231, 235, .45); }
+.form-control:disabled, .form-select:disabled { background-color: rgba(255, 255, 255, .03); }
+/* Раскрытый список <select> — браузер рисует его как НАТИВНЫЙ попап, а не
+   часть страницы: на него не действует backdrop-filter/блюр карточки под
+   ним, поэтому полупрозрачный rgba(255,255,255,.05) у .form-select выше
+   (рассчитанный на просвечивающий тёмный фон страницы) в самом попапе
+   выглядел почти белым. <option> нужен СВОЙ непрозрачный тёмный фон. */
+.form-select option {
+  background-color: #1b2028;
+  color: #e5e7eb;
+}
+
+/* === Мобильная оптимизация === */
+
+/* Тёмная шторка за открытым сайдбаром на мобильных — закрывает по тапу */
+#sidebarBackdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .5);
+  z-index: 1039;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#sidebarBackdrop.show { display: block; }
+
+@media (max-width: 575.98px) {
+  /* Меньше внутренних отступов на малых экранах */
+  .page-main { padding: 12px 10px 28px; }
+
+  /* Карта: min-height слишком велик для коротких телефонов (~568 px высоты) */
+  #map { height: 55vh; min-height: 260px; }
+
+  /* Плеер тура — полноэкранный на xs */
+  .tour-viewer-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    /* svh учитывает адресную строку браузера, которая убирается при скролле */
+    height: 100svh;
+    margin: 0;
+  }
+  .tour-viewer-dialog .modal-content { border-radius: 0; }
+
+  /* Панель слоёв в плеере: 300px слишком широко для 360 px экрана */
+  #tourLayersPanel { width: calc(100vw - 24px) !important; }
+
+  /* Подсказка управления мышью: ограничить ширину */
+  #tourMouseHelp { max-width: calc(100vw - 48px) !important; }
+}
+
+@media (max-width: 767.98px) {
+  /* Топбар: меньше горизонтальный отступ и gap */
+  .topbar { padding: 8px 12px; gap: 4px; }
+
+  /* Заголовок страницы */
+  .page-title { font-size: 1rem; gap: 6px; margin-bottom: 1rem; }
+
+  /* Кнопки в ячейках таблицы — удобный размер для касания */
+  .table td .btn-sm { min-width: 32px; min-height: 34px; padding: 4px 6px; }
+
+  /* Кнопки формы RINEX — переносить на новую строку, а не обрезать */
+  .rinex-action-row { flex-wrap: wrap; row-gap: 8px !important; }
+
+  /* my_tours: скрыть колонку "Описание" — редактирование удобно только с ПК */
+  .my-tours-desc-col { display: none !important; }
+
+  /* Логин: чуть меньше padding карточки */
+  .login-card .card-body { padding: 1.75rem; }
+}

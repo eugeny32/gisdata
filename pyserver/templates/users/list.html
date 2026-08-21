@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Пользователи NTRIP{% endblock %}
+{% block page_icon %}bi-people-fill{% endblock %}
+{% block page_title %}Пользователи NTRIP{% endblock %}
+{% block content %}
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if success %}<div class="alert alert-success">{{ success }}</div>{% endif %}
+
+<div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+  <div class="text-secondary small">
+    Всего: <strong class="text-white">{{ total_all }}</strong>&ensp;
+    Активных: <strong class="text-success">{{ total_active }}</strong>&ensp;
+    Неактивных: <strong class="text-danger">{{ total_inactive }}</strong>&ensp;
+    Добавлено вручную: <strong class="text-warning">{{ total_manual }}</strong>
+  </div>
+  <div class="ms-auto d-flex gap-2 flex-wrap">
+    <button class="btn btn-sm btn-primary" type="button"
+            data-bs-toggle="collapse" data-bs-target="#addUserPanel" aria-expanded="false">
+      <i class="bi bi-person-plus me-1"></i>Добавить пользователя
+    </button>
+    <form method="post" action="{% url 'users' %}" class="d-inline"
+          onsubmit="return confirm('Запустить синхронизацию из mdb-дампа?');">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="sync">
+      <button type="submit" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-repeat me-1"></i>Синхронизировать из mdb
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="collapse mb-3" id="addUserPanel">
+  <div class="card surface-card">
+    <div class="card-body">
+      <h2 class="h6 mb-3"><i class="bi bi-person-plus text-primary me-1"></i>Новый пользователь</h2>
+      <form method="post" action="{% url 'users' %}" class="row g-3">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label small">Имя пользователя (логин)*</label>
+          <input type="text" name="user_name" class="form-control" required autocomplete="off">
+        </div>
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label small">Пароль*</label>
+          <input type="text" name="user_password" class="form-control" required autocomplete="new-password">
+          <div class="form-text">NTRIP-пароли хранятся в открытом виде</div>
+        </div>
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label small">ФИО</label>
+          <input type="text" name="gl_name" class="form-control">
+        </div>
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label small">Email</label>
+          <input type="email" name="email" class="form-control">
+        </div>
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label small">Телефон</label>
+          <input type="tel" name="telephone" class="form-control">
+        </div>
+        <div class="col-12 col-sm-6 col-md-3">
+          <label class="form-label small">Контактное лицо</label>
+          <input type="text" name="contact_person" class="form-control">
+        </div>
+        <div class="col-12 col-md-6 d-flex align-items-end gap-3">
+          <div class="form-check">
+            <input type="checkbox" name="is_active" class="form-check-input" id="newUserActive" checked>
+            <label class="form-check-label" for="newUserActive">Активен сразу</label>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-lg me-1"></i>Создать
+          </button>
+        </div>
+      </form>
+      <div class="text-secondary small mt-3">
+        <i class="bi bi-info-circle me-1"></i>
+        На Linux-сервере прямой записи в mdb нет — новый пользователь создаётся только в
+        платформе (вход в кабинет работает, подключение к NTRIP — только после
+        синхронизации на стороне mdb-моста).
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card surface-card mb-3">
+  <div class="card-body py-2">
+    <form method="get" action="{% url 'users' %}" class="row g-2 align-items-center">
+      <div class="col-12 col-sm-5 col-md-4">
+        <input type="text" name="q" class="form-control form-control-sm"
+               placeholder="Поиск по логину, ФИО, email..." value="{{ search }}">
+      </div>
+      <div class="col-6 col-sm-3 col-md-2">
+        <select name="s" class="form-select form-select-sm">
+          <option value="">Все</option>
+          <option value="1" {% if filter_status == "1" %}selected{% endif %}>Активные</option>
+          <option value="0" {% if filter_status == "0" %}selected{% endif %}>Неактивные</option>
+        </select>
+      </div>
+      <div class="col-6 col-sm-auto">
+        <button type="submit" class="btn btn-sm btn-outline-secondary w-100">Найти</button>
+      </div>
+      {% if search or filter_status %}
+      <div class="col-auto">
+        <a href="{% url 'users' %}" class="btn btn-sm btn-link text-secondary">Сбросить</a>
+      </div>
+      {% endif %}
+      <div class="col-12 col-md-auto ms-md-auto small text-secondary">
+        Найдено: {{ users|length }}
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card surface-card">
+  <div class="table-responsive">
+    <table class="table table-clean align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Логин</th>
+          <th class="d-none d-md-table-cell">ФИО</th>
+          <th class="d-none d-lg-table-cell">Email / Телефон</th>
+          <th>Статус</th>
+          <th>Источник</th>
+          <th class="d-none d-xl-table-cell">Синхр.</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td>
+            <div class="fw-semibold">{{ u.user_name }}</div>
+            {% if u.scope_name or u.mount_name %}
+              <div class="text-secondary" style="font-size:11px">
+                {{ u.scope_name|default:"" }}{% if u.scope_name and u.mount_name %} / {% endif %}{{ u.mount_name|default:"" }}
+              </div>
+            {% endif %}
+          </td>
+          <td class="text-secondary small d-none d-md-table-cell">{{ u.gl_name|default:"—" }}</td>
+          <td class="text-secondary small d-none d-lg-table-cell">
+            <div>{{ u.email|default:"—" }}</div>
+            {% if u.telephone %}<div>{{ u.telephone }}</div>{% endif %}
+          </td>
+          <td>
+            {% if u.is_active %}<span class="badge text-bg-success">Активен</span>
+            {% else %}<span class="badge text-bg-secondary">Неактивен</span>{% endif %}
+          </td>
+          <td>
+            {% if u.is_manual %}
+              <span class="badge text-bg-warning text-dark" title="Создан вручную через веб-форму">Вручную</span>
+            {% else %}
+              <span class="badge text-bg-secondary" title="Импортирован из mdb (NTRIP-сервер)">mdb</span>
+            {% endif %}
+          </td>
+          <td class="text-secondary small d-none d-xl-table-cell">{{ u.synced_at|date:"Y-m-d H:i" }}</td>
+          <td class="text-end text-nowrap">
+            <form method="post" action="{% url 'users' %}" class="d-inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="toggle">
+              <input type="hidden" name="id" value="{{ u.id }}">
+              {% if filter_status %}<input type="hidden" name="s" value="{{ filter_status }}">{% endif %}
+              <button type="submit" class="btn btn-sm btn-outline-secondary" title="{% if u.is_active %}Деактивировать{% else %}Активировать{% endif %}">
+                <i class="bi {% if u.is_active %}bi-toggle-on text-success{% else %}bi-toggle-off{% endif %}"></i>
+              </button>
+            </form>
+            <form method="post" action="{% url 'users' %}" class="d-inline ms-1">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="toggle_facade_cad">
+              <input type="hidden" name="id" value="{{ u.id }}">
+              {% if filter_status %}<input type="hidden" name="s" value="{{ filter_status }}">{% endif %}
+              <button type="submit" class="btn btn-sm btn-outline-secondary" title="Услуга FACADE·CAD">
+                <i class="bi bi-rulers{% if u.facade_cad_enabled %} text-success{% endif %}"></i>
+              </button>
+            </form>
+            <form method="post" action="{% url 'users' %}" class="d-inline ms-1">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="toggle_topo_cad">
+              <input type="hidden" name="id" value="{{ u.id }}">
+              {% if filter_status %}<input type="hidden" name="s" value="{{ filter_status }}">{% endif %}
+              <button type="submit" class="btn btn-sm btn-outline-secondary" title="Услуга TOPO·CAD">
+                <i class="bi bi-signpost-2{% if u.topo_cad_enabled %} text-success{% endif %}"></i>
+              </button>
+            </form>
+            <form method="post" action="{% url 'users' %}" class="d-inline ms-1">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="toggle_facade_foto">
+              <input type="hidden" name="id" value="{{ u.id }}">
+              {% if filter_status %}<input type="hidden" name="s" value="{{ filter_status }}">{% endif %}
+              <button type="submit" class="btn btn-sm btn-outline-secondary" title="Услуга FACADE·FOTO">
+                <i class="bi bi-image{% if u.facade_foto_enabled %} text-success{% endif %}"></i>
+              </button>
+            </form>
+            {% if u.is_manual %}
+            <button type="button" class="btn btn-sm btn-outline-secondary ms-1" title="Сменить пароль"
+                    data-bs-toggle="modal" data-bs-target="#pwdModal" data-uid="{{ u.id }}" data-uname="{{ u.user_name }}">
+              <i class="bi bi-key"></i>
+            </button>
+            <form method="post" action="{% url 'users' %}" class="d-inline ms-1"
+                  onsubmit="return confirm('Удалить пользователя «{{ u.user_name }}»?');">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="id" value="{{ u.id }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="7" class="text-secondary text-center py-4">Пользователей не найдено</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="px-3 py-2 border-top border-secondary border-opacity-25 text-secondary small">
+    <i class="bi bi-info-circle me-1"></i>
+    <strong>mdb</strong> — пользователи из источника NTRIP-сервера; их данные перезаписываются при синхронизации.
+    <strong>Вручную</strong> — созданы через эту форму; синхронизация их не трогает.
+  </div>
+</div>
+
+<div class="modal fade" id="pwdModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Сменить пароль</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" action="{% url 'users' %}">
+        {% csrf_token %}
+        <div class="modal-body">
+          <input type="hidden" name="action" value="set_password">
+          <input type="hidden" name="id" id="pwdUserId">
+          <p class="text-secondary small mb-3">Пользователь: <strong id="pwdUserName"></strong></p>
+          <label class="form-label small">Новый пароль</label>
+          <input type="text" name="user_password" class="form-control" required autocomplete="new-password">
+          <div class="form-text">NTRIP-пароли хранятся в открытом виде</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+const pwdModal = document.getElementById('pwdModal');
+if (pwdModal) {
+  pwdModal.addEventListener('show.bs.modal', (e) => {
+    const btn = e.relatedTarget;
+    document.getElementById('pwdUserId').value = btn.dataset.uid;
+    document.getElementById('pwdUserName').textContent = btn.dataset.uname;
+  });
+}
+</script>
+{% endblock %}

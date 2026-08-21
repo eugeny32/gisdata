@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * CLI-скрипт синхронизации пользователей из E_Ser190905.mdb (NRS_SER_UserDB)
- * в таблицу MySQL users_sync. Запускать через Планировщик заданий Windows,
+ * в таблицу users_sync. Запускать через Планировщик заданий Windows,
  * например раз в 5-15 минут:
  *   php C:\path\to\bin\sync_mdb_users.php
  *
@@ -38,10 +38,10 @@ $pdo = db();
 $upsert = $pdo->prepare(
     'INSERT INTO users_sync
         (id, user_name, gl_name, user_password, user_time, puser_time,
-         scope_name, mount_name, device_type, sn, email, contact_person, telephone, is_active)
+         scope_name, mount_name, device_type, sn, email, contact_person, telephone, is_active, is_manual)
      VALUES
         (:id, :user_name, :gl_name, :user_password, :user_time, :puser_time,
-         :scope_name, :mount_name, :device_type, :sn, :email, :contact_person, :telephone, :is_active)
+         :scope_name, :mount_name, :device_type, :sn, :email, :contact_person, :telephone, :is_active, 0)
      ON CONFLICT (id) DO UPDATE SET
         user_name = EXCLUDED.user_name,
         gl_name = EXCLUDED.gl_name,
@@ -55,7 +55,8 @@ $upsert = $pdo->prepare(
         email = EXCLUDED.email,
         contact_person = EXCLUDED.contact_person,
         telephone = EXCLUDED.telephone,
-        is_active = EXCLUDED.is_active'
+        is_active = EXCLUDED.is_active
+     WHERE users_sync.is_manual = 0'
 );
 
 $pdo->beginTransaction();

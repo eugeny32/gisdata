@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}RINEX файлы{% endblock %}
+{% block page_icon %}bi-folder2-open{% endblock %}
+{% block page_title %}RINEX файлы{% endblock %}
+{% block content %}
+  <div class="card surface-card mb-3">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Запрос данных с gnss.host</h2>
+      <form method="post" action="{% url 'rinex' %}" class="row g-3" id="rinexQueryForm">
+        {% csrf_token %}
+        <div class="col-md-6">
+          <label class="form-label small">Станции*</label>
+          <select name="stations" class="form-select" multiple size="8" required>
+            {% for s in all_stations %}
+              <option value="{{ s }}" {% if s in selected_stations %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Зажмите Ctrl (или Cmd на Mac), чтобы выбрать несколько</div>
+        </div>
+        <div class="col-md-6">
+          <div class="row g-2">
+            <div class="col-12">
+              <label class="form-label small">С* (UTC, дата и час)</label>
+              <input type="datetime-local" name="date_from" class="form-control" required value="{{ date_from }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">По* (UTC, дата и час)</label>
+              <input type="datetime-local" name="date_to" class="form-control" required value="{{ date_to }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label small d-block">Тип файлов</label>
+              <div class="form-check form-check-inline">
+                <input type="checkbox" name="types" value="mo" class="form-check-input" id="typeMo" {% if "mo" in selected_types %}checked{% endif %}>
+                <label class="form-check-label" for="typeMo">Наблюдения (MO)</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input type="checkbox" name="types" value="mn" class="form-check-input" id="typeMn" {% if "mn" in selected_types %}checked{% endif %}>
+                <label class="form-check-label" for="typeMn">Навигация (MN)</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="form-check">
+            <input type="checkbox" name="merge_by_day" value="1" class="form-check-input" id="mergeByDay" {% if merge_by_day %}checked{% endif %}>
+            <label class="form-check-label" for="mergeByDay">Объединять смежные часы в один файл за сутки (только для фонового запроса)</label>
+          </div>
+          <div class="form-text">Файлы объединяются, только если идут подряд без разрыва — при пропуске в несколько минут (станция не передавала данные) получится отдельный файл, а не файл с дыркой.</div>
+        </div>
+        <div class="col-12 d-flex gap-2 align-items-center rinex-action-row">
+          <button type="submit" name="intent" value="search" class="btn btn-outline-primary"><i class="bi bi-search"></i> Найти и выбрать файлы</button>
+          <button type="submit" name="intent" value="create_request" class="btn btn-primary"><i class="bi bi-clock-history"></i> Сформировать фоновый запрос</button>
+          <span class="text-secondary small">Максимум {{ rinex_max_days }} дней за раз</span>
+        </div>
+      </form>
+      <div class="text-secondary small mt-2">«Найти и выбрать файлы» — мгновенный просмотр и скачивание отдельных часовых файлов прямо сейчас. «Сформировать фоновый запрос» — сборка (и, если включено, объединение по суткам) происходит на сервере в фоне, результат появится в разделе «<a href="{% url 'rinex_requests' %}">Готовые данные</a>».</div>
+    </div>
+  </div>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% elif intent == "search" %}
+    {% if truncated %}
+      <div class="alert alert-warning">Найдено больше {{ rinex_max_files }} файлов — показаны первые {{ rinex_max_files }}. Сузьте период или число станций.</div>
+    {% endif %}
+    <form method="post" action="{% url 'rinex_download_zip' %}" id="rinexDownloadForm">
+      {% csrf_token %}
+      <div class="card surface-card">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h6 mb-0">Результаты: {{ result_count }} файл(ов)</h2>
+            <div class="d-flex gap-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="rinexSelectAll">Выбрать все</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="rinexSelectNone">Снять все</button>
+              <button type="submit" class="btn btn-sm btn-primary" id="rinexDownloadBtn" disabled><i class="bi bi-file-zip"></i> Скачать архивом (.zip)</button>
+            </div>
+          </div>
+          {% if not results %}
+            <div class="text-muted">Ничего не найдено за выбранный период/станции</div>
+          {% endif %}
+          {% for day_folder, by_station in results.items %}
+            <h3 class="h6 mt-3"><i class="bi bi-calendar3"></i> {{ day_folder }}</h3>
+            {% for station, files in by_station.items %}
+              <div class="table-responsive mb-2">
+                <table class="table table-clean table-sm align-middle mb-0">
+                  <thead><tr><th style="width:30px"></th><th>{{ station }}</th><th>Размер</th></tr></thead>
+                  <tbody>
+                  {% for f in files %}
+                    <tr>
+                      <td><input type="checkbox" name="files" value="{{ f.path }}" class="form-check-input rinex-file-cb"></td>
+                      <td>{{ f.name }}</td>
+                      <td class="text-secondary small">{{ f.size_human }}</td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endfor %}
+          {% endfor %}
+        </div>
+      </div>
+    </form>
+  {% endif %}
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  const form = document.getElementById('rinexDownloadForm');
+  if (!form) return;
+  const checkboxes = () => Array.from(form.querySelectorAll('.rinex-file-cb'));
+  const downloadBtn = document.getElementById('rinexDownloadBtn');
+  function syncButton() {
+    downloadBtn.disabled = !checkboxes().some((cb) => cb.checked);
+  }
+  document.getElementById('rinexSelectAll').addEventListener('click', () => {
+    checkboxes().forEach((cb) => { cb.checked = true; });
+    syncButton();
+  });
+  document.getElementById('rinexSelectNone').addEventListener('click', () => {
+    checkboxes().forEach((cb) => { cb.checked = false; });
+    syncButton();
+  });
+  form.addEventListener('change', syncButton);
+  syncButton();
+})();
+</script>
+{% endblock %}

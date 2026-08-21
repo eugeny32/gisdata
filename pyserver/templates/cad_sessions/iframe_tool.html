@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ frame_title }}{% endblock %}
+{% block page_icon %}{{ frame_icon }}{% endblock %}
+{% block page_title %}{{ frame_title }}{% endblock %}
+{% block content %}
+  <style>
+    /* Full-bleed content for this page only -- the tool owns its whole
+       area (own full-screen WebGL canvas); the rest of the layout
+       (sidebar/topbar) is untouched. */
+    .page-main {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      flex: 1 1 auto;
+      display: flex;
+    }
+    .page-title { display: none; }
+    #{{ frame_id }} {
+      flex: 1 1 auto;
+      width: 100%;
+      border: 0;
+      display: block;
+      min-height: 480px;
+    }
+  </style>
+  <iframe id="{{ frame_id }}" src="{{ frame_src }}" title="{{ frame_title }}" allow="clipboard-write; fullscreen"></iframe>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+  // "Open fullscreen" -- collapse the sidebar right away on entering this
+  // page (same toggle as the topbar button) so the tool immediately gets
+  // the whole screen; the user can expand the sidebar back with that
+  // same button.
+  (function () {
+    var sidebar = document.getElementById('sidebar');
+    if (sidebar && window.innerWidth >= 992 && !sidebar.classList.contains('sidebar-collapsed')) {
+      sidebar.classList.add('sidebar-collapsed');
+      try { localStorage.setItem('sidebarCollapsed', '1'); } catch (e) {}
+    }
+  })();
+</script>
+{% endblock %}

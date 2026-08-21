@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <script src="/ctfadmin/_agent.js" data-app="topo" data-server="/ctfadmin"></script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TOPO·CAD — черчение топографии по облаку точек</title>
+    <!-- Empty icon: keeps the console clean of the favicon 404. -->
+    <link rel="icon" href="data:," />
+    <script type="module" crossorigin src="./assets/index-D2Czz_z6.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-C7Zk6Hcj.css">
+  </head>
+  <body class="overflow-hidden select-none antialiased">
+    <!-- Single WebGL canvas: three scissored viewports are rendered into it. -->
+    <canvas id="gl" class="fixed inset-0 block h-full w-full"></canvas>
+
+    <!-- OrbitControls capture pad over the isometric viewport (bottom-right).
+         Keep the layout numbers in sync with SPLIT_X / SPLIT_Y in ViewportManager;
+         the vertical anchors come from --split-y / --pane-h, which already
+         account for the docked ribbon. -->
+    <div id="orbit-pad" class="fixed z-10" style="left: 62%; top: var(--split-y); width: 38%; height: var(--pane-h)"></div>
+
+    <!-- Viewport separators -->
+    <div class="vp-sep pointer-events-none fixed z-10 w-px" style="left: 62%; top: var(--ribbon-h, 4.2rem); bottom: 0"></div>
+    <div class="vp-sep pointer-events-none fixed right-0 z-10 h-px" style="left: 62%; top: var(--split-y)"></div>
+
+    <!-- Ring marking the pane that owns the commands (keys 1 / 2 / 3) -->
+    <div id="pane-focus" class="pane-focus"></div>
+
+    <!-- Viewport labels -->
+    <div id="lbl-main" class="vp-label" style="left: 1rem; top: calc(var(--ribbon-h, 4.2rem) + 0.8rem)">ПЛАН · ВИД СВЕРХУ</div>
+    <div id="lbl-section" class="vp-label" style="left: 63%; top: calc(var(--ribbon-h, 4.2rem) + 0.8rem)">ПОПЕРЕЧНИК</div>
+    <div id="lbl-iso" class="vp-label" style="left: 63%; top: calc(var(--split-y) + 0.75rem)">3D · ОБЗОР</div>
+
+    <!-- ═══════ RIBBON — panels render from src/Ribbon.ts, user-customizable ═══════ -->
+    <div id="ribbon" class="ribbon-bar fixed inset-x-0 top-0 z-20 flex items-stretch gap-1 px-3 py-1.5">
+      <!-- Wraps onto a second row instead of scrolling: every command stays
+           reachable without hunting along a scrollbar. -->
+      <div id="ribbon-groups" class="flex min-w-0 flex-1 flex-wrap items-stretch gap-x-1 gap-y-0.5"></div>
+
+      <!-- Статус -->
+      <div class="flex flex-none items-center gap-2 self-center pr-1">
+        <span id="fps" class="stat-num">—</span>
+        <span class="stat-cap">FPS</span>
+        <span id="pts" class="stat-num" title="Точек облака, отправленных на отрисовку за кадр по всем окнам (тайловый отбор)">—</span>
+        <span class="stat-cap">PTS</span>
+        <span class="status-sep"></span>
+        <span id="pill-snap" class="pill" title="Привязка к точкам облака (S)">ПРИВЯЗКА</span>
+        <span id="pill-ortho" class="pill" title="Орто-режим (F8 / удерживать Shift)">ОРТО</span>
+        <span id="pill-weight" class="pill" title="Отображать толщины линий">ТОЛЩ</span>
+        <span id="layer-swatch" class="layer-swatch" title="Цвет активного слоя"></span>
+        <select id="layer-select" title="Слой: без выделения — текущий слой для новых объектов; с выделением — перенос выбранных объектов на слой (цвет берётся от слоя)"></select>
+        <select id="ucs-select" title="Активная ось (система координат)"></select>
+        <span id="btn-ucs-rename" class="pill" title="Переименовать текущую ось">✎</span>
+        <span id="btn-ribbon-edit" class="pill" title="Настройка ленты: перетаскивайте кнопки между панелями">⚙</span>
+      </div>
+    </div>
+    <input id="import-file" type="file" accept=".xyz,.txt,.pts,.asc,.csv,.las,.laz,.e57" class="hidden" />
+
+    <!-- Cut controls: docked to the BOTTOM edge of viewport 2 and dimmed
+         until hovered, so the cut itself is never covered. -->
+    <div id="section-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: 63%; bottom: calc(var(--pane-h) + 0.7rem)">
+      <span id="section-mode" class="pill w-14 text-center" data-on="true" title="Ориентация реза">ПОПЕР</span>
+      <span class="hud-cap" title="Толщина реза: сколько метров поперёк плоскости реза попадает в срез">Т</span>
+      <input id="sec-thick" type="range" min="0.05" max="20" step="0.05" value="0.6" title="Толщина реза, м" />
+      <span id="sec-thick-val" class="hud-val">0.60 м</span>
+      <span class="hud-sep"></span>
+      <span class="hud-cap" title="Охват — сколько метров земли видно в окне">О</span>
+      <input id="sec-span" type="range" min="2" max="300" step="1" value="30" title="Охват реза, м" />
+      <span id="sec-span-val" class="hud-val">30 м</span>
+      <span class="hud-sep"></span>
+      <span class="hud-cap" title="Вертикальный масштаб: во сколько раз растянуты высоты">В</span>
+      <input id="sec-exag" type="range" min="1" max="30" step="0.5" value="3" title="Вертикальный масштаб" />
+      <span id="sec-exag-val" class="hud-val">×3</span>
+    </div>
+
+    <!-- Cursor-follow cloud window size (3D viewport) -->
+    <div id="cursor-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: 63%; bottom: 0.75rem">
+      <span class="hud-cap" title="Размер видимого куска облака вокруг курсора в 3D-окне">ОБЛАСТЬ</span>
+      <input id="cursor-area" type="range" min="5" max="600" step="5" value="40" title="Размер видимого куска облака вокруг курсора в 3D-окне" />
+      <span id="cursor-area-val" class="hud-val">40 м</span>
+    </div>
+
+    <!-- Height slice for the plan view: only the slab at this elevation is
+         drawn and snapped (земля из-под растительности) -->
+    <div id="slice-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: 1rem; top: calc(var(--ribbon-h, 4.2rem) + 2.8rem)" title="Срез плана по высоте: видны и привязываются только точки в слое — так читается земля под растительностью">
+      <span id="slice-pill" class="pill" data-on="false">СРЕЗ</span>
+      <span class="hud-cap" title="Отметка среза">H</span>
+      <input id="slice-z" type="range" min="0" max="20" step="0.05" value="0" />
+      <span id="slice-val" class="hud-val">0.00 м</span>
+      <span class="hud-sep"></span>
+      <span class="hud-cap" title="Толщина слоя">Т</span>
+      <input id="slice-thick" type="range" min="0.05" max="10" step="0.05" value="0.5" />
+      <span id="slice-thick-val" class="hud-val">0.50 м</span>
+    </div>
+
+    <!-- CAD layers manager -->
+    <div id="layers-panel" class="glass fixed z-30 hidden w-[23rem] flex-col gap-2 px-3 py-2.5" style="right: 0.75rem; top: 8.6rem">
+      <div id="layers-header" class="flex cursor-grab items-center justify-between active:cursor-grabbing" title="Потяните за заголовок, чтобы переместить панель">
+        <span class="panel-cap">Слои · ⠿</span>
+        <span id="layers-close" class="panel-close">✕</span>
+      </div>
+      <div id="layers-list" class="flex max-h-72 flex-col gap-1 overflow-y-auto pr-0.5"></div>
+      <div class="flex items-center gap-2 pt-1">
+        <button id="btn-layer-add" class="mini-btn" title="Создать новый слой и сделать его текущим">+ Слой</button>
+        <button id="btn-layer-assign" class="mini-btn" title="Перенести выбранные объекты на текущий слой">Выбранное → слой</button>
+      </div>
+      <div class="panel-note">Кружок — текущий слой · квадрат — цвет · имя: двойной клик переименует · далее тип линии, толщина, число объектов, показ, удаление</div>
+    </div>
+
+    <!-- Command hint -->
+    <div class="glass fixed bottom-3 z-20 px-4 py-2" style="left: 25.5rem; right: calc(38% + 1rem)">
+      <span id="hint" class="hint-text"></span>
+    </div>
+
+    <!-- Cursor coordinates readout -->
+    <div class="glass fixed z-20 px-3 py-1.5" style="left: calc(62% - 0.75rem); bottom: 3.6rem; transform: translateX(-100%)">
+      <span id="coords" class="coords-text" title="Станция вдоль оси · смещение от оси · отметка земли под курсором">X 0.000  Y 0.000  H   —  </span>
+    </div>
+
+    <!-- Hotkey cheat-sheet -->
+    <div class="glass cheat fixed bottom-3 left-3 z-20 px-3 py-2">
+      <div><b>ЛКМ</b> рисовать · <b>Ctrl+клик</b> добавить к выбору · <b>СКМ</b> панорама · <b>колесо</b> зум</div>
+      <div><b>Enter/ПКМ</b> завершить · <b>C</b> замкнуть · <b>Esc</b> отмена · <b>Del</b> удалить</div>
+      <div><b>S</b> привязка · <b>F8/Shift</b> орто · <b>Ctrl+Z/Y</b> отмена/возврат</div>
+      <div><b>1 · 2 · 3</b> план · рез · 3D (2 и 3 фиксируют окно) · <b>F1</b> справка</div>
+      <div><b>Цифры</b> точный ввод: <b>2.5</b> длина · <b>3,1.2</b> смещение X,Y</div>
+    </div>
+
+    <!-- Per-viewport visibility of drawn linework -->
+    <button id="eye-main" class="eye-btn" style="left: calc(62% - 3.2rem); top: calc(var(--ribbon-h, 4.2rem) + 0.6rem)" data-on="true" title="Показ элементов чертежа в этом окне">
+      <svg viewBox="0 0 24 24"><path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+    </button>
+    <button id="eye-section" class="eye-btn" style="right: 0.75rem; top: calc(var(--split-y) - 3rem)" data-on="true" title="Показ элементов чертежа в этом окне">
+      <svg viewBox="0 0 24 24"><path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+    </button>
+    <button id="eye-iso" class="eye-btn" style="right: 0.75rem; bottom: 3.6rem" data-on="true" title="Показ элементов чертежа в этом окне">
+      <svg viewBox="0 0 24 24"><path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+    </button>
+
+    <!-- Cloud display settings per viewport -->
+    <button id="gear-main" class="eye-btn" style="left: calc(62% - 5.5rem); top: calc(var(--ribbon-h, 4.2rem) + 0.6rem)" title="Отображение облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" /><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.3 2.3M16.4 16.4l2.3 2.3M18.7 5.3l-2.3 2.3M7.6 16.4l-2.3 2.3" /></svg>
+    </button>
+    <button id="gear-section" class="eye-btn" style="right: 3.2rem; top: calc(var(--split-y) - 3rem)" title="Отображение облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" /><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.3 2.3M16.4 16.4l2.3 2.3M18.7 5.3l-2.3 2.3M7.6 16.4l-2.3 2.3" /></svg>
+    </button>
+    <button id="gear-iso" class="eye-btn" style="right: 3.2rem; bottom: 3.6rem" title="Отображение облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" /><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.3 2.3M16.4 16.4l2.3 2.3M18.7 5.3l-2.3 2.3M7.6 16.4l-2.3 2.3" /></svg>
+    </button>
+
+    <!-- Cloud visibility per viewport -->
+    <button id="cloudeye-main" class="eye-btn" style="left: calc(62% - 7.8rem); top: calc(var(--ribbon-h, 4.2rem) + 0.6rem)" data-on="true" title="Показ облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="7" cy="11" r="1.2" /><circle cx="12" cy="7.5" r="1.2" /><circle cx="17" cy="11" r="1.2" /><circle cx="9.5" cy="16" r="1.2" /><circle cx="14.5" cy="15" r="1.2" /></svg>
+    </button>
+    <button id="cloudeye-section" class="eye-btn" style="right: 5.65rem; top: calc(var(--split-y) - 3rem)" data-on="true" title="Показ облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="7" cy="11" r="1.2" /><circle cx="12" cy="7.5" r="1.2" /><circle cx="17" cy="11" r="1.2" /><circle cx="9.5" cy="16" r="1.2" /><circle cx="14.5" cy="15" r="1.2" /></svg>
+    </button>
+    <button id="cloudeye-iso" class="eye-btn" style="right: 5.65rem; bottom: 3.6rem" data-on="true" title="Показ облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="7" cy="11" r="1.2" /><circle cx="12" cy="7.5" r="1.2" /><circle cx="17" cy="11" r="1.2" /><circle cx="9.5" cy="16" r="1.2" /><circle cx="14.5" cy="15" r="1.2" /></svg>
+    </button>
+
+    <div id="cloud-panel" class="glass fixed z-30 hidden w-60 flex-col gap-2 px-4 py-3">
+      <div class="flex items-center justify-between">
+        <span id="cloud-panel-title" class="panel-cap">ОБЛАКО</span>
+        <span id="cloud-panel-close" class="panel-close">✕</span>
+      </div>
+      <label class="cp-row">Размер точек<input id="cp-size" type="range" min="0.5" max="6" step="0.5" /></label>
+      <label class="cp-row">Прозрачность<input id="cp-opacity" type="range" min="0.05" max="1" step="0.05" /></label>
+      <label class="cp-row">Плотность<input id="cp-density" type="range" min="0.05" max="1" step="0.05" /></label>
+      <label class="cp-row">Цвет
+        <select id="cp-mode">
+          <option value="0">RGB</option>
+          <option value="1">Интенсивность</option>
+          <option value="2">По высоте</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- User guide, rendered from РУКОВОДСТВО.md at build time -->
+    <!-- z-50: must sit above the start overlay, which is also full-screen -->
+    <div id="help-panel" class="fixed inset-0 z-50 hidden items-center justify-center backdrop-blur-sm" style="background: rgba(8, 7, 12, 0.72)">
+      <div class="glass flex max-h-[86vh] w-[min(58rem,92vw)] flex-col">
+        <div class="flex items-center justify-between border-b border-white/8 px-5 py-3">
+          <span class="panel-cap">Руководство пользователя</span>
+          <span id="help-close" class="panel-close" title="Закрыть (Esc)">✕</span>
+        </div>
+        <div id="help-body" class="help-body overflow-y-auto px-6 py-4"></div>
+      </div>
+    </div>
+
+    <!-- Marquee selection rectangle (DOM overlay, no GPU cost) -->
+    <div id="marquee" class="pointer-events-none fixed z-30 hidden"></div>
+
+    <!-- Startup: import-first -->
+    <div id="start-overlay" class="fixed inset-0 z-40 flex flex-col items-center justify-center gap-5 backdrop-blur-sm">
+      <div class="start-logo">TOPO·CAD</div>
+      <button id="btn-start-import" class="start-btn">ИМПОРТИРОВАТЬ ОБЛАКО</button>
+      <div class="start-formats">LAS · LAZ · E57 · XYZ / TXT / PTS</div>
+      <div id="start-progress" class="start-progress hidden"></div>
+      <div class="flex items-center gap-5">
+        <button id="btn-start-demo" class="start-link">открыть демо-рельеф</button>
+        <button id="btn-start-help" class="start-link accent">как пользоваться</button>
+      </div>
+    </div>
+
+    <!-- Dynamic input readout (typed digits next to the cursor) -->
+    <div id="dyn-input" class="pointer-events-none fixed z-30 hidden"></div>
+
+  </body>
+</html>

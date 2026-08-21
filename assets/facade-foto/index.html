@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ректификация фасада по контрольным точкам</title>
+<script src="/ctfadmin/_agent.js" data-app="facade-foto" data-server="/ctfadmin"></script>
+<style>
+  :root{
+    --bg:#26272b;
+    --panel:#2f3136;
+    --panel-2:#35373d;
+    --line:#45474e;
+    --ink:#e8e9ec;
+    --ink-dim:#9a9da6;
+    --accent:#25c3d6;      /* цвет обмерных линий на чертежах */
+    --warn:#e8b13a;
+    --bad:#e2604a;
+    --good:#63c07a;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    overflow:hidden;
+  }
+  button,select,input{font:inherit;color:inherit}
+  button{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:4px;
+    padding:5px 10px;cursor:pointer;
+  }
+  button:hover{background:#3e4047;border-color:#5a5d66}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#0d2b30;font-weight:600}
+  button.primary:hover{background:#3ad3e6}
+  input[type=number],input[type=text],select{
+    background:#232428;border:1px solid var(--line);border-radius:4px;padding:4px 6px;
+  }
+  input[type=number]{font-family:var(--mono)}
+  label{color:var(--ink-dim)}
+
+  #app{display:flex;flex-direction:column;height:100%}
+  header{
+    display:flex;align-items:center;gap:14px;padding:8px 14px;
+    background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;
+  }
+  header h1{
+    font-size:13px;margin:0;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  }
+  header h1 span{color:var(--accent)}
+  .tabs{display:flex;gap:2px;margin-left:auto}
+  .tabs button{border-radius:4px}
+  .tabs button.on{background:var(--accent);border-color:var(--accent);color:#0d2b30;font-weight:600}
+
+  main{flex:1;display:flex;min-height:0}
+  #stage{flex:1;display:flex;min-width:0;position:relative}
+  .pane{
+    flex:1;min-width:0;position:relative;border-right:1px solid var(--line);
+    display:flex;flex-direction:column;background:#1e1f22;
+  }
+  .pane:last-child{border-right:none}
+  .pane-bar{
+    display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--panel);
+    border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap;
+  }
+  .pane-bar .name{color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%}
+  .pane-bar .z{font-family:var(--mono);color:var(--ink-dim);margin-left:auto}
+  .cv-wrap{flex:1;position:relative;overflow:hidden}
+  canvas{display:block;position:absolute;inset:0;width:100%;height:100%}
+  .drop{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;gap:10px;color:var(--ink-dim);text-align:center;padding:24px;
+    border:1px dashed var(--line);margin:14px;border-radius:6px;pointer-events:none;
+  }
+  .drop b{color:var(--ink);font-weight:600}
+  .drop .pe{pointer-events:auto}
+
+  aside{
+    width:330px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow-y:auto;
+  }
+  .sec{padding:11px 13px;border-bottom:1px solid var(--line)}
+  .sec h2{
+    margin:0 0 9px;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-dim);font-weight:600;
+  }
+  .row{display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap}
+  .row:last-child{margin-bottom:0}
+  .grow{flex:1}
+  .stat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;padding:2px 0}
+  .stat b{font-weight:600}
+  .big{font-family:var(--mono);font-size:22px;line-height:1.1}
+  .hint{color:var(--ink-dim);font-size:11.5px;line-height:1.5}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+  th{text-align:right;color:var(--ink-dim);font-weight:500;padding:2px 4px;border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
+  td{padding:2px 4px;text-align:right;border-bottom:1px solid #3a3c42}
+  td:first-child{text-align:left}
+  tr.sel td{background:#3d4046}
+  tr.inc td{color:var(--warn)}
+  tr:hover td{background:#3a3c42;cursor:pointer}
+  .pill{padding:1px 6px;border-radius:20px;font-size:10.5px;font-family:var(--mono)}
+  .ok{background:rgba(99,192,122,.16);color:var(--good)}
+  .mid{background:rgba(232,177,58,.16);color:var(--warn)}
+  .no{background:rgba(226,96,74,.16);color:var(--bad)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .kbd{font-family:var(--mono);background:#232428;border:1px solid var(--line);border-radius:3px;padding:0 4px}
+  #toast{
+    position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+    background:#111;border:1px solid var(--line);border-radius:5px;padding:8px 14px;
+    font-family:var(--mono);font-size:12px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:50;
+  }
+  #toast.on{opacity:1}
+  .hidden{display:none !important}
+  @media (max-width:900px){
+    main{flex-direction:column}
+    aside{width:auto;max-height:45%;border-left:none;border-top:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Ректификация фасада <span>·</span> контрольные точки</h1>
+    <div class="row" style="margin:0">
+      <label>Чертёж</label><input type="file" id="fileT" accept=".pdf,image/*" style="width:150px">
+      <label>Фото</label><input type="file" id="fileS" accept=".pdf,image/*" style="width:150px">
+      <label>DPI PDF</label><input type="number" id="dpi" value="300" min="72" max="900" step="50" style="width:64px">
+    </div>
+    <div class="tabs">
+      <button id="tabPts" class="on">Точки</button>
+      <button id="tabRes">Наложение</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="stage">
+      <div class="pane" id="paneT">
+        <div class="pane-bar">
+          <span class="name" id="nameT">чертёж не загружен</span>
+          <button data-fit="T">В окно</button>
+          <span class="z" id="zT">100%</span>
+        </div>
+        <div class="cv-wrap"><canvas id="cvT"></canvas>
+          <div class="drop" id="dropT"><b>Обмерный чертёж</b><span>перетащите PDF или PNG/JPG сюда</span></div>
+        </div>
+      </div>
+      <div class="pane" id="paneS">
+        <div class="pane-bar">
+          <span class="name" id="nameS">фото не загружено</span>
+          <button data-fit="S">В окно</button>
+          <span class="z" id="zS">100%</span>
+        </div>
+        <div class="cv-wrap"><canvas id="cvS"></canvas>
+          <div class="drop" id="dropS"><b>Историческое фото</b><span>перетащите изображение сюда</span></div>
+        </div>
+      </div>
+      <div class="pane hidden" id="paneR">
+        <div class="pane-bar">
+          <label>Режим</label>
+          <select id="mode">
+            <option value="overlay">Фото поверх чертежа</option>
+            <option value="under">Чертёж поверх фото</option>
+            <option value="swipe">Шторка</option>
+            <option value="diff">Разница</option>
+            <option value="photo">Только выпрямленное фото</option>
+          </select>
+          <label>Прозр.</label><input type="range" id="opa" min="0" max="100" value="55" style="width:110px">
+          <label><input type="checkbox" id="showPts" checked> точки и невязки</label>
+          <button data-fit="R">В окно</button>
+          <span class="z" id="zR">100%</span>
+        </div>
+        <div class="cv-wrap"><canvas id="cvR"></canvas>
+          <div class="drop" id="dropR"><b>Наложение не рассчитано</b><span>нужно ≥4 пар точек, затем «Пересчитать»</span></div>
+        </div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="sec">
+        <h2>Точность</h2>
+        <div class="row" style="align-items:baseline">
+          <div class="big" id="rms">—</div>
+          <div class="hint">СКО невязки<br>по контрольным точкам</div>
+        </div>
+        <div class="stat"><span>Пар точек</span><b id="nPts">0</b></div>
+        <div class="stat"><span>Максимум</span><b id="maxRes">—</b></div>
+        <div class="stat"><span>Масштаб чертежа</span><b id="mmpx">—</b></div>
+      </div>
+
+      <div class="sec">
+        <h2>Масштаб чертежа</h2>
+        <div class="row">
+          <label>1 :</label><input type="number" id="denom" value="50" min="1" step="1" style="width:60px">
+          <button id="applyScale">Из DPI</button>
+          <button id="calib">По двум точкам</button>
+        </div>
+        <div class="hint" id="calibHint">Надёжнее — по размерной линии 25.00 м: нажмите «По двум точкам» и укажите её концы на чертеже.</div>
+      </div>
+
+      <div class="sec">
+        <h2>Дисторсия объектива</h2>
+        <div class="row">
+          <label style="width:22px">k₁</label><input type="number" id="k1" value="0" step="0.005" class="grow">
+        </div>
+        <div class="row">
+          <label style="width:22px">k₂</label><input type="number" id="k2" value="0" step="0.005" class="grow">
+        </div>
+        <div class="row">
+          <button id="autoK" class="grow">Подобрать автоматически</button>
+          <button id="zeroK">Сброс</button>
+        </div>
+        <div class="hint">Плёночная оптика 1970-х даёт заметную бочку. Подбор доступен от 6 пар точек (k₂ — от 9).</div>
+      </div>
+
+      <div class="sec">
+        <h2>Контрольные точки</h2>
+        <div class="row">
+          <button id="recalc" class="primary grow">Пересчитать наложение</button>
+          <button id="clearPts">Очистить</button>
+        </div>
+        <table id="tbl">
+          <thead><tr><th>№</th><th>dx, мм</th><th>dy, мм</th><th>невязка</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="hint" style="margin-top:8px">Клик по строке — переход к точке. <span class="kbd">Del</span> — удалить выбранную. Стрелки — сдвиг на 1 px, с <span class="kbd">Shift</span> — на 0.1 px.</div>
+      </div>
+
+      <div class="sec">
+        <h2>Экспорт</h2>
+        <div class="row">
+          <button id="expWarp" class="grow">Выпрямленное фото (PNG)</button>
+        </div>
+        <div class="row">
+          <button id="expOver" class="grow">Совмещение как на экране</button>
+        </div>
+        <div class="row">
+          <button id="expRep" class="grow">Отчёт о точности (JSON)</button>
+        </div>
+        <div class="row">
+          <button id="saveSes" class="grow">Сохранить сессию</button>
+          <button id="loadSesBtn">Открыть</button>
+          <input type="file" id="loadSes" accept=".json" class="hidden">
+        </div>
+      </div>
+
+      <div class="sec">
+        <h2>Порядок работы</h2>
+        <div class="hint">
+          1. Загрузите чертёж фасада и фото.<br>
+          2. Задайте масштаб по размерной линии.<br>
+          3. Ставьте пары точек: клик на чертеже → клик на фото. Берите углы оконных проёмов, точки пересечения тяг с углами здания — то, что физически одно и то же и лежит <b>в одной плоскости стены</b>.<br>
+          4. 8–12 пар, равномерно по всему полю, обязательно по краям и углам.<br>
+          5. «Подобрать автоматически» — уберёт дисторсию.<br>
+          6. Смотрите таблицу невязок: точка с аномальной невязкой почти всегда означает ошибку опознавания, а не деформацию здания.<br><br>
+          Аттик и фронтон лежат в другой плоскости — считайте их <b>отдельной сессией</b> и сшивайте два выпрямленных растра в графическом редакторе.
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+/* ---------- утилиты ---------- */
+const $ = s => document.querySelector(s);
+const toastEl = $('#toast');
+let toastTimer;
+function toast(msg){
+  toastEl.textContent = msg; toastEl.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove('on'), 2600);
+}
+
+/* ---------- линейная алгебра ---------- */
+function matMul3(A,B){
+  const C = new Array(9).fill(0);
+  for(let i=0;i<3;i++) for(let j=0;j<3;j++){
+    let s=0; for(let k=0;k<3;k++) s += A[i*3+k]*B[k*3+j];
+    C[i*3+j]=s;
+  }
+  return C;
+}
+function matInv3(m){
+  const [a,b,c,d,e,f,g,h,i]=m;
+  const A=e*i-f*h, B=-(d*i-f*g), C=d*h-e*g;
+  const det=a*A+b*B+c*C;
+  if(Math.abs(det)<1e-14) return null;
+  const id=1/det;
+  return [
+    A*id, (c*h-b*i)*id, (b*f-c*e)*id,
+    B*id, (a*i-c*g)*id, (c*d-a*f)*id,
+    C*id, (b*g-a*h)*id, (a*e-b*d)*id
+  ];
+}
+function applyH(H,x,y){
+  const w = H[6]*x+H[7]*y+H[8];
+  return [(H[0]*x+H[1]*y+H[2])/w, (H[3]*x+H[4]*y+H[5])/w];
+}
+/* циклический метод Якоби для симметричных матриц */
+function jacobiEigen(Ain,n){
+  const A = Ain.slice();
+  const V = new Array(n*n).fill(0);
+  for(let i=0;i<n;i++) V[i*n+i]=1;
+  for(let sweep=0; sweep<100; sweep++){
+    let off=0;
+    for(let p=0;p<n;p++) for(let q=p+1;q<n;q++) off += A[p*n+q]*A[p*n+q];
+    if(off < 1e-24) break;
+    for(let p=0;p<n;p++) for(let q=p+1;q<n;q++){
+      const apq=A[p*n+q];
+      if(Math.abs(apq) < 1e-18) continue;
+      const theta = (A[q*n+q]-A[p*n+p])/(2*apq);
+      const t = Math.sign(theta||1)/(Math.abs(theta)+Math.sqrt(theta*theta+1));
+      const c = 1/Math.sqrt(t*t+1), s = t*c;
+      for(let k=0;k<n;k++){
+        const akp=A[k*n+p], akq=A[k*n+q];
+        A[k*n+p]=c*akp - s*akq; A[k*n+q]=s*akp + c*akq;
+      }
+      for(let k=0;k<n;k++){
+        const apk=A[p*n+k], aqk=A[q*n+k];
+        A[p*n+k]=c*apk - s*aqk; A[q*n+k]=s*apk + c*aqk;
+      }
+      for(let k=0;k<n;k++){
+        const vkp=V[k*n+p], vkq=V[k*n+q];
+        V[k*n+p]=c*vkp - s*vkq; V[k*n+q]=s*vkp + c*vkq;
+      }
+    }
+  }
+  const vals=[]; for(let i=0;i<n;i++) vals.push(A[i*n+i]);
+  return {vals, vecs:V};
+}
+/* нормализация Хартли */
+function normalize(pts){
+  let cx=0, cy=0;
+  for(const p of pts){cx+=p[0];cy+=p[1];}
+  cx/=pts.length; cy/=pts.length;
+  let d=0; for(const p of pts) d += Math.hypot(p[0]-cx,p[1]-cy);
+  d/=pts.length;
+  const s = d>1e-9 ? Math.SQRT2/d : 1;
+  const T = [s,0,-s*cx, 0,s,-s*cy, 0,0,1];
+  return {T, pts: pts.map(p=>[(p[0]-cx)*s,(p[1]-cy)*s])};
+}
+/* DLT: src -> dst */
+function homography(src,dst){
+  if(src.length<4) return null;
+  const ns=normalize(src), nd=normalize(dst);
+  const n=src.length, A=[];
+  for(let i=0;i<n;i++){
+    const [x,y]=ns.pts[i], [u,v]=nd.pts[i];
+    A.push([-x,-y,-1, 0,0,0, u*x,u*y,u]);
+    A.push([0,0,0, -x,-y,-1, v*x,v*y,v]);
+  }
+  const AtA=new Array(81).fill(0);
+  for(const r of A) for(let i=0;i<9;i++) for(let j=0;j<9;j++) AtA[i*9+j]+=r[i]*r[j];
+  const {vals,vecs}=jacobiEigen(AtA,9);
+  let mi=0; for(let i=1;i<9;i++) if(vals[i]<vals[mi]) mi=i;
+  const h=[]; for(let i=0;i<9;i++) h.push(vecs[i*9+mi]);
+  const Hn=[h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8]];
+  const Tdi=matInv3(nd.T);
+  if(!Tdi) return null;
+  const H=matMul3(Tdi, matMul3(Hn, ns.T));
+  if(Math.abs(H[8])>1e-12){ const s=1/H[8]; for(let i=0;i<9;i++) H[i]*=s; }
+  return H;
+}
+
+/* ---------- состояние ---------- */
+const S = {
+  target:null, source:null,        // {cv,w,h,name,fromPdf,dpi}
+  srcData:null,
+  points:[],                        // {t:[x,y]|null, s:[x,y]|null}
+  pending:null,
+  k1:0, k2:0,
+  H:null, Hinv:null, res:null, rms:null, maxRes:null,
+  mmPerPx:null,
+  sel:-1,
+  warp:null, warpStale:true,
+  calibMode:false, calibPts:[]
+};
+
+/* дисторсия — нормировка по полудиагонали фото */
+function distNorm(){ return Math.hypot(S.source.w, S.source.h)/2; }
+function distort(x,y){
+  const cx=S.source.w/2, cy=S.source.h/2, f=distNorm();
+  const dx=(x-cx)/f, dy=(y-cy)/f, r2=dx*dx+dy*dy;
+  const s=1+S.k1*r2+S.k2*r2*r2;
+  return [cx+dx*s*f, cy+dy*s*f];
+}
+function undistort(x,y){
+  const cx=S.source.w/2, cy=S.source.h/2, f=distNorm();
+  const dx=(x-cx)/f, dy=(y-cy)/f;
+  let ux=dx, uy=dy;
+  for(let i=0;i<12;i++){
+    const r2=ux*ux+uy*uy, s=1+S.k1*r2+S.k2*r2*r2;
+    ux=dx/s; uy=dy/s;
+  }
+  return [cx+ux*f, cy+uy*f];
+}
+
+/* ---------- расчёт ---------- */
+function pairs(){ return S.points.filter(p=>p.t&&p.s); }
+function fit(){
+  const P=pairs();
+  S.H=null; S.Hinv=null; S.res=null; S.rms=null; S.maxRes=null;
+  if(P.length>=4){
+    const src=P.map(p=>undistort(p.s[0],p.s[1]));
+    const dst=P.map(p=>p.t);
+    const H=homography(src,dst);
+    if(H){
+      S.H=H; S.Hinv=matInv3(H);
+      S.res=[]; let sum=0, mx=0;
+      for(let i=0;i<P.length;i++){
+        const q=applyH(H,src[i][0],src[i][1]);
+        const dx=q[0]-dst[i][0], dy=q[1]-dst[i][1], d=Math.hypot(dx,dy);
+        S.res.push([dx,dy,d]); sum+=d*d; if(d>mx) mx=d;
+      }
+      S.rms=Math.sqrt(sum/P.length); S.maxRes=mx;
+    }
+  }
+  S.warpStale=true;
+  renderSidebar(); paneT.draw(); paneS.draw(); paneR.draw();
+}
+function rmsFor(k1,k2){
+  const ok1=S.k1, ok2=S.k2;
+  S.k1=k1; S.k2=k2;
+  const P=pairs();
+  const src=P.map(p=>undistort(p.s[0],p.s[1]));
+  const dst=P.map(p=>p.t);
+  const H=homography(src,dst);
+  let r=Infinity;
+  if(H){
+    let sum=0;
+    for(let i=0;i<P.length;i++){
+      const q=applyH(H,src[i][0],src[i][1]);
+      sum += (q[0]-dst[i][0])**2 + (q[1]-dst[i][1])**2;
+    }
+    r=Math.sqrt(sum/P.length);
+  }
+  S.k1=ok1; S.k2=ok2;
+  return r;
+}
+function autoK(){
+  const n=pairs().length;
+  if(n<6){ toast('Нужно не меньше 6 пар точек'); return; }
+  const useK2 = n>=9;
+  let best={k1:0,k2:0,r:rmsFor(0,0)};
+  let step=0.05;
+  for(let pass=0; pass<5; pass++){
+    let improved=true;
+    while(improved){
+      improved=false;
+      const cand=[[best.k1+step,best.k2],[best.k1-step,best.k2]];
+      if(useK2) cand.push([best.k1,best.k2+step],[best.k1,best.k2-step]);
+      for(const [a,b] of cand){
+        if(Math.abs(a)>0.9||Math.abs(b)>0.6) continue;
+        const r=rmsFor(a,b);
+        if(r < best.r-1e-9){ best={k1:a,k2:b,r}; improved=true; }
+      }
+    }
+    step/=4;
+  }
+  S.k1=best.k1; S.k2=best.k2;
+  $('#k1').value=best.k1.toFixed(4); $('#k2').value=best.k2.toFixed(4);
+  fit();
+  toast(`Подобрано: k₁=${best.k1.toFixed(4)}${useK2?', k₂='+best.k2.toFixed(4):''}`);
+}
+
+/* ---------- загрузка файлов ---------- */
+async function loadFile(file, which){
+  if(!file) return;
+  let cv;
+  const isPdf = /\.pdf$/i.test(file.name) || file.type==='application/pdf';
+  const dpi = Math.max(72, Math.min(900, +$('#dpi').value||300));
+  if(isPdf){
+    if(typeof pdfjsLib==='undefined'){
+      toast('pdf.js не загрузился — сохраните PDF в PNG (300 dpi) и загрузите картинку');
+      return;
+    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    const page=await pdf.getPage(1);
+    const vp=page.getViewport({scale: dpi/72});
+    cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+    const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height);
+    await page.render({canvasContext:c, viewport:vp}).promise;
+  }else{
+    const img=await createImageBitmap(file);
+    cv=document.createElement('canvas'); cv.width=img.width; cv.height=img.height;
+    cv.getContext('2d').drawImage(img,0,0);
+  }
+  const obj={cv,w:cv.width,h:cv.height,name:file.name,fromPdf:isPdf,dpi};
+  if(which==='T'){
+    S.target=obj; $('#nameT').textContent=`${file.name} · ${obj.w}×${obj.h}`;
+    $('#dropT').classList.add('hidden'); paneT.fit();
+    if(isPdf) applyScaleFromDpi();
+  }else{
+    S.source=obj; $('#nameS').textContent=`${file.name} · ${obj.w}×${obj.h}`;
+    $('#dropS').classList.add('hidden');
+    const c=cv.getContext('2d'); S.srcData=c.getImageData(0,0,obj.w,obj.h);
+    paneS.fit();
+  }
+  fit();
+}
+function applyScaleFromDpi(){
+  if(!S.target || !S.target.fromPdf){ toast('Нужен чертёж, загруженный из PDF'); return; }
+  const M=+$('#denom').value||50;
+  S.mmPerPx = M*25.4/S.target.dpi;
+  renderSidebar();
+}
+
+/* ---------- панели ---------- */
+class Pane{
+  constructor(id, kind){
+    this.kind=kind;
+    this.cv=$('#cv'+id); this.ctx=this.cv.getContext('2d');
+    this.wrap=this.cv.parentElement;
+    this.view={s:1,x:0,y:0};
+    this.hover=null; this.drag=null; this.panning=null;
+    this.zEl=$('#z'+id);
+    const ro=new ResizeObserver(()=>this.resize()); ro.observe(this.wrap);
+    this.cv.addEventListener('wheel',e=>this.onWheel(e),{passive:false});
+    this.cv.addEventListener('pointerdown',e=>this.onDown(e));
+    this.cv.addEventListener('pointermove',e=>this.onMove(e));
+    window.addEventListener('pointerup',e=>this.onUp(e));
+    this.cv.addEventListener('pointerleave',()=>{this.hover=null;this.draw()});
+    this.cv.addEventListener('contextmenu',e=>e.preventDefault());
+    this.resize();
+  }
+  img(){ return this.kind==='T'?S.target : this.kind==='S'?S.source : S.target; }
+  resize(){
+    const r=this.wrap.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+    this.cv.width=Math.max(1,Math.round(r.width*dpr));
+    this.cv.height=Math.max(1,Math.round(r.height*dpr));
+    this.dpr=dpr; this.W=r.width; this.H=r.height;
+    this.draw();
+  }
+  fit(){
+    const im=this.img(); if(!im) return;
+    const s=Math.min(this.W/im.w, this.H/im.h)*0.94;
+    this.view={s, x:(this.W-im.w*s)/2, y:(this.H-im.h*s)/2};
+    this.draw();
+  }
+  toImg(px,py){ return [(px-this.view.x)/this.view.s, (py-this.view.y)/this.view.s]; }
+  toScr(ix,iy){ return [ix*this.view.s+this.view.x, iy*this.view.s+this.view.y]; }
+  evPos(e){ const r=this.cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; }
+  onWheel(e){
+    e.preventDefault();
+    const [px,py]=this.evPos(e);
+    const [ix,iy]=this.toImg(px,py);
+    const f=Math.exp(-e.deltaY*0.0016);
+    this.view.s=Math.max(0.02,Math.min(80,this.view.s*f));
+    this.view.x=px-ix*this.view.s; this.view.y=py-iy*this.view.s;
+    this.draw();
+  }
+  markers(){
+    if(this.kind==='S') return S.points.map((p,i)=>({i,p:p.s})).filter(o=>o.p);
+    return S.points.map((p,i)=>({i,p:p.t})).filter(o=>o.p);
+  }
+  hitTest(px,py){
+    for(const m of this.markers()){
+      const [sx,sy]=this.toScr(m.p[0],m.p[1]);
+      if(Math.hypot(sx-px,sy-py)<9) return m.i;
+    }
+    return -1;
+  }
+  onDown(e){
+    const im=this.img(); if(!im) return;
+    const [px,py]=this.evPos(e);
+    if(e.button===1||e.button===2||e.shiftKey||spaceDown){
+      this.panning={px,py,vx:this.view.x,vy:this.view.y};
+      this.cv.setPointerCapture(e.pointerId); return;
+    }
+    if(this.kind==='R') { this.panning={px,py,vx:this.view.x,vy:this.view.y}; return; }
+    const hit=this.hitTest(px,py);
+    if(hit>=0){ S.sel=hit; this.drag=hit; renderSidebar(); drawAll(); return; }
+    const [ix,iy]=this.toImg(px,py);
+    if(ix<0||iy<0||ix>im.w||iy>im.h) return;
+    if(S.calibMode && this.kind==='T'){
+      S.calibPts.push([ix,iy]);
+      if(S.calibPts.length===2) finishCalib();
+      this.draw(); return;
+    }
+    addPoint(this.kind, [ix,iy]);
+  }
+  onMove(e){
+    const [px,py]=this.evPos(e);
+    this.hover=[px,py];
+    if(this.panning){
+      this.view.x=this.panning.vx+(px-this.panning.px);
+      this.view.y=this.panning.vy+(py-this.panning.py);
+      this.draw(); return;
+    }
+    if(this.drag!==null && this.drag>=0){
+      const [ix,iy]=this.toImg(px,py);
+      const pt=S.points[this.drag];
+      if(this.kind==='S') pt.s=[ix,iy]; else pt.t=[ix,iy];
+      fit(); return;
+    }
+    this.draw();
+  }
+  onUp(){ this.panning=null; if(this.drag!==null){ this.drag=null; fit(); } }
+  draw(){
+    const c=this.ctx, dpr=this.dpr;
+    c.setTransform(dpr,0,0,dpr,0,0);
+    c.clearRect(0,0,this.W,this.H);
+    c.fillStyle='#1e1f22'; c.fillRect(0,0,this.W,this.H);
+    const im=this.img();
+    if(im){
+      c.imageSmoothingEnabled = this.view.s<3;
+      c.save();
+      c.translate(this.view.x,this.view.y); c.scale(this.view.s,this.view.s);
+      if(this.kind==='R') this.drawResult(c); else c.drawImage(im.cv,0,0);
+      c.restore();
+      if(this.kind!=='R' || $('#showPts').checked) this.drawMarkers(c);
+      if(this.kind!=='R') this.drawLoupe(c);
+    }
+    this.zEl.textContent=Math.round(this.view.s*100)+'%';
+  }
+  drawResult(c){
+    const mode=$('#mode').value, op=+$('#opa').value/100;
+    if(!S.warp){ return; }
+    if(mode==='photo'){ c.drawImage(S.warp,0,0); return; }
+    if(mode==='diff'){
+      c.drawImage(S.target.cv,0,0);
+      c.globalCompositeOperation='difference';
+      c.drawImage(S.warp,0,0);
+      c.globalCompositeOperation='source-over'; return;
+    }
+    if(mode==='swipe'){
+      const w=S.target.w, cut=w*op;
+      c.drawImage(S.target.cv,0,0);
+      c.save(); c.beginPath(); c.rect(0,0,cut,S.target.h); c.clip();
+      c.drawImage(S.warp,0,0); c.restore();
+      c.strokeStyle='#25c3d6'; c.lineWidth=1.5/this.view.s;
+      c.beginPath(); c.moveTo(cut,0); c.lineTo(cut,S.target.h); c.stroke();
+      return;
+    }
+    if(mode==='under'){
+      c.drawImage(S.warp,0,0);
+      c.globalAlpha=op; c.drawImage(S.target.cv,0,0); c.globalAlpha=1; return;
+    }
+    c.drawImage(S.target.cv,0,0);
+    c.globalAlpha=op; c.drawImage(S.warp,0,0); c.globalAlpha=1;
+  }
+  drawMarkers(c){
+    const isS=this.kind==='S';
+    S.points.forEach((p,i)=>{
+      const q = isS? p.s : p.t;
+      if(!q) return;
+      const [x,y]=this.toScr(q[0],q[1]);
+      const sel = i===S.sel;
+      const incomplete = !(p.t&&p.s);
+      c.lineWidth = sel?2:1.4;
+      c.strokeStyle = incomplete? '#e8b13a' : (sel? '#fff' : '#25c3d6');
+      c.beginPath(); c.arc(x,y,7,0,7); c.stroke();
+      c.beginPath();
+      c.moveTo(x-11,y); c.lineTo(x-3,y); c.moveTo(x+3,y); c.lineTo(x+11,y);
+      c.moveTo(x,y-11); c.lineTo(x,y-3); c.moveTo(x,y+3); c.lineTo(x,y+11);
+      c.stroke();
+      c.fillStyle=c.strokeStyle; c.font='600 10px ui-monospace,monospace';
+      c.fillText(String(i+1), x+11, y-9);
+    });
+    if(this.kind==='R' && S.res){
+      const P=pairs(); const K=8;
+      c.strokeStyle='#e2604a'; c.lineWidth=1.5;
+      P.forEach((p,i)=>{
+        const [dx,dy]=S.res[i];
+        const [x,y]=this.toScr(p.t[0],p.t[1]);
+        const [x2,y2]=this.toScr(p.t[0]+dx*K, p.t[1]+dy*K);
+        c.beginPath(); c.moveTo(x,y); c.lineTo(x2,y2); c.stroke();
+      });
+    }
+    if(S.calibMode && this.kind==='T'){
+      c.strokeStyle='#63c07a'; c.lineWidth=1.5;
+      S.calibPts.forEach(p=>{
+        const [x,y]=this.toScr(p[0],p[1]);
+        c.beginPath(); c.arc(x,y,6,0,7); c.stroke();
+      });
+    }
+  }
+  drawLoupe(c){
+    if(!this.hover || this.view.s>=12) return;
+    const im=this.img(); if(!im) return;
+    const [px,py]=this.hover;
+    const [ix,iy]=this.toImg(px,py);
+    const size=132, zoom=10, pad=8;
+    const bx=this.W-size-pad, by=pad;
+    c.save();
+    c.beginPath(); c.rect(bx,by,size,size); c.clip();
+    c.fillStyle='#111'; c.fillRect(bx,by,size,size);
+    c.imageSmoothingEnabled=false;
+    c.drawImage(im.cv, ix-size/(2*zoom), iy-size/(2*zoom), size/zoom, size/zoom, bx,by,size,size);
+    c.restore();
+    c.strokeStyle='#45474e'; c.lineWidth=1; c.strokeRect(bx+.5,by+.5,size,size);
+    c.strokeStyle='rgba(37,195,214,.9)';
+    c.beginPath();
+    c.moveTo(bx+size/2, by+size/2-9); c.lineTo(bx+size/2, by+size/2-2);
+    c.moveTo(bx+size/2, by+size/2+2); c.lineTo(bx+size/2, by+size/2+9);
+    c.moveTo(bx+size/2-9, by+size/2); c.lineTo(bx+size/2-2, by+size/2);
+    c.moveTo(bx+size/2+2, by+size/2); c.lineTo(bx+size/2+9, by+size/2);
+    c.stroke();
+    c.fillStyle='#9a9da6'; c.font='10px ui-monospace,monospace';
+    c.fillText(`${ix.toFixed(1)}, ${iy.toFixed(1)}`, bx+4, by+size-5);
+  }
+}
+let spaceDown=false;
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ spaceDown=true; }
+  if((e.key==='Delete'||e.key==='Backspace') && S.sel>=0){
+    S.points.splice(S.sel,1); S.sel=-1; S.pending=null; fit(); e.preventDefault();
+  }
+  if(S.sel>=0 && e.key.startsWith('Arrow')){
+    const st = e.shiftKey?0.1:1;
+    const p=S.points[S.sel];
+    const tgt = lastPane==='S'? p.s : p.t;
+    if(tgt){
+      if(e.key==='ArrowLeft') tgt[0]-=st;
+      if(e.key==='ArrowRight') tgt[0]+=st;
+      if(e.key==='ArrowUp') tgt[1]-=st;
+      if(e.key==='ArrowDown') tgt[1]+=st;
+      fit(); e.preventDefault();
+    }
+  }
+});
+window.addEventListener('keyup',e=>{ if(e.code==='Space') spaceDown=false; });
+
+let lastPane='T';
+function addPoint(kind, xy){
+  if(S.pending!==null){
+    const p=S.points[S.pending];
+    if(kind==='T' && !p.t){ p.t=xy; S.pending=null; }
+    else if(kind==='S' && !p.s){ p.s=xy; S.pending=null; }
+    else { S.points.push(kind==='T'?{t:xy,s:null}:{t:null,s:xy}); S.pending=S.points.length-1; }
+  }else{
+    S.points.push(kind==='T'?{t:xy,s:null}:{t:null,s:xy});
+    S.pending=S.points.length-1;
+  }
+  S.sel=S.pending!==null?S.pending:S.points.length-1;
+  fit();
+}
+function finishCalib(){
+  const d=prompt('Расстояние между указанными точками в метрах:', '25');
+  S.calibMode=false; $('#calib').textContent='По двум точкам';
+  const m=parseFloat((d||'').replace(',','.'));
+  if(isFinite(m)&&m>0){
+    const px=Math.hypot(S.calibPts[1][0]-S.calibPts[0][0], S.calibPts[1][1]-S.calibPts[0][1]);
+    S.mmPerPx = m*1000/px;
+    toast(`Масштаб: ${S.mmPerPx.toFixed(3)} мм/px`);
+  }
+  S.calibPts=[]; renderSidebar(); paneT.draw();
+}
+
+/* ---------- варп ---------- */
+async function computeWarp(){
+  if(!S.H||!S.source||!S.target){ toast('Нужно не меньше 4 пар точек'); return; }
+  const tw=S.target.w, th=S.target.h, sw=S.source.w, sh=S.source.h;
+  const out=document.createElement('canvas'); out.width=tw; out.height=th;
+  const octx=out.getContext('2d');
+  const od=octx.createImageData(tw,th);
+  const O=od.data, I=S.srcData.data;
+  const Hi=S.Hinv;
+  const cx=sw/2, cy=sh/2, f=Math.hypot(sw,sh)/2, k1=S.k1, k2=S.k2;
+  for(let y=0;y<th;y++){
+    for(let x=0;x<tw;x++){
+      const X=x+0.5, Y=y+0.5;
+      const w=Hi[6]*X+Hi[7]*Y+Hi[8];
+      if(w===0) continue;
+      const ux=(Hi[0]*X+Hi[1]*Y+Hi[2])/w, uy=(Hi[3]*X+Hi[4]*Y+Hi[5])/w;
+      const dx=(ux-cx)/f, dy=(uy-cy)/f, r2=dx*dx+dy*dy;
+      const sc=1+k1*r2+k2*r2*r2;
+      const sx=cx+dx*sc*f, sy=cy+dy*sc*f;
+      if(sx<0||sy<0||sx>=sw-1||sy>=sh-1) continue;
+      const x0=sx|0, y0=sy|0, fx=sx-x0, fy=sy-y0;
+      const i00=(y0*sw+x0)*4, i10=i00+4, i01=i00+sw*4, i11=i01+4;
+      const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+      const o=(y*tw+x)*4;
+      for(let ch=0; ch<3; ch++){
+        O[o+ch]=I[i00+ch]*w00 + I[i10+ch]*w10 + I[i01+ch]*w01 + I[i11+ch]*w11;
+      }
+      O[o+3]=255;
+    }
+    if((y&255)===0) await new Promise(r=>setTimeout(r));
+  }
+  octx.putImageData(od,0,0);
+  S.warp=out; S.warpStale=false;
+  $('#dropR').classList.add('hidden');
+  paneR.view={...paneT.view};
+  paneR.draw();
+}
+
+/* ---------- сайдбар ---------- */
+function fmt(px){
+  if(px==null) return '—';
+  if(S.mmPerPx) return (px*S.mmPerPx).toFixed(1)+' мм';
+  return px.toFixed(2)+' px';
+}
+function renderSidebar(){
+  const P=pairs();
+  $('#nPts').textContent = `${P.length}${S.points.length>P.length?' (+'+(S.points.length-P.length)+' неполн.)':''}`;
+  $('#rms').textContent = S.rms==null? '—' : (S.mmPerPx? (S.rms*S.mmPerPx).toFixed(1) : S.rms.toFixed(2));
+  $('#rms').style.color = S.rms==null? 'var(--ink)' :
+    (S.mmPerPx? (S.rms*S.mmPerPx<30?'var(--good)':S.rms*S.mmPerPx<80?'var(--warn)':'var(--bad)') : 'var(--ink)');
+  if(S.rms!=null && S.mmPerPx) $('#rms').textContent += ' мм';
+  else if(S.rms!=null) $('#rms').textContent += ' px';
+  $('#maxRes').textContent = fmt(S.maxRes);
+  $('#mmpx').textContent = S.mmPerPx? S.mmPerPx.toFixed(3)+' мм/px' : 'не задан';
+
+  const tb=$('#tbl tbody'); tb.innerHTML='';
+  let pi=0;
+  S.points.forEach((p,i)=>{
+    const tr=document.createElement('tr');
+    const complete=p.t&&p.s;
+    let cells;
+    if(complete && S.res){
+      const [dx,dy,d]=S.res[pi++];
+      const cls = S.mmPerPx? (d*S.mmPerPx<30?'ok':d*S.mmPerPx<80?'mid':'no') : 'ok';
+      cells=`<td>${i+1}</td><td>${(S.mmPerPx?dx*S.mmPerPx:dx).toFixed(1)}</td>
+             <td>${(S.mmPerPx?dy*S.mmPerPx:dy).toFixed(1)}</td>
+             <td><span class="pill ${cls}">${(S.mmPerPx?d*S.mmPerPx:d).toFixed(1)}</span></td>`;
+    }else{
+      if(complete) pi++;
+      cells=`<td>${i+1}</td><td colspan="3" style="text-align:right;color:var(--ink-dim)">${complete?'—':'нет пары'}</td>`;
+      tr.className='inc';
+    }
+    tr.innerHTML=cells;
+    if(i===S.sel) tr.classList.add('sel');
+    tr.onclick=()=>{ S.sel=i; center(i); renderSidebar(); drawAll(); };
+    tb.appendChild(tr);
+  });
+}
+function center(i){
+  const p=S.points[i];
+  if(p.t) centerPane(paneT,p.t);
+  if(p.s) centerPane(paneS,p.s);
+  if(p.t) centerPane(paneR,p.t);
+}
+function centerPane(pane,q){
+  if(pane.view.s<2) pane.view.s=4;
+  pane.view.x=pane.W/2-q[0]*pane.view.s;
+  pane.view.y=pane.H/2-q[1]*pane.view.s;
+  pane.draw();
+}
+function drawAll(){ paneT.draw(); paneS.draw(); paneR.draw(); }
+
+/* ---------- экспорт ---------- */
+function dl(blob,name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+}
+function report(){
+  const P=pairs();
+  return {
+    создано: new Date().toISOString(),
+    чертёж: S.target?{файл:S.target.name, ширина_px:S.target.w, высота_px:S.target.h, dpi:S.target.fromPdf?S.target.dpi:null}:null,
+    фото: S.source?{файл:S.source.name, ширина_px:S.source.w, высота_px:S.source.h}:null,
+    масштаб_мм_на_px: S.mmPerPx,
+    дисторсия:{k1:S.k1,k2:S.k2,нормировка_px:S.source?distNorm():null},
+    гомография_фото_в_чертёж: S.H,
+    точность:{
+      пар: P.length,
+      СКО_px: S.rms, СКО_мм: S.mmPerPx&&S.rms? S.rms*S.mmPerPx:null,
+      макс_px: S.maxRes, макс_мм: S.mmPerPx&&S.maxRes? S.maxRes*S.mmPerPx:null
+    },
+    точки: P.map((p,i)=>({
+      n:i+1, чертёж_px:p.t, фото_px:p.s,
+      невязка_px: S.res?[+S.res[i][0].toFixed(3),+S.res[i][1].toFixed(3)]:null,
+      невязка_мм: S.res&&S.mmPerPx? +(S.res[i][2]*S.mmPerPx).toFixed(1):null
+    }))
+  };
+}
+
+/* ---------- события ---------- */
+const paneT=new Pane('T','T'), paneS=new Pane('S','S'), paneR=new Pane('R','R');
+$('#paneT').addEventListener('pointerenter',()=>lastPane='T');
+$('#paneS').addEventListener('pointerenter',()=>lastPane='S');
+
+$('#fileT').onchange=e=>loadFile(e.target.files[0],'T');
+$('#fileS').onchange=e=>loadFile(e.target.files[0],'S');
+[['#paneT','T'],['#paneS','S']].forEach(([sel,k])=>{
+  const el=$(sel);
+  el.addEventListener('dragover',e=>{e.preventDefault()});
+  el.addEventListener('drop',e=>{e.preventDefault(); loadFile(e.dataTransfer.files[0],k)});
+});
+document.querySelectorAll('[data-fit]').forEach(b=>{
+  b.onclick=()=>({T:paneT,S:paneS,R:paneR})[b.dataset.fit].fit();
+});
+$('#tabPts').onclick=()=>{
+  $('#tabPts').classList.add('on'); $('#tabRes').classList.remove('on');
+  $('#paneT').classList.remove('hidden'); $('#paneS').classList.remove('hidden'); $('#paneR').classList.add('hidden');
+  setTimeout(()=>{paneT.resize();paneS.resize()},0);
+};
+$('#tabRes').onclick=async()=>{
+  $('#tabRes').classList.add('on'); $('#tabPts').classList.remove('on');
+  $('#paneT').classList.add('hidden'); $('#paneS').classList.add('hidden'); $('#paneR').classList.remove('hidden');
+  setTimeout(()=>paneR.resize(),0);
+  if(S.warpStale && S.H){ toast('Считаю наложение…'); await computeWarp(); }
+};
+$('#recalc').onclick=async()=>{ toast('Считаю наложение…'); await computeWarp(); $('#tabRes').click(); };
+$('#clearPts').onclick=()=>{ if(confirm('Удалить все контрольные точки?')){ S.points=[];S.pending=null;S.sel=-1;fit(); } };
+$('#mode').onchange=()=>paneR.draw();
+$('#opa').oninput=()=>paneR.draw();
+$('#showPts').onchange=()=>paneR.draw();
+$('#k1').onchange=$('#k2').onchange=()=>{
+  S.k1=+$('#k1').value||0; S.k2=+$('#k2').value||0; fit();
+};
+$('#zeroK').onclick=()=>{ S.k1=S.k2=0; $('#k1').value=0; $('#k2').value=0; fit(); };
+$('#autoK').onclick=autoK;
+$('#applyScale').onclick=applyScaleFromDpi;
+$('#calib').onclick=()=>{
+  if(!S.target){ toast('Сначала загрузите чертёж'); return; }
+  S.calibMode=!S.calibMode; S.calibPts=[];
+  $('#calib').textContent=S.calibMode?'Укажите 2 точки…':'По двум точкам';
+  paneT.draw();
+};
+$('#expWarp').onclick=async()=>{
+  if(!S.warp){ await computeWarp(); }
+  if(S.warp) S.warp.toBlob(b=>dl(b,'facade_rectified.png'));
+};
+$('#expOver').onclick=()=>{
+  if(!S.warp||!S.target){ toast('Сначала рассчитайте наложение'); return; }
+  const cv=document.createElement('canvas'); cv.width=S.target.w; cv.height=S.target.h;
+  const c=cv.getContext('2d');
+  const saveView=paneR.view; paneR.view={s:1,x:0,y:0};
+  paneR.drawResult(c);
+  paneR.view=saveView;
+  cv.toBlob(b=>dl(b,'facade_overlay.png'));
+};
+$('#expRep').onclick=()=>dl(new Blob([JSON.stringify(report(),null,2)],{type:'application/json'}),'facade_accuracy_report.json');
+$('#saveSes').onclick=()=>dl(new Blob([JSON.stringify({
+  points:S.points, k1:S.k1, k2:S.k2, mmPerPx:S.mmPerPx,
+  target:S.target?S.target.name:null, source:S.source?S.source.name:null
+},null,2)],{type:'application/json'}),'facade_session.json');
+$('#loadSesBtn').onclick=()=>$('#loadSes').click();
+function applySessionData(d){
+  S.points=d.points||[]; S.k1=d.k1||0; S.k2=d.k2||0; S.mmPerPx=d.mmPerPx||null;
+  $('#k1').value=S.k1; $('#k2').value=S.k2;
+  S.sel=-1; S.pending=null; fit();
+}
+$('#loadSes').onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  try{
+    applySessionData(JSON.parse(await f.text()));
+    toast('Сессия загружена');
+  }catch(err){ toast('Не читается: '+err.message); }
+};
+renderSidebar();
+
+/* ---------- gisdata: автосохранение сессии в Postgres ----------
+ * Тот же снимок, что "Сохранить сессию" уже собирал для скачивания
+ * (points/k1/k2/mmPerPx + имена файлов) — здесь просто уходит на сервер
+ * по таймеру вместо ручного скачивания/загрузки .json. Изображения не
+ * передаются вообще (инструмент их и раньше никуда не отправлял) —
+ * только контрольные точки и параметры расчёта. См.
+ * api/facade_foto_session.php / sql/schema.sql::facade_foto_sessions. */
+const FACADE_FOTO_API='/api/facade_foto_session.php';
+let __ffLastSaved='';
+function __ffSnapshot(){
+  return JSON.stringify({
+    points:S.points, k1:S.k1, k2:S.k2, mmPerPx:S.mmPerPx,
+    target:S.target?S.target.name:null, source:S.source?S.source.name:null
+  });
+}
+function __ffFlush(sync){
+  const snap=__ffSnapshot();
+  if(snap===__ffLastSaved) return;
+  __ffLastSaved=snap;
+  const opts={method:'POST',headers:{'content-type':'application/json'},body:snap};
+  if(sync) opts.keepalive=true;
+  fetch(FACADE_FOTO_API,opts).catch(()=>{ __ffLastSaved=''; });
+}
+(async function __ffRestore(){
+  try{
+    const r=await fetch(FACADE_FOTO_API);
+    if(!r.ok) return;
+    const d=await r.json();
+    if(d && Array.isArray(d.points) && d.points.length){
+      applySessionData(d);
+      __ffLastSaved=__ffSnapshot();
+      toast('Сессия восстановлена с сервера');
+    }
+  }catch{ /* офлайн/API недоступен — работаем с чистого листа, как раньше */ }
+})();
+setInterval(()=>__ffFlush(false),8000);
+window.addEventListener('beforeunload',()=>__ffFlush(true));
+</script>
+</body>
+</html>

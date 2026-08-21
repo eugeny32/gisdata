@@ -49,6 +49,8 @@ export interface CopcWorkerResponse {
   id: number;
   positions?: Float32Array;
   colors?: Uint8Array;
+  /** vec2 на точку: x = intensity (0..1), y = classification (PR6). */
+  intensityClass?: Float32Array;
   pointCount?: number;
   hasColor?: boolean;
   error?: string;
@@ -124,8 +126,21 @@ self.onmessage = async (e: MessageEvent<CopcWorkerRequest>) => {
       }
     }
 
-    const response: CopcWorkerResponse = { id, positions, colors, pointCount: count, hasColor };
-    (self as unknown as Worker).postMessage(response, [positions.buffer, colors.buffer]);
+    // intensity/classification (PR6) — реальные имена измерений COPC,
+    // подтверждено README copc.js (Intensity/Classification, с большой
+    // буквы — конвенция этой библиотеки отличается от @loaders.gl/las).
+    const intensityClass = new Float32Array(count * 2);
+    if (view.dimensions.Intensity) {
+      const getI = view.getter('Intensity');
+      for (let i = 0; i < count; i++) intensityClass[i * 2] = getI(i) / 65535;
+    }
+    if (view.dimensions.Classification) {
+      const getC = view.getter('Classification');
+      for (let i = 0; i < count; i++) intensityClass[i * 2 + 1] = getC(i);
+    }
+
+    const response: CopcWorkerResponse = { id, positions, colors, intensityClass, pointCount: count, hasColor };
+    (self as unknown as Worker).postMessage(response, [positions.buffer, colors.buffer, intensityClass.buffer]);
   } catch (err) {
     const response: CopcWorkerResponse = { id, error: String(err) };
     (self as unknown as Worker).postMessage(response);

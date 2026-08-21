@@ -16,6 +16,7 @@ $startInput = gmdate('Y-m-d\TH:i', time() - 3600);
 $endInput = gmdate('Y-m-d\TH:i', time());
 $gpsOnly = false;
 $rinexVersion = '2';
+$generatorVersion = 'default';
 
 /** Разбирает текстовое поле "Имя, X, Y, Z" по одной станции на строку. */
 function rgen_parse_stations_input(string $text): array
@@ -48,7 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $startInput = (string)($_POST['start'] ?? '');
     $endInput = (string)($_POST['end'] ?? '');
     $gpsOnly = isset($_POST['gps_only']);
-    $rinexVersion = ($_POST['rinex_version'] ?? '2') === '3' ? '3' : '2';
+    $rinexVersion = in_array($_POST['rinex_version'] ?? '2', ['3', '4'], true) ? $_POST['rinex_version'] : '2';
+    $generatorVersion = ($_POST['generator_version'] ?? 'default') === 'gisdata' ? 'gisdata' : 'default';
 
     try {
         $stations = rgen_parse_stations_input($stationsInput);
@@ -128,13 +130,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $doy3 = gmdate('z', $startUnix) + 1;
         $yy = gmdate('y', $startUnix);
 
+        // Режим "Gisdata" — отдельная, самостоятельная физика генератора
+        // (см. rgen_build_gisdata_obs): только GPS, без ионосферы/шума/
+        // неоднозначности фазы, всегда RINEX 2.11 (как и сам эталонный
+        // SiGOGbcst, чьи методы здесь применены). Не подменяет основной
+        // режим, просто другая ветка.
+        $useGisdataMode = $generatorVersion === 'gisdata';
+        if ($useGisdataMode) {
+            $rinexVersion = '2';
+            $gpsOnly = true;
+        }
+
         $files = [];
         $usedStationCodes = [];
         foreach ($stations as $st) {
-            $content = $rinexVersion === '3'
-                ? rgen_build_rinex3_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph, $gpsOnly)
-                : rgen_build_rinex2_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph, $gpsOnly);
-            if ($rinexVersion === '3') {
+            if ($useGisdataMode) {
+                $content = rgen_build_gisdata_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph);
+            } elseif ($rinexVersion === '4') {
+                $content = rgen_build_rinex3_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph, $gpsOnly, 4.00);
+            } elseif ($rinexVersion === '3') {
+                $content = rgen_build_rinex3_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph, $gpsOnly, 3.04);
+            } else {
+                $content = rgen_build_rinex2_obs($st['name'], $st['ecef'], $startUnix, $endUnix, $eph, $gpsOnly);
+            }
+            if (in_array($rinexVersion, ['3', '4'], true)) {
                 $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $st['name']);
                 $files[$safeName . '_' . gmdate('Ymd', $startUnix) . '.rnx'] = $content;
             } else {
@@ -163,21 +182,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Broadcast-эфемериды кладём в тот же архив рядом с наблюдениями,
         // чтобы файл можно было сразу обрабатывать сторонним ПО без
-        // отдельной загрузки эфемерид. Имя — тоже классическое короткое
-        // (как реальный "brdc2390.25n").
+        // отдельной загрузки эфемерид. Имя — классическое короткое, НО
+        // расширение ".p" (не ".n"!): сам файл, который мы скачиваем
+        // (nav_url_templates в app/config.php — "BRDC00IGS_R_..._MN.rnx" /
+        // "BRDM00DLR_S_..._MN.rnx") — это настоящий RINEX 3.04 MIXED-формат
+        // (несколько систем G/R/E/C/... в одном файле, см. заголовок
+        // "RINEX VERSION / TYPE": "3.04 N: GNSS NAV DATA M: MIXED"), а
+        // классическое расширение ".YYn" по конвенции RINEX2 означает
+        // GPS-only navigation файл другого, несовместимого формата записи.
+        // Названный ".n" мультисистемный RINEX3-файл может заставить
+        // сторонний обработчик (TBC и т.п.), ориентирующийся на
+        // расширение, пытаться разобрать его как RINEX2 — отсюда мусор в
+        // эфемеридах и ошибки вида "опорный файл содержит некорректные
+        // данные" при обработке базовой линии. ".p" — стандартное
+        // обозначение IGS для смешанного/объединённого ("mixed") nav-файла.
         // День года считаем ПО КАЖДОЙ дате отдельно ($dateKey, не
         // $startUnix) — иначе при многосуточном периоде все NAV-файлы
         // получили бы одно и то же имя и затёрли бы друг друга в архиве.
         // (string) на $dateKey обязателен: PHP автоматически превращает
         // строковые ключи массива вида "20260601" в целые числа — substr()
         // на int упал бы с TypeError.
+        // RINEX 4 — отдельная функция фильтрации (rgen_filter_nav_to_rinex4),
+        // добавляющая перед каждой записью эфемериды строку-заголовок
+        // "> EPH <SAT> <тип>" (LNAV/FDMA) — именно так выглядят настоящие
+        // успешно обрабатываемые TBC NAV-файлы (сверено с реальным файлом
+        // приёмника South GNSS). Имя — generic ".rnx" (как и у настоящих
+        // длинных RINEX4-имён), а не короткое ".YYp": короткая 8.3-схема с
+        // буквой системы по последней букве расширения определена только
+        // для RINEX2/3, для RINEX4 устоявшейся короткой конвенции нет.
         foreach ($navPaths as $dateKey => $navPath) {
             $dateKey = (string)$dateKey;
             $dayUnix = (int)gmmktime(0, 0, 0, (int)substr($dateKey, 4, 2), (int)substr($dateKey, 6, 2), (int)substr($dateKey, 0, 4));
-            $files[sprintf('brdc%03d0.%sn', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = (string)file_get_contents($navPath);
+            $rawNav = (string)file_get_contents($navPath);
+            if ($rinexVersion === '4') {
+                $files[sprintf('brdc%03d0_%s.rnx', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = rgen_filter_nav_to_rinex4($rawNav);
+            } else {
+                // Только GPS+ГЛОНАСС (см. rgen_filter_nav_to_gps_glonass) —
+                // наши OBS-файлы используют лишь эти две системы, остальные
+                // (Galileo/BeiDou/QZSS/IRNSS/SBAS) из настоящего CDDIS/BKG
+                // merged-файла убираем перед упаковкой, чтобы не зависеть от
+                // того, насколько полно сторонний обработчик умеет их разбирать.
+                $files[sprintf('brdc%03d0.%sp', gmdate('z', $dayUnix) + 1, gmdate('y', $dayUnix))] = rgen_filter_nav_to_gps_glonass($rawNav);
+            }
         }
         if (isset($manualNavContent)) {
-            $files[sprintf('brdc%03d0.%sn', $doy3, $yy)] = $manualNavContent;
+            if ($rinexVersion === '4') {
+                $files[sprintf('brdc%03d0_%s.rnx', $doy3, $yy)] = rgen_filter_nav_to_rinex4($manualNavContent);
+            } else {
+                $files[sprintf('brdc%03d0.%sp', $doy3, $yy)] = rgen_filter_nav_to_gps_glonass($manualNavContent);
+            }
         }
 
         $zipPath = tempnam(sys_get_temp_dir(), 'rnx');
@@ -237,18 +290,34 @@ require __DIR__ . '/app/views/_head.php';
           <input type="file" name="nav_file" class="form-control" accept=".rnx,.gz,.24n,.nav">
         </div>
         <div class="col-md-6">
+          <label class="form-label small">Версия генератора</label>
+          <select name="generator_version" id="generatorVersion" class="form-select">
+            <option value="default" <?= $generatorVersion === 'default' ? 'selected' : '' ?>>Расширенный (по умолчанию): GPS+ГЛОНАСС, ионосфера, шум, RINEX 2/3</option>
+            <option value="gisdata" <?= $generatorVersion === 'gisdata' ? 'selected' : '' ?>>Gisdata (эталонная физика): только GPS, без ионосферы/шума/неоднозначности фазы, RINEX 2.11</option>
+          </select>
+          <div class="form-text">Режим Gisdata — точная копия логики/математики эталонного генератора SiGOGbcst (light-time, Sagnac, релятивистская поправка, тропосфера Hopfield/Seeber), без наших дополнений (ионосфера, шум, ГЛОНАСС). Игнорирует поля "Версия RINEX" и "Только GPS" ниже.</div>
+        </div>
+        <div class="col-md-3">
           <label class="form-label small">Версия RINEX</label>
-          <select name="rinex_version" class="form-select">
+          <select name="rinex_version" id="rinexVersion" class="form-select" <?= $generatorVersion === 'gisdata' ? 'disabled' : '' ?>>
             <option value="2" <?= $rinexVersion === '2' ? 'selected' : '' ?>>2.11 (классический, набор наблюдений как у CHC)</option>
             <option value="3" <?= $rinexVersion === '3' ? 'selected' : '' ?>>3.04 (мультисистемный, современный)</option>
+            <option value="4" <?= $rinexVersion === '4' ? 'selected' : '' ?>>4.00 (как у настоящих приёмников South GNSS — NAV-записи с "&gt; EPH")</option>
           </select>
         </div>
-        <div class="col-md-6 d-flex align-items-end">
+        <div class="col-md-3 d-flex align-items-end">
           <div class="form-check">
-            <input type="checkbox" class="form-check-input" name="gps_only" id="gpsOnly" value="1" <?= $gpsOnly ? 'checked' : '' ?>>
+            <input type="checkbox" class="form-check-input" name="gps_only" id="gpsOnly" value="1" <?= $gpsOnly ? 'checked' : '' ?> <?= $generatorVersion === 'gisdata' ? 'disabled' : '' ?>>
             <label class="form-check-label" for="gpsOnly">Только GPS (диагностика): файл объявляет себя "G (GPS)" и не содержит ни одной записи ГЛОНАСС</label>
           </div>
         </div>
+        <script>
+          document.getElementById('generatorVersion').addEventListener('change', function () {
+            var isGisdataMode = this.value === 'gisdata';
+            document.getElementById('rinexVersion').disabled = isGisdataMode;
+            document.getElementById('gpsOnly').disabled = isGisdataMode;
+          });
+        </script>
         <div class="col-12">
           <button type="submit" class="btn btn-primary"><i class="bi bi-magic"></i> Сгенерировать и скачать</button>
         </div>

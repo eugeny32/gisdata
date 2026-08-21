@@ -22,9 +22,42 @@
     }
     var toggleBtn = document.getElementById('sidebarToggle');
     var sidebar = document.getElementById('sidebar');
+    var backdrop = document.getElementById('sidebarBackdrop');
+    function closeSidebar() {
+      if (!sidebar) return;
+      sidebar.classList.remove('sidebar-open');
+      if (backdrop) backdrop.classList.remove('show');
+      document.body.style.overflow = '';
+    }
+    // Desktop (>=992px): sidebar-collapsed slides the menu fully out of view
+    // to the left, .app-content expands into the freed width -- persisted
+    // across pages via localStorage (same pattern as the theme toggle
+    // above). Mobile keeps its existing off-canvas overlay behaviour
+    // (sidebar-open + backdrop) completely untouched.
+    try {
+      if (sidebar && window.innerWidth >= 992 && localStorage.getItem('sidebarCollapsed') === '1') {
+        sidebar.classList.add('sidebar-collapsed');
+      }
+    } catch (e) {}
     if (toggleBtn && sidebar) {
       toggleBtn.addEventListener('click', function () {
-        sidebar.classList.toggle('sidebar-open');
+        if (window.innerWidth >= 992) {
+          var collapsed = sidebar.classList.toggle('sidebar-collapsed');
+          try { localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+          return;
+        }
+        var isOpen = sidebar.classList.toggle('sidebar-open');
+        if (backdrop) backdrop.classList.toggle('show', isOpen);
+        document.body.style.overflow = isOpen ? 'hidden' : '';
+      });
+    }
+    if (backdrop) backdrop.addEventListener('click', closeSidebar);
+    // Закрываем сайдбар при клике по ссылке меню на мобильных
+    if (sidebar) {
+      sidebar.querySelectorAll('.sidebar-link').forEach(function (link) {
+        link.addEventListener('click', function () {
+          if (window.innerWidth < 992) closeSidebar();
+        });
       });
     }
   })();

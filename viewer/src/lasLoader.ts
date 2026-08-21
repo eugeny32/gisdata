@@ -1,6 +1,6 @@
 import type { PcModule } from './types';
 import { AXIS_FIX_ROTATION } from './constants';
-import { createPointCloudMaterial } from './pointCloudMaterial';
+import { createPointCloudMaterial, type LocalBounds } from './pointCloudMaterial';
 
 /** pc.Color не умеет HSL — конвертируем сами (стандартная формула), нужно
  * для окраски LAS-точек по высоте, когда в файле нет реального RGB. */
@@ -128,10 +128,24 @@ export async function loadLasFiles(
     }
 
     const positions = new Float32Array(count * 3);
+    // Реальные (не симметричные) min/max — для box-crop сечений (PR7) и
+    // более точной нормировки height-режима (PR6), чем extent выше (тот
+    // умышленно грубый — устойчивый к выбросам, но не плотно облегающий
+    // реальное облако).
+    const bounds: LocalBounds = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
     for (let i = 0; i < count; i++) {
-      positions[i * 3] = pos[i * 3] - centerOffset.x;
-      positions[i * 3 + 1] = pos[i * 3 + 1] - centerOffset.y;
-      positions[i * 3 + 2] = pos[i * 3 + 2] - centerOffset.z;
+      const x = pos[i * 3] - centerOffset.x;
+      const y = pos[i * 3 + 1] - centerOffset.y;
+      const z = pos[i * 3 + 2] - centerOffset.z;
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = y;
+      positions[i * 3 + 2] = z;
+      if (x < bounds.min[0]) bounds.min[0] = x;
+      if (y < bounds.min[1]) bounds.min[1] = y;
+      if (z < bounds.min[2]) bounds.min[2] = z;
+      if (x > bounds.max[0]) bounds.max[0] = x;
+      if (y > bounds.max[1]) bounds.max[1] = y;
+      if (z > bounds.max[2]) bounds.max[2] = z;
     }
 
     // Реальный цвет есть не у всех LAS (лазерные сканеры без встроенной
@@ -172,11 +186,26 @@ export async function loadLasFiles(
       }
     }
 
+    // intensity/classification (PR6, режимы раскраски) — отдельные сырые
+    // атрибуты, не баковка в цвет: переключение режима в Settings Panel
+    // не требует перезагрузки/пересборки буфера, см. pointCloudMaterial.ts.
+    // Точные имена полей — реальные ключи @loaders.gl/las (lowercase,
+    // подтверждено по исходнику modules/las/src/lib/typescript/parse-las.ts),
+    // не предположение.
+    const intensityAttr = data.attributes.intensity && data.attributes.intensity.value;
+    const classAttr = data.attributes.classification && data.attributes.classification.value;
+    const intensityClass = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      intensityClass[i * 2] = intensityAttr ? intensityAttr[i] / 65535 : 0;
+      intensityClass[i * 2 + 1] = classAttr ? classAttr[i] : 0;
+    }
+
     const mesh = new pc.Mesh(app.graphicsDevice);
     mesh.setPositions(positions);
     mesh.setColors32(colors);
+    mesh.setVertexStream(pc.SEMANTIC_TEXCOORD0, intensityClass, 2, count);
     mesh.update(pc.PRIMITIVE_POINTS, true);
-    const material = createPointCloudMaterial(pc, pointSizePx);
+    const material = createPointCloudMaterial(pc, pointSizePx, bounds);
     outMaterials.push(material);
     const meshInstance = new pc.MeshInstance(mesh, material);
     const entity = new pc.Entity('las-' + fileIndex);

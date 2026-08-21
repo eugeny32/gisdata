@@ -1,0 +1,104 @@
+{% url 'home' as home_url %}
+{% url 'map' as map_url %}
+{% url 'my_tours' as my_tours_url %}
+{% url 'facade_cad' as facade_cad_url %}
+{% url 'topo_cad' as topo_cad_url %}
+{% url 'facade_foto' as facade_foto_url %}
+{% url 'stations' as stations_url %}
+{% url 'subscriptions' as subscriptions_url %}
+{% url 'tours' as tours_url %}
+{% url 'slam_projects' as slam_projects_url %}
+{% url 'slam_scans' as slam_scans_url %}
+{% url 'tile_layout' as tile_layout_url %}
+{% url 'ctfadmin' as ctfadmin_url %}
+{% url 'users' as users_url %}
+{% url 'pg_connections' as pg_connections_url %}
+{% url 'rinex_generate' as rinex_generate_url %}
+{% url 'employee_invites' as employee_invites_url %}
+{% url 'employees' as employees_url %}
+{% url 'rinex' as rinex_url %}
+{% url 'rinex_requests' as rinex_requests_url %}
+<aside class="sidebar" id="sidebar">
+  <a class="sidebar-brand" href="{{ home_url }}">
+    <i class="bi bi-broadcast-pin"></i>
+    <span>GNSS Мониторинг</span>
+  </a>
+  <nav class="sidebar-nav">
+    <a class="sidebar-link{% if request.path == home_url %} active{% endif %}" href="{{ home_url }}">
+      <i class="bi bi-house"></i><span>Главная</span>
+    </a>
+    <a class="sidebar-link{% if request.path == map_url %} active{% endif %}" href="{{ map_url }}">
+      <i class="bi bi-map"></i><span>Карта</span>
+    </a>
+    <a class="sidebar-link{% if request.path == my_tours_url %} active{% endif %}" href="{{ my_tours_url }}">
+      <i class="bi bi-camera-reels"></i><span>Мои туры</span>
+    </a>
+    {% if nav_flags.facade_cad %}
+    <a class="sidebar-link{% if request.path == facade_cad_url %} active{% endif %}" href="{{ facade_cad_url }}">
+      <i class="bi bi-rulers"></i><span>FACADE·CAD</span>
+    </a>
+    {% endif %}
+    {% if nav_flags.topo_cad %}
+    <a class="sidebar-link{% if request.path == topo_cad_url %} active{% endif %}" href="{{ topo_cad_url }}">
+      <i class="bi bi-signpost-2"></i><span>TOPO·CAD</span>
+    </a>
+    {% endif %}
+    {% if nav_flags.facade_foto %}
+    <a class="sidebar-link{% if request.path == facade_foto_url %} active{% endif %}" href="{{ facade_foto_url }}">
+      <i class="bi bi-image"></i><span>FACADE·FOTO</span>
+    </a>
+    {% endif %}
+    {% if nav_role == 'admin' %}
+    <a class="sidebar-link{% if request.path == stations_url %} active{% endif %}" href="{{ stations_url }}">
+      <i class="bi bi-hdd-network"></i><span>Станции</span>
+    </a>
+    <a class="sidebar-link{% if request.path == subscriptions_url %} active{% endif %}" href="{{ subscriptions_url }}">
+      <i class="bi bi-credit-card"></i><span>Подписки</span>
+    </a>
+    <a class="sidebar-link{% if request.path == tours_url %} active{% endif %}" href="{{ tours_url }}">
+      <i class="bi bi-camera-reels"></i><span>Туры</span>
+    </a>
+    <a class="sidebar-link{% if request.path == slam_projects_url or request.path == slam_scans_url %} active{% endif %}" href="{{ slam_projects_url }}">
+      <i class="bi bi-radar"></i><span>SLAM (S20)</span>
+    </a>
+    <div class="sidebar-group-label">Инструменты</div>
+    <a class="sidebar-link sidebar-sublink{% if request.path == facade_cad_url %} active{% endif %}" href="{{ facade_cad_url }}">
+      <i class="bi bi-rulers"></i><span>FACADE·CAD</span>
+    </a>
+    <a class="sidebar-link sidebar-sublink{% if request.path == topo_cad_url %} active{% endif %}" href="{{ topo_cad_url }}">
+      <i class="bi bi-signpost-2"></i><span>TOPO·CAD</span>
+    </a>
+    <a class="sidebar-link sidebar-sublink{% if request.path == facade_foto_url %} active{% endif %}" href="{{ facade_foto_url }}">
+      <i class="bi bi-image"></i><span>FACADE·FOTO</span>
+    </a>
+    <a class="sidebar-link sidebar-sublink{% if request.path == tile_layout_url %} active{% endif %}" href="{{ tile_layout_url }}">
+      <i class="bi bi-grid-3x3-gap-fill"></i><span>Раскладка плитки</span>
+    </a>
+    <a class="sidebar-link sidebar-sublink{% if request.path == ctfadmin_url %} active{% endif %}" href="{{ ctfadmin_url }}">
+      <i class="bi bi-eye"></i><span>CtF·ADMIN</span>
+    </a>
+    <a class="sidebar-link{% if request.path == users_url %} active{% endif %}" href="{{ users_url }}">
+      <i class="bi bi-people-fill"></i><span>Пользователи</span>
+    </a>
+    <a class="sidebar-link{% if request.path == pg_connections_url %} active{% endif %}" href="{{ pg_connections_url }}">
+      <i class="bi bi-hdd-rack"></i><span>Подключения БД</span>
+    </a>
+    <a class="sidebar-link{% if request.path == rinex_generate_url %} active{% endif %}" href="{{ rinex_generate_url }}">
+      <i class="bi bi-magic"></i><span>Генератор RINEX</span>
+    </a>
+    <div class="sidebar-group-label">Сотрудники</div>
+    <a class="sidebar-link sidebar-sublink{% if request.path == employee_invites_url %} active{% endif %}" href="{{ employee_invites_url }}">
+      <i class="bi bi-envelope-paper"></i><span>Приглашения</span>
+    </a>
+    <a class="sidebar-link sidebar-sublink{% if request.path == employees_url %} active{% endif %}" href="{{ employees_url }}">
+      <i class="bi bi-people"></i><span>Список</span>
+    </a>
+    {% endif %}
+    <a class="sidebar-link{% if request.path == rinex_url %} active{% endif %}" href="{{ rinex_url }}">
+      <i class="bi bi-folder2-open"></i><span>RINEX</span>
+    </a>
+    <a class="sidebar-link sidebar-sublink{% if request.path == rinex_requests_url %} active{% endif %}" href="{{ rinex_requests_url }}">
+      <i class="bi bi-clock-history"></i><span>Готовые данные</span>
+    </a>
+  </nav>
+</aside>

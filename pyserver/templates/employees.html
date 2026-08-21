@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Список сотрудников{% endblock %}
+{% block page_icon %}bi-people{% endblock %}
+{% block page_title %}Список сотрудников{% endblock %}
+{% block content %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="text-secondary small">Количество сотрудников: {{ employees|length }}</div>
+    <a href="{% url 'employee_invites' %}" class="btn btn-primary btn-sm"><i class="bi bi-envelope-paper me-1"></i>Пригласить</a>
+  </div>
+
+  <div class="card surface-card">
+    <div class="table-responsive">
+      <table class="table table-clean align-middle mb-0">
+        <thead>
+          <tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Email</th><th>Телефон</th><th>Статус</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for e in employees %}
+          <tr>
+            <td>{{ e.full_name|default:"—" }}</td>
+            <td>{{ e.login }}</td>
+            <td><span class="badge text-bg-secondary">{% if e.role == "admin" %}Администратор{% else %}Просмотр{% endif %}</span></td>
+            <td>{{ e.email|default:"—" }}</td>
+            <td>{{ e.phone|default:"—" }}</td>
+            <td>
+              {% if e.is_active %}<span class="badge text-bg-success">Активен</span>
+              {% else %}<span class="badge text-bg-secondary">Неактивен</span>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if e.id != nav_admin.id %}
+              <form method="post" action="{% url 'employees' %}" class="d-inline" onsubmit="return confirm('Изменить статус сотрудника?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="toggle">
+                <input type="hidden" name="id" value="{{ e.id }}">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{% if e.is_active %}Деактивировать{% else %}Активировать{% endif %}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

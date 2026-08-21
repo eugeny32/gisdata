@@ -1,6 +1,7 @@
 .env
 .ftp_deploy_marker
 app/config.local.php
+.vscode/
 node_modules/
 uploads/*
 !uploads/tours/

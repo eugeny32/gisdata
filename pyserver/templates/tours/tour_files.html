@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Файлы тура: {{ tour.name }}{% endblock %}
+{% block page_icon %}bi-stack{% endblock %}
+{% block page_title %}Файлы тура: {{ tour.name }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'tours' %}" class="text-decoration-none"><i class="bi bi-arrow-left"></i> К списку туров</a></p>
+
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <div class="card surface-card mb-4">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Основной файл тура</h2>
+      <p class="mb-0">{{ tour.file_path }} <span class="text-secondary small">({{ tour.file_format }})</span></p>
+      <p class="text-secondary small mb-0">Чтобы заменить основной файл — отредактируйте тур на странице «Туры».</p>
+    </div>
+  </div>
+
+  <div class="card surface-card mb-4">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Добавить часть модели</h2>
+      <p class="text-secondary small">Если скан собран из нескольких .ply/.splat/.ksplat кусков в одной системе координат — добавьте их здесь по очереди. Просмотрщик на карте загрузит части по очереди (первая видна сразу, не дожидаясь остальных), в порядке, заданном ниже.</p>
+      <form method="post" action="{% url 'tour_files' %}?tour_id={{ tour.id }}" enctype="multipart/form-data" class="row g-3" id="tourFileForm">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <input type="hidden" name="tour_id" value="{{ tour.id }}">
+        <div class="col-md-5">
+          <label class="form-label small">Файл части (.ply / .splat / .ksplat / .las)</label>
+          <input type="file" name="model_file" class="form-control" accept=".ply,.splat,.ksplat,.las">
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small">Или файл уже на сервере (uploads/tours/...)</label>
+          <input type="text" name="existing_file" class="form-control" placeholder="part2.ply">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">Порядок</label>
+          <input type="number" name="sort_order" class="form-control" value="{{ files|length }}">
+        </div>
+        <div class="col-12 d-none" id="tourFileProgressWrap">
+          <div class="progress" style="height: 22px">
+            <div class="progress-bar" id="tourFileProgressBar" role="progressbar" style="width: 0%">0%</div>
+          </div>
+        </div>
+        <div class="col-12">
+          <button type="submit" class="btn btn-primary" id="tourFileFormSubmit">Добавить часть</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Список частей ({{ files|length }})</h2>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle">
+          <thead><tr><th>#</th><th>Файл</th><th>Формат</th><th></th></tr></thead>
+          <tbody>
+          {% for f in files %}
+            <tr>
+              <td>{{ f.sort_order }}</td>
+              <td>{{ f.file_path }}</td>
+              <td>{{ f.file_format }}</td>
+              <td class="text-end">
+                <form method="post" action="{% url 'tour_files' %}?tour_id={{ tour.id }}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="move">
+                  <input type="hidden" name="id" value="{{ f.id }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary" {% if forloop.first %}disabled{% endif %}><i class="bi bi-arrow-up"></i></button>
+                </form>
+                <form method="post" action="{% url 'tour_files' %}?tour_id={{ tour.id }}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="move">
+                  <input type="hidden" name="id" value="{{ f.id }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary" {% if forloop.last %}disabled{% endif %}><i class="bi bi-arrow-down"></i></button>
+                </form>
+                <form method="post" action="{% url 'tour_files' %}?tour_id={{ tour.id }}" class="d-inline" onsubmit="return confirm('Удалить часть?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="id" value="{{ f.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4" class="text-muted">Дополнительных частей нет — тур состоит из одного файла</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  const form = document.getElementById('tourFileForm');
+  if (!form) return;
+  const wrap = document.getElementById('tourFileProgressWrap');
+  const bar = document.getElementById('tourFileProgressBar');
+  const submitBtn = document.getElementById('tourFileFormSubmit');
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    submitBtn.disabled = true;
+    wrap.classList.remove('d-none');
+    bar.style.width = '0%';
+    bar.textContent = '0%';
+
+    const xhr = new XMLHttpRequest();
+    xhr.open(form.getAttribute('method') || 'post', form.getAttribute('action'));
+    xhr.upload.onprogress = function (evt) {
+      if (evt.lengthComputable) {
+        const pct = Math.round((evt.loaded / evt.total) * 100);
+        bar.style.width = pct + '%';
+        bar.textContent = pct + '%';
+      }
+    };
+    xhr.onload = function () {
+      document.open();
+      document.write(xhr.responseText);
+      document.close();
+    };
+    xhr.onerror = function () {
+      submitBtn.disabled = false;
+      bar.classList.add('bg-danger');
+      bar.textContent = 'Ошибка сети при загрузке';
+    };
+
+    const rawData = new FormData(form);
+    const data = new FormData();
+    for (const [key, value] of rawData.entries()) {
+      if (value instanceof File && value.name === '' && value.size === 0) {
+        continue;
+      }
+      data.append(key, value);
+    }
+    xhr.send(data);
+  });
+})();
+</script>
+{% endblock %}
