@@ -1,0 +1,1016 @@
+@import 'tailwindcss';
+
+/* ═════════════════════ design tokens ═════════════════════
+ * TOPO·CAD — graphite UI with a NEON MAGENTA accent.
+ *
+ * The whole theme is these ten variables: every glow, border and caption
+ * below is written against them, so the sister app (FACADE·CAD) ships the
+ * identical stylesheet with a different token block and nothing else.
+ *
+ * Rule of the palette: the drawing and the point cloud own the saturated
+ * colours in the viewports, so the chrome stays graphite and only the
+ * ACTIVE thing (tool, pane, current layer) lights up.
+ */
+:root {
+  --accent: 255 45 149; /* neon magenta — active / focused */
+  --accent-soft: 244 114 182; /* the same hue, readable as text */
+  --accent-2: 176 107 255; /* neon violet — secondary highlights */
+  --ok: 34 230 130; /* neon green — enabled modes */
+  --bad: 248 113 113; /* red — destructive */
+  --bg: #16151c;
+  --panel: rgba(34, 32, 43, 0.88);
+  --panel-solid: #22202b;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #eceaf3;
+  --muted: #b3aec6;
+  --dim: #837e9a;
+  --faint: #5b5673;
+  /* Y of the horizontal split between the two right-hand panes. The
+   * viewports start UNDER the ribbon, so every overlay anchored to that
+   * split has to measure from the ribbon down — not from the window top.
+   * --ribbon-h is published by UI.publishRibbonHeight() on every relayout. */
+  --split-y: calc(var(--ribbon-h, 4.2rem) + (100vh - var(--ribbon-h, 4.2rem)) / 2);
+  --pane-h: calc((100vh - var(--ribbon-h, 4.2rem)) / 2);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Panels are shown/hidden by toggling `hidden`/`flex` from the UI layer.
+ * Tailwind's `hidden` utility lives in a cascade LAYER, so the plain
+ * `display: flex` of .hud-strip / .glass below would outrank it and the
+ * panel would never actually disappear — give the class the last word. */
+.hidden {
+  display: none !important;
+}
+
+/* ═════════════════════ surfaces ═════════════════════ */
+
+/* Glass surface — shared by all floating panels. A hair of accent in the
+ * border and in the drop shadow is what makes the chrome read as lit. */
+.glass {
+  border-radius: 16px;
+  border: 1px solid rgb(var(--accent) / 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 55%),
+    var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 0 24px rgb(var(--accent) / 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+/* The ribbon is the window header: docked to the top edge, full width, no
+ * rounding — the viewports begin right under it, so no sliver of a pane
+ * (nor of its focus ring) ever shows above or beside the bar. */
+.ribbon-bar {
+  border-bottom: 1px solid rgb(var(--accent) / 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 55%),
+    var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgb(var(--accent) / 0.12),
+    0 0 26px rgb(var(--accent) / 0.07);
+}
+
+/* Viewport separators: a lit hairline instead of a flat rule. */
+.vp-sep {
+  background: linear-gradient(180deg, rgb(var(--accent) / 0.5), rgb(var(--accent) / 0.14) 45%, rgb(var(--accent) / 0.5));
+  box-shadow: 0 0 10px rgb(var(--accent) / 0.35);
+}
+
+/* Viewport labels: pill chips with a glowing accent dot. */
+.vp-label {
+  position: fixed;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 3px 11px;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--accent) / 0.16);
+  background: rgba(24, 22, 32, 0.72);
+  backdrop-filter: blur(8px);
+}
+.vp-label::before {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgb(var(--accent));
+  box-shadow:
+    0 0 8px rgb(var(--accent) / 1),
+    0 0 18px rgb(var(--accent) / 0.6);
+}
+/* The focused pane also lights up its own label. */
+.vp-label[data-active='true'] {
+  color: #fff;
+  border-color: rgb(var(--accent) / 0.7);
+  background: rgb(var(--accent) / 0.16);
+  box-shadow:
+    0 0 18px rgb(var(--accent) / 0.35),
+    inset 0 0 12px rgb(var(--accent) / 0.12);
+  text-shadow: 0 0 10px rgb(var(--accent) / 0.8);
+}
+/* A frozen pane stopped following the cursor — say so in the caption. */
+.vp-label[data-frozen='true']::before {
+  background: rgb(var(--accent-2));
+  box-shadow:
+    0 0 8px rgb(var(--accent-2) / 1),
+    0 0 18px rgb(var(--accent-2) / 0.6);
+}
+.lbl-chip {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: #f0e6ff;
+  background: rgb(var(--accent-2) / 0.25);
+  border: 1px solid rgb(var(--accent-2) / 0.55);
+  box-shadow: 0 0 12px rgb(var(--accent-2) / 0.35);
+}
+
+/* Tiny uppercase caption used inside panels. */
+.panel-cap {
+  font-size: 9px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 12px rgb(var(--accent) / 0.5);
+}
+.panel-close {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--dim);
+  transition: color 0.15s;
+}
+.panel-close:hover {
+  color: var(--text);
+}
+.panel-note {
+  font-size: 9px;
+  line-height: 1.35;
+  color: var(--faint);
+}
+
+/* Viewport HUD strip: docked to a pane edge, dimmed until hovered so it
+ * never competes with the geometry underneath. */
+.hud-strip {
+  display: flex;
+  border-radius: 10px;
+  border: 1px solid rgb(var(--accent) / 0.14);
+  background: rgba(24, 22, 32, 0.82);
+  backdrop-filter: blur(10px);
+  padding: 3px 8px;
+  opacity: 0.38;
+  transition:
+    opacity 0.18s,
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.hud-strip:hover {
+  opacity: 1;
+  border-color: rgb(var(--accent) / 0.55);
+  box-shadow: 0 0 18px rgb(var(--accent) / 0.22);
+}
+.hud-strip input[type='range'] {
+  width: 4.5rem;
+}
+.hud-cap {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.hud-val {
+  min-width: 3.4rem;
+  text-align: right;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 10px rgb(var(--accent) / 0.55);
+}
+.hud-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* ═════════════════════ status bar ═════════════════════ */
+
+.stat-num {
+  min-width: 1.8rem;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.stat-cap {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--faint);
+}
+.status-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Active-layer color chip next to the layer combo. */
+.layer-swatch {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  cursor: pointer;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: #dde6ff;
+  transition:
+    box-shadow 0.15s,
+    border-color 0.15s;
+}
+.layer-swatch:hover {
+  border-color: rgb(var(--accent) / 0.9);
+  box-shadow: 0 0 10px rgb(var(--accent) / 0.7);
+}
+
+/* ═════════════════════ ribbon ═════════════════════ */
+
+.rib-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.rib-tools {
+  display: flex;
+  gap: 3px;
+}
+.rib-title {
+  margin-top: 2px;
+  font-size: 7px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint);
+  user-select: none;
+}
+
+.rib-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px;
+  background: linear-gradient(180deg, transparent, rgb(var(--accent) / 0.4), transparent);
+}
+
+/* Fallback when the ribbon still cannot fit: a barely-there scrollbar. */
+#ribbon-groups {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--accent) / 0.35) transparent;
+}
+#ribbon-groups::-webkit-scrollbar {
+  height: 4px;
+}
+#ribbon-groups::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(var(--accent) / 0.35);
+}
+#ribbon-groups::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Ribbon buttons: raised neon faces. Idle already carries a trace of the
+ * accent (rim light + tinted glass), hover lifts it, and the active tool
+ * is unmistakable across the room. */
+.tool-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 46px;
+  padding: 5px 1px 4px;
+  border-radius: 11px;
+  color: #d6d0e6;
+  cursor: pointer;
+  border: 1px solid rgb(var(--accent) / 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015) 60%),
+    linear-gradient(180deg, rgb(var(--accent) / 0.05), rgb(var(--accent) / 0.02));
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.45),
+    0 0 10px rgb(var(--accent) / 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition:
+    color 0.15s,
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.2s,
+    transform 0.1s;
+}
+.tool-btn:hover {
+  color: #fff;
+  border-color: rgb(var(--accent) / 0.85);
+  background:
+    linear-gradient(180deg, rgb(var(--accent) / 0.24), rgb(var(--accent) / 0.07)),
+    var(--panel);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.45),
+    0 0 22px rgb(var(--accent) / 0.55),
+    inset 0 0 12px rgb(var(--accent) / 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.tool-btn:active {
+  transform: translateY(1px);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.5),
+    0 0 14px rgb(var(--accent) / 0.4),
+    inset 0 1px 5px rgba(0, 0, 0, 0.4);
+}
+.tool-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tool-btn:hover svg,
+.tool-btn[data-active='true'] svg {
+  filter: drop-shadow(0 0 6px rgb(var(--accent) / 0.85));
+}
+.tool-btn span {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  transition: color 0.15s;
+}
+.tool-btn:hover span {
+  color: rgb(var(--accent-soft));
+}
+.tool-btn[data-active='true'] {
+  color: #fff;
+  border-color: rgb(var(--accent));
+  background:
+    linear-gradient(180deg, rgb(var(--accent) / 0.42), rgb(var(--accent) / 0.12)),
+    var(--panel);
+  box-shadow:
+    0 0 30px rgb(var(--accent) / 0.65),
+    0 2px 10px rgba(0, 0, 0, 0.5),
+    inset 0 0 16px rgb(var(--accent) / 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  text-shadow: 0 0 12px rgb(var(--accent) / 0.9);
+}
+.tool-btn[data-active='true'] span {
+  color: #fff;
+}
+.tool-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ─── ribbon edit mode (перетаскивание кнопок по панелям) ─── */
+
+#ribbon[data-edit='true'] .tool-btn {
+  cursor: grab;
+  outline: 1px dashed rgb(var(--accent) / 0.45);
+  outline-offset: 2px;
+}
+#ribbon[data-edit='true'] .tool-btn:active {
+  cursor: grabbing;
+}
+.tool-btn.dragging {
+  opacity: 0.35;
+}
+.rib-group.drop-target {
+  border-radius: 12px;
+  background: rgb(var(--accent) / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent) / 0.6);
+}
+#ribbon[data-edit='true'] .rib-title {
+  color: rgb(var(--accent-soft));
+  cursor: text;
+}
+.rib-del {
+  cursor: pointer;
+  color: rgb(var(--bad));
+}
+.rib-edit-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+/* ═════════════════════ pills & selects ═════════════════════ */
+
+.pill {
+  cursor: pointer;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 2px 8px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.2s;
+}
+.pill:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.pill[data-on='true'] {
+  color: #eafff4;
+  border-color: rgb(var(--ok) / 0.75);
+  background: rgb(var(--ok) / 0.16);
+  box-shadow:
+    0 0 16px rgb(var(--ok) / 0.45),
+    inset 0 0 10px rgb(var(--ok) / 0.15);
+  text-shadow: 0 0 8px rgb(var(--ok) / 0.7);
+}
+/* The cut-orientation pill is a mode switch, not an on/off state. */
+#section-mode[data-on='true'],
+#profile-mode[data-on='true'] {
+  color: #fff;
+  border-color: rgb(var(--accent) / 0.75);
+  background: rgb(var(--accent) / 0.2);
+  box-shadow:
+    0 0 16px rgb(var(--accent) / 0.45),
+    inset 0 0 10px rgb(var(--accent) / 0.15);
+  text-shadow: 0 0 8px rgb(var(--accent) / 0.7);
+}
+
+#ucs-select,
+#layer-select {
+  cursor: pointer;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+#ucs-select:hover,
+#layer-select:hover {
+  border-color: rgb(var(--accent) / 0.6);
+  box-shadow: 0 0 12px rgb(var(--accent) / 0.25);
+}
+#layer-select {
+  max-width: 9rem;
+}
+/* Layer combo retargets to the SELECTION — flag that it will move objects. */
+#layer-select[data-selection='true'] {
+  border-color: rgb(var(--accent) / 0.75);
+  color: rgb(var(--accent-soft));
+  box-shadow: 0 0 12px rgb(var(--accent) / 0.3);
+}
+#ucs-select option,
+#layer-select option,
+#cp-mode option,
+.lr-select option {
+  background: var(--panel-solid);
+  color: var(--text);
+}
+#ucs-select:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* ═════════════════════ sliders ═════════════════════ */
+
+input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 4px;
+  width: 7rem;
+  cursor: ew-resize;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(var(--accent) / 0.95), rgb(var(--accent) / 0.18));
+  box-shadow: 0 0 10px rgb(var(--accent) / 0.3);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgb(var(--accent));
+  border: 2px solid #1b1922;
+  box-shadow:
+    0 0 10px rgb(var(--accent) / 1),
+    0 0 20px rgb(var(--accent) / 0.5);
+}
+input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgb(var(--accent));
+  border: 2px solid #1b1922;
+  box-shadow:
+    0 0 10px rgb(var(--accent) / 1),
+    0 0 20px rgb(var(--accent) / 0.5);
+}
+
+/* ═════════════════════ readouts ═════════════════════ */
+
+.hint-text {
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.35rem;
+  color: var(--muted);
+}
+.coords-text {
+  font-family: ui-monospace, 'Cascadia Mono', monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.cheat {
+  font-size: 10px;
+  line-height: 1.05rem;
+  color: var(--faint);
+}
+.cheat b {
+  color: var(--muted);
+  font-weight: 600;
+}
+#dyn-input {
+  border-radius: 8px;
+  border: 1px solid rgb(var(--accent) / 0.65);
+  background: rgba(18, 16, 24, 0.88);
+  padding: 1px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: rgb(var(--accent-soft));
+  box-shadow: 0 0 16px rgb(var(--accent) / 0.35);
+}
+
+/* ═════════════════════ marquee ═════════════════════ */
+
+/* AutoCAD-style: L→R window (solid), R→L crossing (dashed). */
+#marquee {
+  border: 1px solid rgb(var(--accent-2) / 0.9);
+  background: rgb(var(--accent-2) / 0.14);
+  box-shadow:
+    0 0 18px rgb(var(--accent-2) / 0.35),
+    inset 0 0 22px rgb(var(--accent-2) / 0.08);
+}
+#marquee[data-crossing='true'] {
+  border-style: dashed;
+  border-color: rgb(var(--ok) / 0.9);
+  background: rgb(var(--ok) / 0.14);
+  box-shadow:
+    0 0 18px rgb(var(--ok) / 0.35),
+    inset 0 0 22px rgb(var(--ok) / 0.08);
+}
+
+/* ═════════════════════ round icon buttons ═════════════════════ */
+
+.eye-btn {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  height: 32px;
+  width: 32px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgb(var(--accent) / 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.45),
+    0 0 10px rgb(var(--accent) / 0.08);
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    box-shadow 0.2s;
+}
+.eye-btn:hover {
+  color: #fff;
+  border-color: rgb(var(--accent) / 0.8);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.45),
+    0 0 20px rgb(var(--accent) / 0.5);
+}
+.eye-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.eye-btn[data-on='false'] {
+  color: #4a4560;
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* ═════════════════════ layers panel ═════════════════════ */
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.2s;
+}
+.layer-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.layer-row[data-current='true'] {
+  border-color: rgb(var(--accent) / 0.5);
+  background: rgb(var(--accent) / 0.1);
+  box-shadow:
+    inset 0 0 14px rgb(var(--accent) / 0.1),
+    0 0 12px rgb(var(--accent) / 0.12);
+}
+
+/* current-layer radio dot */
+.lr-cur {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  cursor: pointer;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    border-color 0.15s;
+}
+.lr-cur:hover {
+  border-color: rgb(var(--accent) / 0.8);
+}
+.layer-row[data-current='true'] .lr-cur {
+  border-color: rgb(var(--accent));
+  background: rgb(var(--accent));
+  box-shadow: 0 0 12px rgb(var(--accent) / 0.9);
+}
+
+.lr-color {
+  width: 22px;
+  height: 18px;
+  flex: none;
+  cursor: pointer;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0;
+}
+.lr-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.lr-color::-webkit-color-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+}
+
+.lr-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+  font-size: 11px;
+  color: var(--text);
+}
+.layer-row[data-current='true'] .lr-name {
+  color: rgb(var(--accent-soft));
+}
+
+.lr-select {
+  flex: none;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  padding: 1px 3px;
+  font-size: 10px;
+  color: var(--muted);
+  outline: none;
+}
+.lr-select:hover {
+  border-color: rgb(var(--accent) / 0.5);
+}
+.lr-weight {
+  width: 52px;
+}
+
+.lr-count {
+  min-width: 18px;
+  flex: none;
+  text-align: right;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.layer-row[data-current='true'] .lr-count {
+  color: rgb(var(--accent-soft) / 0.95);
+}
+
+.lr-eye {
+  width: 22px;
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+  transition: color 0.15s;
+}
+.lr-eye[data-on='false'] {
+  color: #4a4560;
+}
+.lr-eye:hover {
+  color: #fff;
+}
+
+.lr-del {
+  width: 18px;
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--faint);
+  transition: color 0.15s;
+}
+.lr-del:hover {
+  color: rgb(var(--bad));
+}
+.lr-del:disabled {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+.mini-btn {
+  cursor: pointer;
+  border-radius: 9px;
+  border: 1px solid rgb(var(--accent) / 0.2);
+  padding: 3px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.2s;
+}
+.mini-btn:hover {
+  color: #fff;
+  border-color: rgb(var(--accent) / 0.8);
+  background: rgb(var(--accent) / 0.14);
+  box-shadow: 0 0 18px rgb(var(--accent) / 0.35);
+}
+
+/* Cloud display panel rows */
+.cp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+#cp-mode {
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--muted);
+  outline: none;
+}
+
+/* Focus ring around the pane that owns the commands. */
+.pane-focus {
+  position: fixed;
+  z-index: 11;
+  pointer-events: none;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 0 0 2px rgb(var(--accent) / 0.95),
+    inset 0 0 26px rgb(var(--accent) / 0.35),
+    0 0 18px rgb(var(--accent) / 0.35);
+  transition:
+    left 0.12s,
+    top 0.12s,
+    width 0.12s,
+    height 0.12s;
+}
+
+/* ═════════════════════ user guide ═════════════════════ */
+
+.help-body {
+  font-size: 13px;
+  line-height: 1.65;
+  color: #c8c4d8;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--accent) / 0.4) transparent;
+}
+.help-body::-webkit-scrollbar {
+  width: 7px;
+}
+.help-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(var(--accent) / 0.4);
+}
+.help-body h1 {
+  margin: 0 0 6px;
+  font-size: 19px;
+  font-weight: 600;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 16px rgb(var(--accent) / 0.5);
+}
+.help-body h2 {
+  margin: 26px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 15px;
+  font-weight: 600;
+  color: rgb(var(--accent-soft));
+}
+.help-body h3 {
+  margin: 16px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.help-body p {
+  margin: 8px 0;
+}
+.help-body ul,
+.help-body ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.help-body ul {
+  list-style: disc;
+}
+.help-body ol {
+  list-style: decimal;
+}
+.help-body li {
+  margin: 3px 0;
+}
+.help-body b {
+  color: #fff;
+  font-weight: 600;
+}
+.help-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgb(var(--accent) / 0.16);
+  color: rgb(var(--accent-soft));
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.help-body hr {
+  margin: 18px 0 0;
+  border: 0;
+}
+.help-body table {
+  width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.help-body th {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgb(var(--accent) / 0.4);
+  text-align: left;
+  color: rgb(var(--accent-soft));
+  font-weight: 600;
+}
+.help-body td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+.help-body tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ═════════════════════ start overlay ═════════════════════ */
+
+#start-overlay {
+  background: rgba(18, 17, 23, 0.93);
+}
+
+.start-logo {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5em;
+  color: #fff;
+  text-shadow:
+    0 0 14px rgb(var(--accent) / 0.95),
+    0 0 40px rgb(var(--accent) / 0.6),
+    0 0 80px rgb(var(--accent) / 0.3);
+}
+
+.start-btn {
+  cursor: pointer;
+  border-radius: 16px;
+  border: 1px solid rgb(var(--accent) / 0.6);
+  background:
+    linear-gradient(180deg, rgb(var(--accent) / 0.22), rgb(var(--accent) / 0.06)),
+    var(--panel);
+  padding: 16px 44px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  color: #fff;
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 0 34px rgb(var(--accent) / 0.35),
+    inset 0 0 20px rgb(var(--accent) / 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  text-shadow: 0 0 12px rgb(var(--accent) / 0.8);
+  transition:
+    box-shadow 0.2s,
+    background 0.2s,
+    transform 0.1s;
+}
+.start-btn:hover {
+  background:
+    linear-gradient(180deg, rgb(var(--accent) / 0.34), rgb(var(--accent) / 0.1)),
+    var(--panel);
+  box-shadow:
+    0 0 54px rgb(var(--accent) / 0.55),
+    inset 0 0 26px rgb(var(--accent) / 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.start-btn:active {
+  transform: translateY(1px);
+}
+.start-formats {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--faint);
+}
+.start-progress {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 18px rgb(var(--accent) / 0.6);
+}
+.start-link {
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--dim);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-color: rgba(255, 255, 255, 0.18);
+  transition: color 0.15s;
+}
+.start-link:hover {
+  color: var(--text);
+}
+.start-link.accent {
+  color: rgb(var(--accent-soft) / 0.95);
+  text-decoration-color: rgb(var(--accent) / 0.5);
+}
+.start-link.accent:hover {
+  color: #fff;
+  text-shadow: 0 0 10px rgb(var(--accent) / 0.7);
+}

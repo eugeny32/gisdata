@@ -1,0 +1,115 @@
+:root {
+  --bg: #15171a;
+  --panel: #202327;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #e9edeb;
+  --muted: #adb5b2;
+  --faint: #575f5d;
+  --accent: 45 235 140;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 'Segoe UI', system-ui, sans-serif;
+}
+.card {
+  width: min(30rem, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border-radius: 18px;
+  border: 1px solid rgb(var(--accent) / 0.16);
+  background: var(--panel);
+  box-shadow:
+    0 18px 60px rgba(0, 0, 0, 0.55),
+    0 0 30px rgb(var(--accent) / 0.06);
+}
+.logo {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.42em;
+  color: #fff;
+  text-shadow: 0 0 18px rgb(var(--accent) / 0.7);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field span {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.field input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.field input:focus {
+  border-color: rgb(var(--accent) / 0.7);
+  box-shadow: 0 0 14px rgb(var(--accent) / 0.25);
+}
+.field input.bad {
+  border-color: #f87171;
+}
+.apps {
+  display: grid;
+  gap: 10px;
+}
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+  color: var(--text);
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.2s;
+}
+.app:hover {
+  border-color: rgb(var(--accent) / 0.7);
+  background: rgb(var(--accent) / 0.1);
+  box-shadow: 0 0 20px rgb(var(--accent) / 0.25);
+}
+.app b {
+  font-size: 13px;
+  letter-spacing: 0.1em;
+}
+.app span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+.admin-link {
+  font-size: 11px;
+  color: rgb(var(--accent) / 0.9);
+  text-decoration: none;
+}
+.admin-link:hover {
+  text-decoration: underline;
+}

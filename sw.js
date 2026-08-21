@@ -23,6 +23,14 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    caches.match(event.request).then((cached) =>
+      cached ||
+      // Сетевые сбои (потерян коннект, запрос отменён навигацией и т.п.)
+      // раньше падали как необработанный reject внутри respondWith — Chrome
+      // показывает это как "TypeError: Failed to fetch" в консоли SW и не
+      // просто рендерит обычную ошибку сети на странице. Ловим и отдаём
+      // соответствующий Response, а не рушим промис.
+      fetch(event.request).catch(() => new Response('', { status: 503, statusText: 'Network error (service worker)' }))
+    )
   );
 });

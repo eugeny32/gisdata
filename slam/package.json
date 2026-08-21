@@ -1,0 +1,13 @@
+{
+  "name": "gisdata-slam-pipeline",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Шаги SLAM-пайплайна (перенос slamcloude, см. bin/process_slam_jobs.php), вызываются как отдельные Node-процессы из bin/slam_step_worker.ps1 — не связаны со сборкой viewer/.",
+  "dependencies": {
+    "proj4": "^2.11.0",
+    "jpeg-js": "^0.4.4",
+    "js-yaml": "^4.1.0",
+    "seek-bzip": "^2.0.0"
+  }
+}

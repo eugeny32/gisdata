@@ -1,0 +1,28 @@
+{
+  "name": "topo-cad",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Web-CAD prototype for drafting topography over heavy point clouds: plan + cross-section + longitudinal section",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "laz-perf": "^0.0.7",
+    "three": "^0.174.0",
+    "web-e57": "^1.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.14",
+    "@types/emscripten": "^1.41.5",
+    "@types/three": "^0.174.0",
+    "tailwindcss": "^4.0.14",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.2",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.6.0"
+  }
+}

@@ -115,6 +115,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: /users.php' . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : ''));
         exit;
 
+    // --- Переключить доступ к FACADE·CAD ("услуга", см. facade_cad.php) ---
+    } elseif ($action === 'toggle_facade_cad') {
+        $id = (int)($_POST['id'] ?? 0);
+        $pdo->prepare('UPDATE users_sync SET facade_cad_enabled = 1 - facade_cad_enabled WHERE id = :id')
+            ->execute(['id' => $id]);
+        header('Location: /users.php' . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : ''));
+        exit;
+
+    // --- Переключить доступ к TOPO·CAD ("услуга", см. topo_cad.php) ---
+    } elseif ($action === 'toggle_topo_cad') {
+        $id = (int)($_POST['id'] ?? 0);
+        $pdo->prepare('UPDATE users_sync SET topo_cad_enabled = 1 - topo_cad_enabled WHERE id = :id')
+            ->execute(['id' => $id]);
+        header('Location: /users.php' . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : ''));
+        exit;
+
+    // --- Переключить доступ к FACADE·FOTO ("услуга", см. facade_foto.php) ---
+    } elseif ($action === 'toggle_facade_foto') {
+        $id = (int)($_POST['id'] ?? 0);
+        $pdo->prepare('UPDATE users_sync SET facade_foto_enabled = 1 - facade_foto_enabled WHERE id = :id')
+            ->execute(['id' => $id]);
+        header('Location: /users.php' . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : ''));
+        exit;
+
     // --- Удалить (только ручные) ---
     } elseif ($action === 'delete') {
         $id = (int)($_POST['id'] ?? 0);
@@ -405,6 +429,45 @@ require __DIR__ . '/app/views/_head.php';
               <button type="submit" class="btn btn-sm btn-outline-secondary"
                       title="<?= $u['is_active'] ? 'Деактивировать' : 'Активировать' ?>">
                 <i class="bi <?= $u['is_active'] ? 'bi-toggle-on text-success' : 'bi-toggle-off' ?>"></i>
+              </button>
+            </form>
+
+            <!-- Услуга: доступ к FACADE·CAD -->
+            <form method="post" action="/users.php" class="d-inline ms-1">
+              <input type="hidden" name="action" value="toggle_facade_cad">
+              <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+              <?php if ($filterStatus !== ''): ?>
+              <input type="hidden" name="s" value="<?= htmlspecialchars($filterStatus, ENT_QUOTES, 'UTF-8') ?>">
+              <?php endif; ?>
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="<?= $u['facade_cad_enabled'] ? 'Отключить услугу FACADE·CAD' : 'Включить услугу FACADE·CAD' ?>">
+                <i class="bi bi-rulers<?= $u['facade_cad_enabled'] ? ' text-success' : '' ?>"></i>
+              </button>
+            </form>
+
+            <!-- Услуга: доступ к TOPO·CAD -->
+            <form method="post" action="/users.php" class="d-inline ms-1">
+              <input type="hidden" name="action" value="toggle_topo_cad">
+              <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+              <?php if ($filterStatus !== ''): ?>
+              <input type="hidden" name="s" value="<?= htmlspecialchars($filterStatus, ENT_QUOTES, 'UTF-8') ?>">
+              <?php endif; ?>
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="<?= $u['topo_cad_enabled'] ? 'Отключить услугу TOPO·CAD' : 'Включить услугу TOPO·CAD' ?>">
+                <i class="bi bi-signpost-2<?= $u['topo_cad_enabled'] ? ' text-success' : '' ?>"></i>
+              </button>
+            </form>
+
+            <!-- Услуга: доступ к FACADE·FOTO -->
+            <form method="post" action="/users.php" class="d-inline ms-1">
+              <input type="hidden" name="action" value="toggle_facade_foto">
+              <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+              <?php if ($filterStatus !== ''): ?>
+              <input type="hidden" name="s" value="<?= htmlspecialchars($filterStatus, ENT_QUOTES, 'UTF-8') ?>">
+              <?php endif; ?>
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="<?= $u['facade_foto_enabled'] ? 'Отключить услугу FACADE·FOTO' : 'Включить услугу FACADE·FOTO' ?>">
+                <i class="bi bi-image<?= $u['facade_foto_enabled'] ? ' text-success' : '' ?>"></i>
               </button>
             </form>
 

@@ -11,17 +11,31 @@
    "cover" тут исказил бы пропорции волн, поэтому используем "contain"
    (вписываем целиком, без обрезки и без искажения, по аналогии с оригиналом,
    адаптированной под фон на весь экран, а не маленькую панель, как в
-   pgAdmin). background-attachment: fixed — при скролле длинных таблиц волны
-   не "едут" вместе с контентом. Карточки/таблицы/сайдбар поверх него все с
-   непрозрачным фоном (см. .surface-card, .sidebar, .topbar ниже) —
-   читаемость не страдает. */
+   pgAdmin).
+   ИСПРАВЛЕНО (жалоба на лаги/дёрганость при прокрутке): раньше "неподвижный
+   при скролле" фон делался через background-attachment:fixed прямо на body
+   — в паре с backdrop-filter на sticky-сайдбаре/топбаре (см. ниже) это
+   классическая комбинация, которая на каждый кадр скролла заставляет
+   браузер перерисовывать фон ПОД ВСЕЙ страницей (fixed-фон на некоторых
+   движках/GPU не попадает в отдельный composited-слой сам по себе и тянет
+   за собой полный repaint), а не только один лёгкий composited-слой.
+   ::before с position:fixed — тот же визуальный эффект (волны не едут при
+   скролле), но как отдельный элемент он получает свой GPU-слой и не
+   требует перерисовки остальной страницы на каждый кадр. */
 body {
   background-color: #0c0f14;
+  position: relative;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
   background-image: url('/assets/wave-bg.svg');
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-  background-attachment: fixed;
+  pointer-events: none;
 }
 
 /* --- App shell: sidebar + content --- */
@@ -33,11 +47,15 @@ body {
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
-  /* "Стекло" — полупрозрачный фон + небольшое размытие (легче, чем у
-     карточек ниже, чтобы меню оставалось четко читаемым, а не "мутным"). */
-  background: rgba(22, 27, 34, 0.55);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* ИСПРАВЛЕНО (жалоба на дёрганое меню/лаги при скролле): backdrop-filter
+     раньше держался и здесь, и на .topbar — оба position:sticky, а значит
+     содержимое ПОД ними меняется на каждом кадре скролла, и браузер обязан
+     пересчитывать блюр заново каждый раз, а не один раз при отрисовке —
+     именно это (не просто "много блюра на странице") создаёт заметный джанк
+     конкретно на sticky-элементах. Вместо блюра — более непрозрачный
+     плоский фон: тот же тёмный "стеклянный" тон без пересчёта на каждый
+     кадр. */
+  background: rgba(20, 24, 31, 0.92);
   border-right: 1px solid rgba(255, 255, 255, .06);
   color: #cbd2d9;
   display: flex;
@@ -46,6 +64,22 @@ body {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+}
+/* Сворачивание сайдбара влево на десктопе (кнопка #sidebarToggle в топбаре,
+   см. _foot.php) — сам сайдбар/список пунктов не меняется, просто прячется
+   с освобождением ширины под контент (напр. для полноэкранных инструментов
+   вроде FACADE·CAD, см. facade_cad.php). Мобильное поведение (.sidebar-open,
+   ниже) не затронуто — отдельный класс, отдельный брейкпоинт. */
+@media (min-width: 992px) {
+  .sidebar { transition: width .2s ease, opacity .15s ease; }
+  .sidebar.sidebar-collapsed {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    border-right: none;
+    overflow: hidden;
+    opacity: 0;
+  }
 }
 .sidebar-brand {
   display: flex;
@@ -90,10 +124,9 @@ body {
   gap: 8px;
   padding: 10px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, .06);
-  /* Та же "стеклянная" логика, что у .sidebar — топбар визуально часть меню. */
-  background: rgba(22, 27, 34, 0.55);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* Та же логика/тот же фикс, что у .sidebar выше — sticky + backdrop-filter
+     пересчитывался на каждый кадр скролла, отсюда и был джанк топбара. */
+  background: rgba(20, 24, 31, 0.92);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -187,6 +220,18 @@ body {
    синий, а не дефолтный/случайно зелёный --- */
 .progress-bar { background-color: var(--brand) !important; }
 
+/* Bootstrap's .text-bg-light pairs a light background with black text
+   (both !important) -- correct on its own, but .text-muted's color also
+   carries !important and happens to win the cascade, replacing the black
+   text with var(--bs-secondary-color). That variable is dark-theme-aware
+   and resolves to a LIGHT gray (tuned for text on this page's dark body),
+   which lands on .text-bg-light's light badge background -- light-on-light,
+   nearly invisible (see SLAM pipeline step badges, "not started yet" state).
+   Use this instead of "text-bg-light text-muted" for any "de-emphasized,
+   not an error" badge state: colors picked for THIS page's dark surface,
+   not reused from a light-mode-oriented utility pairing. */
+.badge-not-started { background-color: rgba(255, 255, 255, .06); color: rgba(229, 231, 235, .55); }
+
 /* --- Status pills --- */
 .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; }
 .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -227,15 +272,19 @@ body {
 .station-marker span { display: block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); }
 
 /* --- Cards / tables shared --- */
-/* Карточки — тоже "стекло", но более мутное/размытое, чем меню (.sidebar/
-   .topbar выше) — больше blur, чтобы блоки выглядели подложкой, а не просто
-   тонировкой. Правим сам .card, а не только .surface-card, чтобы эффект был
-   на всех карточках (map-card, login-card и т.д.), не задавая его на каждой
-   по отдельности. */
+/* Карточки — тоже "стекло". Правим сам .card, а не только .surface-card,
+   чтобы эффект был на всех карточках (map-card, login-card и т.д.), не
+   задавая его на каждой по отдельности.
+   ИСПРАВЛЕНО (жалоба на лаги/дёрганость): blur(18px) на каждой карточке —
+   на страницах с несколькими карточками сразу (списки/таблицы) суммарная
+   стоимость композитинга заметно росла. 8px даёт почти тот же "стеклянный"
+   вид (компенсировано чуть более плотным фоном ниже), но стоит GPU
+   заметно дешевле — размытие по гауссу дороже примерно пропорционально
+   квадрату радиуса, не линейно. */
 .card {
-  background: rgba(27, 32, 40, 0.6);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: rgba(27, 32, 40, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, .06);
 }
 .surface-card { border: none; border-radius: 16px; box-shadow: 0 4px 18px rgba(15, 23, 42, .06); }

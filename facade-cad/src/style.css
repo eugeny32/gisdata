@@ -1,0 +1,1616 @@
+@import 'tailwindcss';
+
+/* ═════════════════════ design tokens ═════════════════════
+ * FACADE·CAD — graphite UI with a NEON CYAN accent.
+ *
+ * The whole theme is these ten variables: every glow, border and caption
+ * below is written against them, so the sister app (TOPO·CAD) ships the
+ * identical stylesheet with a different token block and nothing else.
+ *
+ * Rule of the palette: the drawing and the point cloud own the saturated
+ * colours in the viewports, so the chrome stays graphite and only the
+ * ACTIVE thing (tool, pane, current layer) lights up.
+ */
+:root {
+  /* Перенесено из мокапа design/full-interface-skeuo.html («скевоморфизм
+   * 2.0 / кибер-минимализм», 2026-08-08): «ЧЕРТЁЖНЫЙ» стиль остаётся —
+   * волосяные линии, панели без рельефа (--ui-relief: 0, лист чертежа не
+   * бывает выпуклым), углы прямые, — но живая кромка активной кнопки
+   * теперь настоящий НЕОН, а не голубая «Аврора»: акцент — циан #00e5ff,
+   * --ui-glow включён (это ровно то, что описывает соседний абзац про
+   * «живую кромку» — раньше он был выключен). Второй цвет (заморожено,
+   * ПСК-акцент) — янтарь, как и был. Рельеф кнопок/радиус углов НЕ
+   * трогал намеренно — это отдельная правка, требует отдельного разбора
+   * (тумблеры/чекбоксы сейчас нативные <input>, не «рычаги» из мокапа).
+   * Правится ЗДЕСЬ — ниже всё написано против этих переменных. */
+  --accent: 0 229 255; /* циан — активное, фокус, выход команды */
+  --accent-soft: 186 243 255; /* тот же тон, читаемый как текст */
+  --aurora-2: 0 0 0; /* хвост вращающейся кромки: гаснет в чёрное */
+
+  /* ВТОРОЙ сигнал — не второй оттенок акцента, а другой смысл: им помечено
+   * замороженное окно. В конструкторе на его месте стоял чёрный (он там
+   * питает градиент кромки), но чёрным «заморожено» не покажешь — держим
+   * янтарь: он не спорит с синим ни на одном мониторе. */
+  --accent-2: 255 176 32;
+  /* Зелёный остаётся за секущей рамкой и подтверждениями: рамка «слева
+   * направо» синяя, «справа налево» зелёная — как в AutoCAD. */
+  --ok: 45 235 140;
+  --bad: 248 113 113; /* красный — удаление */
+
+  /* Уголь матовый: панели почти не отличаются от фона по светлоте, границу
+   * держит волосяная линия, а не ступенька яркости. Ступенька и делала из
+   * ленты «графит»: 28 29 31 против 11 12 13 — это уже другой цвет, и на
+   * стыке с окном он читался как заплатка. */
+  --bg: #0b0c0d;
+  --surface: 20 21 23;
+  --panel: rgba(16, 17, 18, 0.94);
+  --panel-solid: #141517;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #e7eae8;
+  --muted: #9ea5a2;
+  --dim: #767c7a;
+  --faint: #565b5a;
+
+  /* ── ручки из конструктора ─────────────────────────────────────────
+   * Свечение и рельеф — множители, а не отдельные наборы правил: увести
+   * --ui-glow в ноль достаточно, чтобы погас весь неон разом (и наоборот —
+   * единица включает уже готовую, везде прошитую систему box/text-shadow
+   * ниже, ничего структурно не меняя). */
+  --ui-glow: 1;
+  /* Рельеф ПАНЕЛЕЙ в нуле: лист чертежа не бывает выпуклым. Фаска и подъём
+   * ниже собраны из этого множителя, поэтому ноль гасит их разом. */
+  --ui-relief: 0;
+  /* Рельеф КНОПОК — своя ручка: у кнопки под пальцем объём уместен, у
+   * панели нет. 0 — кнопки растворяются в ленте (чистый чертёж), 1 —
+   * полноценная клавиша. Сейчас половина. */
+  --ui-btn-relief: 0.5;
+  --ui-gap: 2px;
+  /* 18 px значок и +10 px тела: полная лента (25 кнопок + статус) обязана
+   * влезать в ОДИН ряд на 1920 — распухшая на три ряда лента съедала
+   * чертёж (поймано пользователем). */
+  --ui-icon: 18px;
+  --ui-radius: 0px;
+  --btn: calc(var(--ui-icon) + 10px); /* сторона квадратной кнопки */
+
+  --bevel: inset 0 1px 0 rgba(255, 255, 255, calc(0.15 * var(--ui-relief))),
+    inset 0 -1px 0 rgba(0, 0, 0, calc(0.5 * var(--ui-relief)));
+  --lift: 0 calc(1px * var(--ui-relief)) calc(3px * var(--ui-relief)) rgba(0, 0, 0, calc(0.55 * var(--ui-relief)));
+  /* То же для кнопок, но от своего множителя: светлая кромка сверху,
+   * тёмная снизу и тень под кнопкой — свет падает сверху, как везде. */
+  --btn-face: rgb(var(--surface) / calc(0.95 * var(--ui-btn-relief)));
+  --btn-bevel: inset 0 1px 0 rgba(255, 255, 255, calc(0.2 * var(--ui-btn-relief))),
+    inset 0 -1px 0 rgba(0, 0, 0, calc(0.55 * var(--ui-btn-relief)));
+  --btn-lift: 0 calc(1.5px * var(--ui-btn-relief)) calc(4px * var(--ui-btn-relief))
+    rgba(0, 0, 0, calc(0.6 * var(--ui-btn-relief)));
+  /* Кайма панелей — ровная волосяная линия. Рисуется в два слоя (фон по
+   * padding-box, линия по border-box) не ради красоты, а чтобы толщина
+   * не зависела от фона под панелью: на облаке точек обычная полупрозрачная
+   * рамка «плавает». */
+  --edge: linear-gradient(rgb(var(--surface) / 0.86), rgb(var(--surface) / 0.86)) padding-box,
+    linear-gradient(rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.16)) border-box;
+  /* Y of the horizontal split between the two right-hand panes. The
+   * viewports start UNDER the ribbon, so every overlay anchored to that
+   * split has to measure from the ribbon down — not from the window top.
+   * --ribbon-h is published by UI.publishRibbonHeight() on every relayout. */
+  --split-y: calc(var(--ribbon-h, 4.2rem) + (100vh - var(--ribbon-h, 4.2rem)) / 2);
+  --pane-h: calc((100vh - var(--ribbon-h, 4.2rem)) / 2);
+  /* X of the vertical split (right edge of the main pane). Live value is
+   * published by ViewportManager.resize(); this is only the first-paint
+   * fallback. Раскладка окон настраивается пользователем — грипы. */
+  --split-x: 62vw;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Panels are shown/hidden by toggling `hidden`/`flex` from the UI layer.
+ * Tailwind's `hidden` utility lives in a cascade LAYER, so the plain
+ * `display: flex` of .hud-strip / .glass below would outrank it and the
+ * panel would never actually disappear — give the class the last word. */
+.hidden {
+  display: none !important;
+}
+
+/* ═════════════════════ surfaces ═════════════════════ */
+
+/* Glass surface — shared by all floating panels. A hair of accent in the
+ * border and in the drop shadow is what makes the chrome read as lit. */
+.glass {
+  border-radius: var(--ui-radius);
+  border: 1px solid transparent;
+  background: var(--edge);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 0 calc(24px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow))),
+    var(--bevel);
+}
+
+/* The ribbon is the window header: docked to the top edge, full width, no
+ * rounding — the viewports begin right under it, so no sliver of a pane
+ * (nor of its focus ring) ever shows above or beside the bar. */
+/* Лента — тот же уголь, что и окна под ней, без блика и без ступеньки по
+ * светлоте: сверху экрана должно быть одно матовое поле, разделённое
+ * волосяной линией. Белый градиент, стоявший здесь раньше, давал глянец —
+ * ровно то, чего в «матовом» быть не должно.
+ * Фон непрозрачный намеренно: холст занимает весь экран, но чистит только
+ * прямоугольники окон, и полоса под лентой ему не принадлежит. */
+.ribbon-bar {
+  border-bottom: 1px solid rgb(var(--accent) / 0.28);
+  background: var(--bg);
+  box-shadow: 0 0 calc(26px * var(--ui-glow)) rgb(var(--accent) / calc(0.3 * var(--ui-glow)));
+}
+
+/* Viewport separators: a lit hairline instead of a flat rule. */
+.vp-sep {
+  background: linear-gradient(180deg, rgb(var(--accent) / 0.45), rgb(var(--accent) / 0.1) 45%, rgb(var(--accent) / 0.45));
+  box-shadow: 0 0 calc(10px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow)));
+}
+
+/* Viewport labels: pill chips with a glowing accent dot. */
+.vp-label {
+  position: fixed;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 4px 12px 4px 9px;
+  border-radius: var(--ui-radius);
+  border: 1px solid transparent;
+  background: var(--edge);
+  backdrop-filter: blur(8px);
+}
+/* Метка окна — не кружок, а вертикальная засечка слева: та же засечка
+ * меняет цвет на янтарь, когда окно заморожено. */
+.vp-label::before {
+  content: '';
+  display: block;
+  width: 2px;
+  height: 11px;
+  background: rgb(var(--accent) / 0.7);
+  box-shadow: 0 0 calc(8px * var(--ui-glow)) rgb(var(--accent));
+}
+/* The focused pane also lights up its own label. */
+.vp-label[data-active='true'] {
+  color: #fff;
+  background: rgb(var(--accent) / 0.14);
+  box-shadow: 0 0 calc(18px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow)));
+  text-shadow: 0 0 calc(10px * var(--ui-glow)) rgb(var(--accent));
+}
+.vp-label[data-active='true']::before {
+  background: rgb(var(--accent));
+}
+/* A frozen pane stopped following the cursor — say so in the caption. */
+.vp-label[data-frozen='true']::before {
+  background: rgb(var(--accent-2));
+  box-shadow: 0 0 calc(8px * var(--ui-glow)) rgb(var(--accent-2));
+}
+.lbl-chip {
+  padding: 1px 6px;
+  border-radius: var(--ui-radius);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: #ffe9c9;
+  background: rgb(var(--accent-2) / 0.2);
+  border: 1px solid rgb(var(--accent-2) / 0.6);
+  box-shadow: 0 0 calc(12px * var(--ui-glow)) rgb(var(--accent-2) / calc(0.35 * var(--ui-glow)));
+}
+
+/* Tiny uppercase caption used inside panels. */
+.panel-cap {
+  font-size: 10.5px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.5 * var(--ui-glow)));
+}
+.panel-close {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--dim);
+  transition: color 0.15s;
+}
+.panel-close:hover {
+  color: var(--text);
+}
+.panel-note {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--faint);
+}
+
+/* Viewport HUD strip: docked to a pane edge, dimmed until hovered so it
+ * never competes with the geometry underneath. */
+/* Раньше полоска стояла на opacity .38 и проявлялась только под курсором —
+ * это прятало функцию: подписи по 9 px на треть яркости не прочитать, их
+ * надо было сначала найти. Теперь она видна всегда и лишь чуть уступает
+ * чертежу по контрасту. */
+.hud-strip {
+  display: flex;
+  border-radius: var(--ui-radius);
+  border: 1px solid transparent;
+  background: var(--edge);
+  backdrop-filter: blur(10px);
+  padding: 5px 10px;
+  opacity: 0.9;
+  transition:
+    opacity 0.18s,
+    box-shadow 0.18s;
+}
+.hud-strip:hover {
+  opacity: 1;
+  box-shadow: 0 0 calc(18px * var(--ui-glow)) rgb(var(--accent) / calc(0.22 * var(--ui-glow)));
+}
+.hud-strip input[type='range'] {
+  width: 4.5rem;
+}
+/* Контекстные настройки в ленте (сейчас — «Проёмы»). Не отдельная панель со
+ * своим фоном: она стоит в ленте, а лента уже поверхность. Отделяется слева
+ * акцентной чертой — тем же приёмом, что и метка активного окна.
+ *
+ * Регуляторы В СТОЛБИК, а не в строку. Строкой они занимали 650 px, лента
+ * переносила кнопки на лишние ряды и вырастала вдвое — то есть съедала
+ * чертёж не хуже, чем панель поверх него. Столбик встаёт в уже имеющуюся
+ * высоту ленты и не двигает ничего. */
+.op-bar {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  margin-left: 6px;
+  padding-left: 9px;
+  border-left: 2px solid rgb(var(--accent) / 0.7);
+}
+.op-bar.hidden {
+  display: none !important;
+}
+.op-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.op-row .hud-cap {
+  min-width: 3.4rem;
+  font-size: 9.5px;
+}
+.op-row input[type='range'] {
+  width: 3.6rem;
+}
+.op-row .hud-val {
+  min-width: 3.4rem;
+  font-size: 11px;
+}
+/* Кнопки панели проёмов: мотивы mini-btn, но по росту ряда ленты. */
+.op-btn {
+  cursor: pointer;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgb(var(--accent) / 0.55);
+  background: rgb(var(--accent) / 0.08);
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgb(var(--accent-soft));
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+.op-btn:hover {
+  color: #fff;
+  border-color: rgb(var(--accent));
+  background: rgb(var(--accent) / 0.2);
+}
+/* Взведённое состояние: РЕЛЬЕФ включён, ОБЛАСТЬ ждёт обводку. */
+.op-btn[data-on='true'] {
+  color: #fff;
+  border-color: rgb(var(--accent));
+  background: rgb(var(--accent) / 0.28);
+}
+.op-btn.hidden {
+  display: none !important;
+}
+/* Тумблер-рычажок в рядах панели проёмов (СЕТКА/МИН/ФОРМА/ЦВЕТ) — та же
+ * деталь, что у ПРИВЯЗКА/ОРТО/ТОЛЩ выше, просто на настоящем чекбоксе:
+ * appearance:none превращает сам input в трек, ::after — скользящая
+ * точка от :checked. Значение/обработчик не тронуты — читают .checked
+ * как обычно. */
+.op-row input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 20px;
+  height: 11px;
+  margin: 0;
+  flex: none;
+  cursor: pointer;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #26282d, #131417);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  transition: box-shadow 0.16s ease;
+}
+.op-row input[type='checkbox']::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3.3px;
+  width: 7.2px;
+  height: 7.2px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: radial-gradient(circle at 32% 26%, #7d828c, #4d5058 70%);
+  transition:
+    left 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.op-row input[type='checkbox']:checked {
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+    0 0 calc(8px * var(--ui-glow)) rgb(var(--accent) / calc(0.6 * var(--ui-glow)));
+}
+.op-row input[type='checkbox']:checked::after {
+  left: 9.5px;
+  background: radial-gradient(circle at 32% 26%, rgb(var(--accent-soft)), rgb(var(--accent)) 70%);
+  box-shadow: 0 0 calc(8px * var(--ui-glow)) rgb(var(--accent) / calc(0.8 * var(--ui-glow)));
+}
+.op-chip {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  cursor: pointer;
+  border: 1px solid rgb(255 255 255 / 0.35);
+  border-radius: 3px;
+}
+.op-chip.hidden {
+  display: none !important;
+}
+/* Легенда качества вписания. Цвета те же, что у рамок на чертеже, — иначе
+ * легенда пришлось бы читать, а не узнавать. */
+.op-cap {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.op-q {
+  cursor: default;
+}
+.op-q[data-q='good'] {
+  color: rgb(var(--ok));
+}
+.op-q[data-q='fair'] {
+  color: rgb(var(--accent-2));
+}
+.op-q[data-q='poor'] {
+  color: rgb(var(--bad));
+}
+
+/* Стрелки у ползунка. Лента шириной в четыре сантиметра мышью не наводится:
+ * один пиксель — это два-три сантиметра отметки, и попасть в нужное значение
+ * перетаскиванием нельзя в принципе. Клик по стрелке двигает ровно на шаг. */
+.hud-step {
+  flex: none;
+  width: 15px;
+  align-self: stretch;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--dim);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+.hud-step:hover {
+  color: rgb(var(--accent-soft));
+  background: rgb(var(--accent) / 0.18);
+}
+.hud-step:active {
+  background: rgb(var(--accent) / 0.32);
+}
+
+.hud-cap {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+/* Числа моноширинные — подпись размера на чертеже тоже моноширинная,
+ * и колонка цифр не «дышит» при перетаскивании ползунка. */
+.hud-val {
+  min-width: 3.6rem;
+  text-align: right;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 calc(10px * var(--ui-glow)) rgb(var(--accent) / calc(0.55 * var(--ui-glow)));
+}
+.hud-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* ═════════════════════ status bar ═════════════════════ */
+
+.stat-num {
+  min-width: 1.8rem;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.stat-cap {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.status-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Active-layer color chip next to the layer combo. */
+.layer-swatch {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  cursor: pointer;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: #dde6ff;
+  transition:
+    box-shadow 0.15s,
+    border-color 0.15s;
+}
+.layer-swatch:hover {
+  border-color: rgb(var(--accent) / 0.9);
+  box-shadow: 0 0 calc(10px * var(--ui-glow)) rgb(var(--accent) / calc(0.7 * var(--ui-glow)));
+}
+
+/* ═════════════════════ ribbon ═════════════════════ */
+
+.rib-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.rib-tools {
+  display: flex;
+  gap: var(--ui-gap);
+}
+.rib-title {
+  margin-top: 1px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--faint);
+  user-select: none;
+}
+
+.rib-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 3px;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+}
+
+/* Fallback when the ribbon still cannot fit: a barely-there scrollbar. */
+#ribbon-groups {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--accent) / 0.35) transparent;
+}
+#ribbon-groups::-webkit-scrollbar {
+  height: 4px;
+}
+#ribbon-groups::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(var(--accent) / 0.35);
+}
+#ribbon-groups::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Кнопки ленты — как в AutoCAD: квадрат под значок, БЕЗ подписи, вплотную
+ * друг к другу; имя команды живёт во всплывающей подсказке. Подпись под
+ * значком стоила 7 px кегля (нечитаемо) и трети ширины ленты.
+ *
+ * Включённый инструмент помечается «авророй»: по периметру бежит кольцо
+ * из акцента, гаснущее в --aurora-2. Светится ровно один элемент экрана —
+ * тот, которым сейчас работают; заливкой это не передать, а свечение
+ * пользователь увёл в ноль. */
+.tool-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--btn);
+  height: var(--btn);
+  padding: 0;
+  border-radius: var(--ui-radius);
+  color: var(--muted);
+  cursor: pointer;
+  /* Всё тело кнопки собрано из --ui-btn-relief: в нуле не остаётся ни
+   * подложки, ни кромки, ни тени — чистый значок на поле ленты; в единице
+   * это выпуклая клавиша. Одна ручка вместо двух наборов правил. */
+  border: 1px solid rgba(255, 255, 255, calc(0.1 * var(--ui-btn-relief)));
+  background: var(--btn-face);
+  box-shadow: var(--btn-bevel), var(--btn-lift);
+  transition:
+    color 0.13s,
+    background 0.13s,
+    border-color 0.13s,
+    box-shadow 0.18s,
+    transform 0.1s;
+}
+.tool-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgb(var(--accent) / 0.45);
+  box-shadow:
+    var(--btn-bevel),
+    var(--btn-lift),
+    0 0 calc(16px * var(--ui-glow)) rgb(var(--accent) / calc(0.32 * var(--ui-glow)));
+}
+/* Нажатие: кнопка уходит внутрь ровно настолько, насколько выступала. */
+.tool-btn:active {
+  transform: translateY(calc(1px * var(--ui-btn-relief) + 0.5px));
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 calc(2px * var(--ui-btn-relief)) calc(5px * var(--ui-btn-relief)) rgba(0, 0, 0, 0.6);
+}
+.tool-btn svg {
+  position: relative;
+  z-index: 2;
+  width: var(--ui-icon);
+  height: var(--ui-icon);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* ДВУХЦВЕТНЫЕ ЗНАЧКИ, как в больших CAD: основной контур светлый,
+ * вспомогательные линии — акцентом темы. Значки уже размечены самой
+ * рисовкой: детали несут opacity/штриховку, точки — заливку currentColor.
+ * Красим по этим признакам разом, не трогая каждую иконку. */
+.tool-btn {
+  color: #d4deeb; /* основной штрих — светлый, а не серый */
+}
+.tool-btn svg [opacity],
+.tool-btn svg [stroke-dasharray] {
+  stroke: rgb(var(--accent));
+  opacity: 0.9;
+}
+.tool-btn svg [fill='currentColor'] {
+  fill: rgb(var(--accent));
+  stroke: none;
+}
+.tool-btn:hover {
+  color: #ffffff;
+}
+.tool-btn[data-active='true'] {
+  color: #fff;
+  border-color: transparent;
+  background: none;
+  box-shadow: 0 0 calc(24px * var(--ui-glow)) rgb(var(--accent) / calc(0.45 * var(--ui-glow)));
+}
+.tool-btn[data-active='true'] svg {
+  filter: drop-shadow(0 0 calc(6px * var(--ui-glow)) rgb(var(--accent)));
+}
+
+/* Слой кольца. Отдельным элементом, а не псевдо-элементом кнопки: у
+ * кнопки псевдо-элементы ещё понадобятся, а тут их нужно ровно два —
+ * вращающийся градиент и заглушка, оставляющая от него рамку в 1.5 px. */
+.tool-btn .fx {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* Кольцо в два слоя. Ровная акцентная подложка держит рамку ВСЕГДА:
+ * один бегущий сегмент отвечал бы на вопрос «какой инструмент включён»
+ * только те доли секунды, что он на видимой стороне. Сверху по ней идёт
+ * комета — она и делает кнопку живой. */
+.tool-btn[data-active='true'] .fx::before {
+  content: '';
+  position: absolute;
+  inset: -60%;
+  background:
+    conic-gradient(from 0deg, transparent 0%, #fff 14%, rgb(var(--aurora-2)) 30%, transparent 48%),
+    linear-gradient(rgb(var(--accent) / 0.85), rgb(var(--accent) / 0.85));
+  animation: aurora-spin 3.2s linear infinite;
+}
+.tool-btn[data-active='true'] .fx::after {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  border-radius: inherit;
+  /* Заглушка, оставляющая от вращающегося градиента только рамку. Собрана
+   * из того же, из чего лицо обычной кнопки, — иначе включённая читалась бы
+   * как приклеенная плашка другого тона. Акцентная подложка поверх держит
+   * её включённой и на неподвижном кадре: в инструкции, на скриншоте,
+   * в надзорной панели. Непрозрачный --bg снизу обязателен: сквозь дырку
+   * било бы вращающееся кольцо. */
+  background:
+    linear-gradient(rgb(var(--accent) / 0.12), rgb(var(--accent) / 0.12)),
+    linear-gradient(var(--btn-face), var(--btn-face)),
+    var(--bg);
+  box-shadow: var(--btn-bevel);
+}
+@keyframes aurora-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+/* Кольцо крутится только у включённого инструмента, а их на экране один.
+ *
+ * У кого в Windows выключены «Эффекты анимации», браузер сообщает
+ * prefers-reduced-motion, и раньше здесь стояло animation: none — кольцо
+ * замирало ровной рамкой, и «бегущей кометы» человек не видел вовсе.
+ * Настройка эта на рабочих машинах выключена сплошь и рядом, а комета —
+ * осознанное решение, а не украшение: она единственная показывает, что
+ * инструмент взведён. Поэтому движение остаётся, но втрое медленнее:
+ * оно перестаёт цеплять взгляд и не мешает тем, кому быстрое движение
+ * противопоказано. */
+@media (prefers-reduced-motion: reduce) {
+  .tool-btn[data-active='true'] .fx::before {
+    animation-duration: 9.5s;
+  }
+}
+.tool-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ─── ribbon edit mode (перетаскивание кнопок по панелям) ─── */
+
+#ribbon[data-edit='true'] .tool-btn {
+  cursor: grab;
+  outline: 1px dashed rgb(var(--accent) / 0.45);
+  outline-offset: 2px;
+}
+#ribbon[data-edit='true'] .tool-btn:active {
+  cursor: grabbing;
+}
+.tool-btn.dragging {
+  opacity: 0.35;
+}
+.rib-group.drop-target {
+  border-radius: 12px;
+  background: rgb(var(--accent) / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent) / 0.6);
+}
+#ribbon[data-edit='true'] .rib-title {
+  color: rgb(var(--accent-soft));
+  cursor: text;
+}
+.rib-del {
+  cursor: pointer;
+  color: rgb(var(--bad));
+}
+.rib-edit-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+/* ═════════════════════ pills & selects ═════════════════════ */
+
+/* Режимы: выключённый — просто надпись, включённый — акцентная рамка.
+ * Зелёный из этой роли ушёл: он остался за секущей рамкой, где означает
+ * другое, а два разных «включено» на одном экране путают. */
+/* Режимы по-чертёжному: включённое подчёркнуто снизу линией, как выноска
+ * на листе, а не обведено рамкой. Зелёный из этой роли ушёл — он остался
+ * за секущей рамкой, где означает другое. */
+.pill {
+  cursor: pointer;
+  border-radius: var(--ui-radius);
+  border: 1px solid transparent;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.14);
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.2s;
+}
+.pill:hover {
+  color: var(--text);
+  border-bottom-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.04);
+}
+.pill[data-on='true'] {
+  color: rgb(var(--accent-soft));
+  border-bottom-color: rgb(var(--accent));
+  background: rgb(var(--accent) / 0.1);
+  box-shadow: 0 0 calc(16px * var(--ui-glow)) rgb(var(--accent) / calc(0.45 * var(--ui-glow)));
+  text-shadow: 0 0 calc(8px * var(--ui-glow)) rgb(var(--accent) / calc(0.7 * var(--ui-glow)));
+}
+/* ── тумблер-рычажок для ПРИВЯЗКА/ОРТО/ТОЛЩ (2026-08-08) ─────────────
+ * Явная просьба пользователя: полноценный переключатель со свечением,
+ * а не только подчёркивание снизу — сознательно поверх чертёжной
+ * философии выше ("лист не бывает выпуклым"), для этих трёх конкретно.
+ * Ничего не меняет в разметке/JS: тот же .pill[data-on], у ЭТИХ трёх
+ * (#pill-snap/#pill-ortho/#pill-weight) просто добавлен псевдоэлемент
+ * ::after — трек + скользящая точка через background-position/gradient,
+ * подчёркивание текста остаётся как было. */
+#pill-snap,
+#pill-ortho,
+#pill-weight {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#pill-snap::after,
+#pill-ortho::after,
+#pill-weight::after {
+  content: '';
+  width: 20px;
+  height: 11px;
+  flex: none;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle 3.6px at 5.5px 5.5px, #6a6f78 0%, #6a6f78 60%, transparent 61%) no-repeat,
+    linear-gradient(180deg, #26282d, #131417);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+#pill-snap[data-on='true']::after,
+#pill-ortho[data-on='true']::after,
+#pill-weight[data-on='true']::after {
+  background:
+    radial-gradient(circle 3.6px at 14.5px 5.5px, rgb(var(--accent-soft)) 0%, rgb(var(--accent)) 65%, transparent 66%) no-repeat,
+    linear-gradient(180deg, #26282d, #131417);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+    0 0 calc(10px * var(--ui-glow)) rgb(var(--accent) / calc(0.8 * var(--ui-glow)));
+}
+
+/* The cut-orientation pill is a mode switch, not an on/off state. */
+#section-mode[data-on='true'],
+#profile-mode[data-on='true'] {
+  color: #fff;
+  border-bottom-color: rgb(var(--accent));
+  background: rgb(var(--accent) / 0.18);
+  box-shadow: 0 0 calc(16px * var(--ui-glow)) rgb(var(--accent) / calc(0.45 * var(--ui-glow)));
+  text-shadow: 0 0 calc(8px * var(--ui-glow)) rgb(var(--accent) / calc(0.7 * var(--ui-glow)));
+}
+
+#ucs-select,
+#layer-select {
+  cursor: pointer;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgb(var(--surface) / 0.7);
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+#ucs-select:hover,
+#layer-select:hover {
+  border-color: rgb(var(--accent) / 0.6);
+  box-shadow: 0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.25 * var(--ui-glow)));
+}
+#layer-select {
+  max-width: 6.5rem;
+}
+#ucs-select {
+  max-width: 6rem;
+}
+/* Layer combo retargets to the SELECTION — flag that it will move objects. */
+#layer-select[data-selection='true'] {
+  border-color: rgb(var(--accent) / 0.75);
+  color: rgb(var(--accent-soft));
+  box-shadow: 0 0 12px rgb(var(--accent) / 0.3);
+}
+#ucs-select option,
+#layer-select option,
+#cp-mode option,
+.lr-select option {
+  background: var(--panel-solid);
+  color: var(--text);
+}
+#ucs-select:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* ═════════════════════ sliders ═════════════════════ */
+
+input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 4px;
+  width: 7rem;
+  cursor: ew-resize;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(var(--accent) / 0.9), rgb(var(--accent) / 0.15));
+  box-shadow: 0 0 calc(10px * var(--ui-glow)) rgb(var(--accent) / calc(0.3 * var(--ui-glow)));
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  /* Блик сверху-слева — колпачок читается как объёмная рукоятка фейдера,
+   * а не плоская точка (просьба пользователя, 2026-08-08). */
+  background: radial-gradient(circle at 32% 26%, rgb(var(--accent-soft)), rgb(var(--accent)) 72%);
+  border: 2px solid var(--bg);
+  box-shadow:
+    0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.8 * var(--ui-glow))),
+    inset 0 1px 1px rgba(255, 255, 255, 0.45);
+}
+input[type='range']::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 26%, rgb(var(--accent-soft)), rgb(var(--accent)) 72%);
+  border: 2px solid var(--bg);
+  box-shadow:
+    0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.8 * var(--ui-glow))),
+    inset 0 1px 1px rgba(255, 255, 255, 0.45);
+}
+
+/* ═════════════════════ readouts ═════════════════════ */
+
+.hint-text {
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.35rem;
+  color: var(--muted);
+}
+.coords-text {
+  font-family: ui-monospace, 'Cascadia Mono', monospace;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.cheat {
+  font-size: 11px;
+  line-height: 1.15rem;
+  color: var(--faint);
+}
+.cheat b {
+  color: var(--muted);
+  font-weight: 600;
+}
+#dyn-input {
+  border-radius: var(--ui-radius);
+  border: 1px solid rgb(var(--accent) / 0.7);
+  background: rgba(11, 12, 13, 0.92);
+  padding: 2px 9px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  color: rgb(var(--accent-soft));
+  box-shadow: 0 0 calc(16px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow)));
+}
+
+/* ═════════════════════ marquee ═════════════════════ */
+
+/* AutoCAD-style: L→R window (solid), R→L crossing (dashed). */
+/* Рамка «слева направо» — синяя сплошная, «справа налево» — зелёная
+ * пунктирная: ровно те цвета и та манера, что в AutoCAD. */
+#marquee {
+  border: 1px solid rgb(var(--accent) / 0.9);
+  background: rgb(var(--accent) / 0.14);
+  box-shadow:
+    0 0 calc(18px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow))),
+    inset 0 0 22px rgb(var(--accent) / 0.08);
+}
+#marquee[data-crossing='true'] {
+  border-style: dashed;
+  border-color: rgb(var(--ok) / 0.9);
+  background: rgb(var(--ok) / 0.14);
+  box-shadow:
+    0 0 calc(18px * var(--ui-glow)) rgb(var(--ok) / calc(0.35 * var(--ui-glow))),
+    inset 0 0 22px rgb(var(--ok) / 0.08);
+}
+
+/* ═════════════════════ round icon buttons ═════════════════════ */
+
+.eye-btn {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  height: 32px;
+  width: 32px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(14, 16, 18, 0.72);
+  color: var(--muted);
+  backdrop-filter: blur(14px);
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.2s;
+}
+.eye-btn:hover {
+  color: #fff;
+  border-color: rgb(var(--accent) / 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 calc(20px * var(--ui-glow)) rgb(var(--accent) / calc(0.5 * var(--ui-glow)));
+}
+.eye-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.eye-btn[data-on='false'] {
+  color: #4c5150;
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* ═════════════════════ layers panel ═════════════════════ */
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.2s;
+}
+.layer-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.layer-row[data-current='true'] {
+  border-color: rgb(var(--accent) / 0.5);
+  background: rgb(var(--accent) / 0.1);
+  box-shadow:
+    inset 0 0 14px rgb(var(--accent) / 0.1),
+    0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.12 * var(--ui-glow)));
+}
+
+/* current-layer radio dot */
+.lr-cur {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  cursor: pointer;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    border-color 0.15s;
+}
+.lr-cur:hover {
+  border-color: rgb(var(--accent) / 0.8);
+}
+.layer-row[data-current='true'] .lr-cur {
+  border-color: rgb(var(--accent));
+  background: rgb(var(--accent));
+  box-shadow: 0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.9 * var(--ui-glow)));
+}
+
+.lr-color {
+  width: 22px;
+  height: 18px;
+  flex: none;
+  cursor: pointer;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0;
+}
+.lr-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.lr-color::-webkit-color-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+}
+
+.lr-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+  font-size: 12px;
+  color: var(--text);
+}
+.layer-row[data-current='true'] .lr-name {
+  color: rgb(var(--accent-soft));
+}
+
+.lr-select {
+  flex: none;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  padding: 1px 3px;
+  font-size: 10px;
+  color: var(--muted);
+  outline: none;
+}
+.lr-select:hover {
+  border-color: rgb(var(--accent) / 0.5);
+}
+.lr-weight {
+  width: 52px;
+}
+
+.lr-count {
+  min-width: 18px;
+  flex: none;
+  text-align: right;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.layer-row[data-current='true'] .lr-count {
+  color: rgb(var(--accent-soft) / 0.95);
+}
+
+.lr-eye {
+  width: 22px;
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+  transition: color 0.15s;
+}
+.lr-eye[data-on='false'] {
+  color: #4c5150;
+}
+.lr-eye:hover {
+  color: #fff;
+}
+
+.lr-del {
+  width: 18px;
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--faint);
+  transition: color 0.15s;
+}
+.lr-del:hover {
+  color: rgb(var(--bad));
+}
+.lr-del:disabled {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+.mini-btn {
+  cursor: pointer;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgb(var(--accent) / 0.6);
+  background: rgb(var(--accent) / 0.1);
+  padding: 5px 13px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: rgb(var(--accent-soft));
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.2s;
+}
+.mini-btn:hover {
+  color: #fff;
+  border-color: rgb(var(--accent));
+  background: rgb(var(--accent) / 0.22);
+  box-shadow: 0 0 calc(18px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow)));
+}
+
+/* Cloud display panel rows */
+.cp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+#cp-mode {
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--muted);
+  outline: none;
+}
+
+/* ═════════════════════ elevation aids (side view) ═════════════════════ */
+
+/* Metre scale down the left edge of the drafting pane and a guide line at
+ * the cursor: the level of a cut is a NUMBER, and it has to be readable
+ * without dragging a slider to find out where you are. */
+.elev-scale {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.elev-tick {
+  position: absolute;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transform: translateY(-50%);
+}
+.elev-tick::before {
+  content: '';
+  width: 14px;
+  height: 1px;
+  background: rgb(var(--accent) / 0.35);
+}
+.elev-tick[data-major='true'] {
+  color: var(--text);
+}
+.elev-tick[data-major='true']::before {
+  width: 26px;
+  background: rgb(var(--accent) / 0.75);
+  box-shadow: 0 0 calc(8px * var(--ui-glow)) rgb(var(--accent) / calc(0.5 * var(--ui-glow)));
+}
+
+/* Мерная сетка глубины окна 2: те же мотивы, что у шкалы отметок, но лента
+ * лежит вдоль оси глубины — по низу окна (ВЕРТ) или по правому краю (ГОРИЗ).
+ * Подписи — мм от плоскости ПСК; к этой сетке прилипают оси среза. */
+.depth-ruler {
+  position: fixed;
+  z-index: 12;
+  overflow: hidden;
+  pointer-events: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.depth-ruler.hidden {
+  display: none !important;
+}
+.dr-tick {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.depth-ruler[data-horizontal='true'] .dr-tick {
+  bottom: 0;
+  flex-direction: column-reverse;
+  transform: translateX(-50%);
+  align-items: center;
+  gap: 1px;
+}
+.depth-ruler[data-horizontal='true'] .dr-tick::before {
+  content: '';
+  width: 1px;
+  height: 6px;
+  background: rgb(var(--accent) / 0.35);
+}
+.depth-ruler[data-horizontal='false'] .dr-tick {
+  right: 0;
+  flex-direction: row-reverse;
+  transform: translateY(-50%);
+  gap: 4px;
+}
+.depth-ruler[data-horizontal='false'] .dr-tick::before {
+  content: '';
+  width: 6px;
+  height: 1px;
+  background: rgb(var(--accent) / 0.35);
+}
+.dr-tick[data-major='true'] {
+  color: var(--text);
+}
+.depth-ruler[data-horizontal='true'] .dr-tick[data-major='true']::before {
+  height: 10px;
+  background: rgb(var(--accent) / 0.75);
+}
+.depth-ruler[data-horizontal='false'] .dr-tick[data-major='true']::before {
+  width: 10px;
+  background: rgb(var(--accent) / 0.75);
+}
+
+/* ГРИПЫ ГРАНИЦ ОКОН: невидимые полосы-ручки поверх разделителей. Подсветка
+ * на наведении говорит «за меня можно тянуть», курсор — куда. */
+.split-grip {
+  position: fixed;
+  z-index: 15;
+  background: transparent;
+  transition: background 0.15s;
+}
+.split-grip:hover,
+.split-grip[data-drag='true'] {
+  background: rgb(var(--accent) / 0.28);
+}
+.split-grip-v {
+  top: var(--ribbon-h, 4.2rem);
+  bottom: 0;
+  left: calc(var(--split-x, 62vw) - 3px);
+  width: 7px;
+  cursor: col-resize;
+}
+.split-grip-h {
+  left: var(--split-x, 62vw);
+  right: 0;
+  top: calc(var(--split-y) - 3px);
+  height: 7px;
+  cursor: row-resize;
+}
+
+/* Крестики «убрать окно» в углах окон 2/3 и чипы возврата. */
+.pane-close {
+  position: fixed;
+  z-index: 16;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: var(--ui-radius);
+  background: rgb(var(--surface) / 0.7);
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.pane-close:hover {
+  color: #fff;
+  border-color: rgb(var(--bad) / 0.8);
+}
+.pane-restore {
+  position: fixed;
+  z-index: 16;
+  right: 0.4rem;
+  top: calc(var(--ribbon-h, 4.2rem) + 2.6rem);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pane-restore .mini-btn.hidden {
+  display: none !important;
+}
+
+/* Скрытые окна: их оверлеи гаснут, место забирают соседи. */
+body.no-profile #lbl-profile,
+body.no-profile #section-panel,
+body.no-profile #eye-profile,
+body.no-profile #gear-profile,
+body.no-profile #cloudeye-profile,
+body.no-profile #close-profile,
+body.no-profile #depth-ruler,
+body.no-profile #sep-h,
+body.no-profile #split-h,
+body.no-iso #lbl-iso,
+body.no-iso #cursor-panel,
+body.no-iso #orbit-pad,
+body.no-iso #eye-iso,
+body.no-iso #gear-iso,
+body.no-iso #cloudeye-iso,
+body.no-iso #close-iso,
+body.no-iso #sep-h,
+body.no-iso #split-h {
+  display: none !important;
+}
+body.no-right #sep-v,
+body.no-right #split-v {
+  display: none !important;
+}
+
+.elev-cursor {
+  position: fixed;
+  z-index: 12;
+  pointer-events: none;
+  height: 0;
+  border-top: 1px dashed rgb(var(--accent) / 0.75);
+}
+.elev-cursor span {
+  position: absolute;
+  left: 34px;
+  top: -10px;
+  padding: 2px 8px;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgb(var(--accent) / 0.6);
+  background: rgba(11, 12, 13, 0.92);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--accent-soft));
+  box-shadow: 0 0 calc(14px * var(--ui-glow)) rgb(var(--accent) / calc(0.3 * var(--ui-glow)));
+}
+
+/* Typed value next to a slider — for setting a level or a thickness by
+ * number instead of by feel. */
+.hud-num {
+  width: 4.4rem;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px 6px;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: rgb(var(--accent-soft));
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.hud-num:focus {
+  border-color: rgb(var(--accent) / 0.75);
+  box-shadow: 0 0 calc(12px * var(--ui-glow)) rgb(var(--accent) / calc(0.3 * var(--ui-glow)));
+}
+.hud-num::-webkit-outer-spin-button,
+.hud-num::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* Виньетка: края кадра уходят в чёрное, и облако точек перестаёт «вытекать»
+ * за пределы окна. Лежит НАД холстом, но под всей управляющей мелочью,
+ * поэтому ничего не перехватывает и ничего не закрывает. */
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 160px 30px rgba(0, 0, 0, 0.72),
+    inset 0 0 0 1px rgb(var(--accent) / 0.1);
+}
+
+/* Focus ring around the pane that owns the commands. */
+.pane-focus {
+  position: fixed;
+  z-index: 11;
+  pointer-events: none;
+  border-radius: var(--ui-radius);
+  box-shadow:
+    inset 0 0 0 2px rgb(var(--accent) / 0.95),
+    inset 0 0 26px rgb(var(--accent) / 0.28),
+    0 0 calc(18px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow)));
+  transition:
+    left 0.12s,
+    top 0.12s,
+    width 0.12s,
+    height 0.12s;
+}
+
+/* ═════════════════════ user guide ═════════════════════ */
+
+.help-body {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #c6ccca;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--accent) / 0.4) transparent;
+}
+.help-body::-webkit-scrollbar {
+  width: 7px;
+}
+.help-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(var(--accent) / 0.4);
+}
+.help-body h1 {
+  margin: 0 0 6px;
+  font-size: 19px;
+  font-weight: 600;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 calc(16px * var(--ui-glow)) rgb(var(--accent) / calc(0.5 * var(--ui-glow)));
+}
+.help-body h2 {
+  margin: 26px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 15px;
+  font-weight: 600;
+  color: rgb(var(--accent-soft));
+}
+.help-body h3 {
+  margin: 16px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.help-body p {
+  margin: 8px 0;
+}
+.help-body ul,
+.help-body ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.help-body ul {
+  list-style: disc;
+}
+.help-body ol {
+  list-style: decimal;
+}
+.help-body li {
+  margin: 3px 0;
+}
+.help-body b {
+  color: #fff;
+  font-weight: 600;
+}
+.help-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgb(var(--accent) / 0.16);
+  color: rgb(var(--accent-soft));
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.help-body hr {
+  margin: 18px 0 0;
+  border: 0;
+}
+.help-body table {
+  width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.help-body th {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgb(var(--accent) / 0.4);
+  text-align: left;
+  color: rgb(var(--accent-soft));
+  font-weight: 600;
+}
+.help-body td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+.help-body tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ═════════════════════ start overlay ═════════════════════ */
+
+#start-overlay {
+  background: rgba(8, 9, 10, 0.95);
+}
+
+/* Заставка — единственное место, где неон уместен при любом --ui-glow:
+ * это первый кадр, а не рабочий экран. Но и он держит выбранный уровень. */
+.start-logo {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5em;
+  color: #fff;
+  text-shadow:
+    0 0 14px rgb(var(--accent) / calc(0.35 + 0.6 * var(--ui-glow))),
+    0 0 40px rgb(var(--accent) / calc(0.6 * var(--ui-glow)));
+}
+
+.start-btn {
+  cursor: pointer;
+  border-radius: var(--ui-radius);
+  border: 1px solid rgb(var(--accent) / 0.65);
+  background:
+    linear-gradient(180deg, rgb(var(--accent) / 0.22), rgb(var(--accent) / 0.06)),
+    var(--panel);
+  padding: 16px 44px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  color: #fff;
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 0 calc(34px * var(--ui-glow)) rgb(var(--accent) / calc(0.35 * var(--ui-glow))),
+    inset 0 0 20px rgb(var(--accent) / 0.1),
+    var(--bevel);
+  transition:
+    box-shadow 0.2s,
+    background 0.2s,
+    transform 0.1s;
+}
+.start-btn:hover {
+  background:
+    linear-gradient(180deg, rgb(var(--accent) / 0.36), rgb(var(--accent) / 0.12)),
+    var(--panel);
+  box-shadow:
+    0 0 calc(54px * var(--ui-glow)) rgb(var(--accent) / calc(0.55 * var(--ui-glow))),
+    inset 0 0 26px rgb(var(--accent) / 0.16),
+    var(--bevel);
+}
+.start-btn:active {
+  transform: translateY(1px);
+}
+.start-formats {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: var(--faint);
+}
+.start-progress {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgb(var(--accent-soft));
+  text-shadow: 0 0 calc(18px * var(--ui-glow)) rgb(var(--accent) / calc(0.6 * var(--ui-glow)));
+}
+.start-link {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--dim);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-color: rgba(255, 255, 255, 0.18);
+  transition: color 0.15s;
+}
+.start-link:hover {
+  color: var(--text);
+}
+.start-link.accent {
+  color: rgb(var(--accent-soft) / 0.95);
+  text-decoration-color: rgb(var(--accent) / 0.5);
+}
+.start-link.accent:hover {
+  color: #fff;
+  text-shadow: 0 0 10px rgb(var(--accent) / 0.7);
+}

@@ -1,0 +1,11 @@
+{
+  "name": "ctf-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Надзорный сервер для FACADE·CAD и TOPO·CAD: раздача приложений, присутствие, живой экран, перехват управления. Зависимостей нет.",
+  "scripts": {
+    "start": "node server.mjs",
+    "build-apps": "node ../node_modules/vite/bin/vite.js build .. && node ../node_modules/vite/bin/vite.js build ../CtFT"
+  }
+}

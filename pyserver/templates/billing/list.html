@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Подписки клиентов{% endblock %}
+{% block page_icon %}bi-credit-card{% endblock %}
+{% block page_title %}Подписки клиентов{% endblock %}
+{% block content %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <div class="card surface-card mb-3">
+    <div class="card-body py-2 d-flex justify-content-between align-items-center">
+      <input type="text" id="subsSearch" class="form-control form-control-sm" style="max-width: 280px" placeholder="Поиск по логину...">
+      <div class="text-secondary small">Кликните по строке, чтобы изменить подписку</div>
+    </div>
+  </div>
+
+  <div class="card surface-card">
+    <div class="table-responsive">
+      <table class="table table-clean align-middle mb-0" id="subsTable">
+        <thead>
+          <tr><th>Пользователь</th><th>Email</th><th>Доступ</th><th>Подписка</th><th>Тариф</th><th>До</th></tr>
+        </thead>
+        <tbody>
+        {% for u in users %}
+          <tr class="subs-row" role="button" data-user-id="{{ u.id }}" style="cursor: pointer">
+            <td>{{ u.user_name }}</td>
+            <td>{{ u.email|default:"—" }}</td>
+            <td>{% if u.is_active %}<span class="badge text-bg-success">активен</span>{% else %}<span class="badge text-bg-secondary">неактивен</span>{% endif %}</td>
+            <td id="subStatus{{ u.id }}"></td>
+            <td id="subPlan{{ u.id }}"></td>
+            <td id="subEnds{{ u.id }}"></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="text-muted">Нет пользователей</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="modal fade" id="subModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form method="post" action="{% url 'subscriptions' %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="create">
+          <input type="hidden" name="user_id" id="modalUserId">
+          <div class="modal-header">
+            <h5 class="modal-title">Подписка: <span id="modalUserName"></span></h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label small">Тариф</label>
+              <input type="text" name="plan_name" id="modalPlanName" class="form-control" placeholder="Базовый / RTK Pro...">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">Действует до*</label>
+              <input type="date" name="ends_at" id="modalEndsAt" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">Комментарий</label>
+              <input type="text" name="note" id="modalNote" class="form-control">
+            </div>
+            <div id="modalHistoryWrap" class="d-none">
+              <h6 class="h6 small text-secondary mb-2">История подписок</h6>
+              <div class="table-responsive">
+                <table class="table table-sm">
+                  <thead><tr><th>Тариф</th><th>С</th><th>До</th><th>Статус</th><th>Коммент.</th></tr></thead>
+                  <tbody id="modalHistoryBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="modalCancelSub" class="btn btn-outline-danger me-auto d-none">Отозвать текущую</button>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Закрыть</button>
+            <button type="submit" class="btn btn-primary">Сохранить / продлить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <form method="post" action="{% url 'subscriptions' %}" id="cancelForm" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="cancel">
+    <input type="hidden" name="id" id="cancelSubId">
+  </form>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+const subsData = {{ modal_data_json|safe }};
+const subModalEl = document.getElementById('subModal');
+const subModal = new bootstrap.Modal(subModalEl);
+const statusPill = { active: '<span class="status-pill status-online">активна</span>',
+                      expired: '<span class="status-pill status-offline">истекла</span>',
+                      none: '<span class="status-pill status-unknown">нет</span>' };
+
+for (const [id, data] of Object.entries(subsData)) {
+  const st = document.getElementById('subStatus' + id);
+  if (st) st.innerHTML = statusPill[data.status] || statusPill.none;
+  const pl = document.getElementById('subPlan' + id);
+  if (pl) pl.textContent = data.planName || '—';
+  const en = document.getElementById('subEnds' + id);
+  if (en) en.textContent = data.endsAt || '—';
+}
+
+document.querySelectorAll('.subs-row').forEach(row => {
+  row.addEventListener('click', () => {
+    const data = subsData[row.dataset.userId];
+    if (!data) return;
+
+    document.getElementById('modalUserId').value = row.dataset.userId;
+    document.getElementById('modalUserName').textContent = data.userName;
+    document.getElementById('modalPlanName').value = data.planName || '';
+    document.getElementById('modalEndsAt').value = data.endsAt || '';
+    document.getElementById('modalNote').value = '';
+
+    const cancelBtn = document.getElementById('modalCancelSub');
+    if (data.activeSubId) {
+      cancelBtn.classList.remove('d-none');
+      cancelBtn.onclick = () => {
+        if (!confirm('Отозвать текущую подписку?')) return;
+        document.getElementById('cancelSubId').value = data.activeSubId;
+        document.getElementById('cancelForm').submit();
+      };
+    } else {
+      cancelBtn.classList.add('d-none');
+    }
+
+    const historyWrap = document.getElementById('modalHistoryWrap');
+    const historyBody = document.getElementById('modalHistoryBody');
+    historyBody.innerHTML = '';
+    if (data.history && data.history.length) {
+      historyWrap.classList.remove('d-none');
+      for (const h of data.history) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${h.planName}</td><td>${h.startsAt}</td><td>${h.endsAt}</td><td>${h.status}</td><td>${h.note}</td>`;
+        historyBody.appendChild(tr);
+      }
+    } else {
+      historyWrap.classList.add('d-none');
+    }
+
+    subModal.show();
+  });
+});
+
+document.getElementById('subsSearch').addEventListener('input', function () {
+  const q = this.value.trim().toLowerCase();
+  for (const row of document.querySelectorAll('#subsTable tbody tr')) {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  }
+});
+</script>
+{% endblock %}

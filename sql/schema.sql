@@ -224,6 +224,10 @@ CREATE INDEX IF NOT EXISTS idx_tours_created_by_user ON tours (created_by_user_i
 -- отзывает и публичный доступ, даже если is_public остался 1.
 ALTER TABLE tours ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
 
+-- tours.slam_scan_id (FK на slam_scans) добавляется НИЖЕ, в разделе
+-- "SLAM-обработка" — slam_scans создаётся только там, а FK не может
+-- ссылаться на ещё не существующую таблицу.
+
 -- ---------------------------------------------------------------------------
 -- Слои и аннотации (точки/линии/полигоны), нарисованные пользователем прямо
 -- на 3D-модели тура в map.php. Координаты — в локальном пространстве модели
@@ -300,6 +304,13 @@ CREATE TABLE IF NOT EXISTS station_status (
 -- is_manual = 1: при синхронизации из MDB эта строка не перезатирается.
 ALTER TABLE users_sync ADD COLUMN IF NOT EXISTS is_manual SMALLINT NOT NULL DEFAULT 0;
 
+-- Услуги, доступные обычному пользователю сверх базового кабинета
+-- (Карта/Мои туры) — см. users.php ("Услуги"), facade_cad.php. Админам
+-- инструменты доступны всегда, флаг только для users_sync.
+ALTER TABLE users_sync ADD COLUMN IF NOT EXISTS facade_cad_enabled SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE users_sync ADD COLUMN IF NOT EXISTS topo_cad_enabled SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE users_sync ADD COLUMN IF NOT EXISTS facade_foto_enabled SMALLINT NOT NULL DEFAULT 0;
+
 -- Резервный канал определения статуса — по наличию свежих файлов в
 -- каталоге станции на ftp://gnss.host (см. bin/poll_stations_ftp.php,
 -- запускается раз в час, в отличие от NTRIP-опроса раз в минуту).
@@ -351,3 +362,250 @@ CREATE TABLE IF NOT EXISTS rinex_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_rinex_requests_status ON rinex_requests (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_rinex_requests_creator ON rinex_requests (created_by, created_at);
+
+-- ---------------------------------------------------------------------------
+-- SLAM-обработка (перенос движка slamcloude в интерфейс gisdata — см.
+-- docs/SLAM_PIPELINE.md). Прямой аналог схемы slamcloude
+-- (backend/app/models.py: Project/Scan/ScanInput/Job/ProcessedAsset), в
+-- конвенциях gisdata (SMALLINT вместо bool-enum, VARCHAR+CHECK вместо
+-- native enum — см. комментарий про булевы флаги в начале файла). Данные с
+-- прошлых обработок (архивы/bag-файлы/готовые облака slamcloude) НЕ
+-- переносятся — переносится только код/логика пайплайна, эти таблицы
+-- обслуживают только новые сканы, загруженные уже через gisdata.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS slam_projects (
+  id              SERIAL PRIMARY KEY,
+  name            VARCHAR(128) NOT NULL,
+  -- Целевая CRS для георефренсинга (см. slam/steps/georeference.mjs) —
+  -- переопределяет автовычисление зоны WGS84 UTM по RTK-координатам.
+  -- target_crs_wkt приоритетнее target_crs_epsg (для локальных проекций
+  -- без кода EPSG, например вендорской FusionCRS_TM_87 у SHARE S20).
+  target_crs_epsg INT NULL,
+  target_crs_wkt  TEXT NULL,
+  created_by      INT NULL,
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_slam_project_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS slam_scans (
+  id                 SERIAL PRIMARY KEY,
+  project_id         INT NOT NULL,
+  name               VARCHAR(128) NOT NULL,
+  status             VARCHAR(12) NOT NULL DEFAULT 'uploaded'
+                       CHECK (status IN ('uploaded', 'processing', 'completed', 'failed')),
+  raw_file_path      VARCHAR(255) NULL,   -- относительный путь ZIP/bag внутри uploads/slam/
+  bag_lidar_enabled  SMALLINT NOT NULL DEFAULT 1, -- S20 всегда пишет ROS1 bag (см. план — PCD-путь оставлен для совместимости, но не используется)
+  rtk_fixed          SMALLINT NULL,       -- заполняется PPK_CORRECTION/GEOREFERENCE
+  -- Ручной обход GEOREFERENCE: на некоторых съёмках бортовой GPS (NavSatFix,
+  -- без RTK-FIXED gate — см. slam/steps/decodeRaw.mjs) недостаточно точен
+  -- даже после фильтрации выбросов и жёсткого выравнивания — точнее оставить
+  -- облако в локальных SLAM-координатах, чем привязывать его к плохой
+  -- абсолютной системе. См. slam_scans.php (переключатель) и
+  -- slam/steps/georeference.mjs (при включённом флаге — чистый pass-through).
+  skip_georeference  SMALLINT NOT NULL DEFAULT 0,
+  num_points         BIGINT NULL,
+  source_format      VARCHAR(16) NULL,
+  crs_epsg           INT NULL,
+  -- Proj4-строка CRS результата georeference (не всегда есть EPSG-код —
+  -- автовычисленная зона UTM собирается как голая proj4-строка, см.
+  -- slam/steps/georeference.mjs buildUtmProjection). Промежуточные LAZ-файлы
+  -- пайплайна НЕ хранят CRS сами по себе (slam/lib/lasIO.mjs — минимальный
+  -- писатель без VLR), поэтому CRS передаётся отдельно и используется
+  -- build_octree.mjs при финальной сборке COPC (--writers.copc.a_srs).
+  crs_proj4          VARCHAR(500) NULL,
+  bbox_min_lon       DOUBLE PRECISION NULL, -- вместо PostGIS geometry(POLYGON,4326) — bbox 4 числами,
+  bbox_min_lat       DOUBLE PRECISION NULL, -- этого достаточно для попапа на карте, отдельный PostGIS-тип не нужен
+  bbox_max_lon       DOUBLE PRECISION NULL,
+  bbox_max_lat       DOUBLE PRECISION NULL,
+  error_message      VARCHAR(500) NULL,
+  created_by         INT NULL,
+  created_at         TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_slam_scan_project FOREIGN KEY (project_id) REFERENCES slam_projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_slam_scan_admin FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_slam_scans_project ON slam_scans (project_id, created_at);
+ALTER TABLE slam_scans ADD COLUMN IF NOT EXISTS skip_georeference SMALLINT NOT NULL DEFAULT 0;
+
+-- Связь с готовым SLAM-сканом (см. bin/process_slam_jobs.php slam_link_tour()
+-- в app/lib/slam.php) — один тур на скан, создаётся/обновляется автоматически
+-- по завершении build_octree, чтобы не плодить дубликат записи при
+-- повторной обработке того же скана.
+ALTER TABLE tours ADD COLUMN IF NOT EXISTS slam_scan_id INT NULL;
+ALTER TABLE tours DROP CONSTRAINT IF EXISTS fk_tour_slam_scan;
+ALTER TABLE tours ADD CONSTRAINT fk_tour_slam_scan FOREIGN KEY (slam_scan_id) REFERENCES slam_scans(id) ON DELETE SET NULL;
+ALTER TABLE tours DROP CONSTRAINT IF EXISTS uq_tour_slam_scan;
+ALTER TABLE tours ADD CONSTRAINT uq_tour_slam_scan UNIQUE (slam_scan_id);
+
+-- Вспомогательные входные файлы скана (bag уже внутри raw_file_path/ZIP —
+-- остальное извлекается пайплайном в процессе DECODE_RAW и регистрируется
+-- здесь: calibration.yaml, camera_frames.zip, frame_pose.txt/SLAM-траектория,
+-- RTK/RINEX для PPK). Один тип на скан — как в slamcloude (UNIQUE(scan_id,kind)).
+CREATE TABLE IF NOT EXISTS slam_scan_inputs (
+  id          SERIAL PRIMARY KEY,
+  scan_id     INT NOT NULL,
+  kind        VARCHAR(20) NOT NULL CHECK (kind IN (
+                'trajectory', 'rover_obs', 'base_rinex', 'nav',
+                'rover_ppkraw_bin', 'base_bin', 'frame_pose',
+                'project_info', 'calibration', 'camera_frames'
+              )),
+  file_path   VARCHAR(255) NOT NULL,  -- относительный путь внутри uploads/slam/
+  file_size   BIGINT NOT NULL DEFAULT 0,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_slam_input_scan FOREIGN KEY (scan_id) REFERENCES slam_scans(id) ON DELETE CASCADE,
+  CONSTRAINT uq_slam_input_scan_kind UNIQUE (scan_id, kind)
+);
+
+-- Один job на шаг пайплайна на скан (PIPELINE_ORDER — см.
+-- bin/process_slam_jobs.php): compute_slam -> decode_raw -> filter_outliers
+-- -> bin_to_rinex -> ppk_correction -> colorize -> georeference ->
+-- build_octree. updated_at — heartbeat детектора зависших job'ов (тот же
+-- принцип, что stale-lock в bin/process_copc_conversions.php, но через
+-- колонку в БД вместо файла на диске, т.к. шаги SLAM-пайплайна не всегда
+-- пишут один растущий выходной файл, за которым можно следить).
+CREATE TABLE IF NOT EXISTS slam_jobs (
+  id             SERIAL PRIMARY KEY,
+  scan_id        INT NOT NULL,
+  pipeline_step  VARCHAR(20) NOT NULL CHECK (pipeline_step IN (
+                   'compute_slam', 'decode_raw', 'filter_outliers', 'bin_to_rinex',
+                   'ppk_correction', 'colorize', 'georeference', 'build_octree'
+                 )),
+  status         VARCHAR(12) NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending', 'processing', 'done', 'error', 'skipped')),
+  stall_retries  INT NOT NULL DEFAULT 0,
+  error_message  VARCHAR(2000) NULL,
+  created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+  started_at     TIMESTAMP NULL,
+  updated_at     TIMESTAMP NULL,  -- heartbeat, обновляется воркером по ходу выполнения
+  finished_at    TIMESTAMP NULL,
+  CONSTRAINT fk_slam_job_scan FOREIGN KEY (scan_id) REFERENCES slam_scans(id) ON DELETE CASCADE,
+  CONSTRAINT uq_slam_job_scan_step UNIQUE (scan_id, pipeline_step)
+);
+CREATE INDEX IF NOT EXISTS idx_slam_jobs_status ON slam_jobs (status, created_at);
+
+-- Промежуточные и финальные артефакты по шагам (LAZ на каждом шаге + финальный
+-- LAS/COPC) — файлы лежат в uploads/slam/<scan_id>/, путь тут относительный.
+CREATE TABLE IF NOT EXISTS slam_processed_assets (
+  id          SERIAL PRIMARY KEY,
+  scan_id     INT NOT NULL,
+  asset_type  VARCHAR(20) NOT NULL CHECK (asset_type IN (
+                'intermediate_laz', 'las', 'copc', 'mesh', 'splat'
+              )),
+  step        VARCHAR(20) NULL, -- для intermediate_laz — какой шаг его произвёл
+  file_path   VARCHAR(255) NOT NULL,
+  file_size   BIGINT NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_slam_asset_scan FOREIGN KEY (scan_id) REFERENCES slam_scans(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_slam_assets_scan ON slam_processed_assets (scan_id, asset_type);
+
+-- FACADE·CAD (facade-cad/, встроен через facade_cad.php) — серверное
+-- сохранение рабочего состояния вместо localStorage (см. комментарии
+-- "localStorage now, server API later" в исходнике инструмента). Одна
+-- строка на администратора (MVP: без множественных проектов) — покрывает
+-- слои (layers_json, LayerStore.serialize()), начерченную геометрию
+-- (entities_json, EntityStore.serialize() — те же JSON-снимки, что уже
+-- используются для undo/redo) и список именованных ПСК с активной (ucs_json).
+-- cloud_name — только для UI-подсказки (какое облако было загружено), само
+-- облако точек не хранится в БД (импортируется заново пользователем).
+-- Владелец сессии — ЛИБО админ, ЛИБО обычный пользователь (users_sync,
+-- см. users_sync.facade_cad_enabled — доступ обычным пользователям даётся
+-- по этому флагу). Раздельные nullable FK вместо одного полиморфного id,
+-- потому что admins/users_sync — разные таблицы без общего "person" —
+-- CHECK гарантирует ровно одного владельца, частичные UNIQUE-индексы ниже —
+-- ровно одну сессию на владельца (MVP: без множественных проектов).
+CREATE TABLE IF NOT EXISTS facade_cad_sessions (
+  id            SERIAL PRIMARY KEY,
+  admin_id      INT NULL,
+  user_id       INT NULL,
+  cloud_name    VARCHAR(255) NULL,
+  layers_json   TEXT NOT NULL DEFAULT '{}',
+  ucs_json      TEXT NOT NULL DEFAULT '{}',
+  updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_facade_cad_session_admin FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE,
+  CONSTRAINT fk_facade_cad_session_user FOREIGN KEY (user_id) REFERENCES users_sync(id) ON DELETE CASCADE,
+  CONSTRAINT chk_facade_cad_session_owner CHECK ((admin_id IS NOT NULL) <> (user_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_facade_cad_session_admin ON facade_cad_sessions (admin_id) WHERE admin_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_facade_cad_session_user ON facade_cad_sessions (user_id) WHERE user_id IS NOT NULL;
+
+-- Начерченная геометрия — НАСТОЯЩИЙ PostGIS geometry (не JSON-блоб): один
+-- ряд на CAD-объект, а не один блоб на сессию, — включает пространственные
+-- запросы (bbox/nearest) через GiST-индекс. geom без ограничения типа/SRID
+-- (координаты локальные, UCS-метры, не геодезические — SRID здесь не
+-- нужен): polyline → LINESTRING как есть (closed — отдельным флагом в
+-- extra, без авто-замыкания кольца, чтобы не терять точность), у
+-- circle/arc/ellipse/text/point «геометрия» — их якорная точка (center или
+-- anchor) как POINT, а все параметрические поля (радиус, углы, текст,
+-- высота, поворот, подпись) — в extra (JSONB), т.к. у PostGIS нет
+-- примитива "окружность"/"эллипс" в geometry-модели.
+CREATE TABLE IF NOT EXISTS facade_cad_entities (
+  id          SERIAL PRIMARY KEY,
+  session_id  INT NOT NULL,
+  kind        VARCHAR(4) NOT NULL CHECK (kind IN ('pl', 'ci', 'ar', 'el', 'tx', 'pt')),
+  layer       VARCHAR(64) NOT NULL DEFAULT '0',
+  geom        GEOMETRY NOT NULL,
+  extra       JSONB NOT NULL DEFAULT '{}',
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_facade_cad_entity_session FOREIGN KEY (session_id) REFERENCES facade_cad_sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_facade_cad_entities_session ON facade_cad_entities (session_id);
+CREATE INDEX IF NOT EXISTS idx_facade_cad_entities_geom ON facade_cad_entities USING GIST (geom);
+
+-- TOPO·CAD — второй CAD-инструмент (github.com/skandmataisabella1357-beep/CtF,
+-- папка CtFT/), тот же движок/EntityJSON-контракт, что у FACADE·CAD (см.
+-- facade-cad/topo-cad/), поэтому схема хранения буквально зеркало
+-- facade_cad_sessions/facade_cad_entities выше — см. их докстринги для
+-- обоснования полиморфного владельца и per-entity PostGIS geometry.
+-- Доступ обычным пользователям — по отдельному флагу
+-- users_sync.topo_cad_enabled (не переиспользуем facade_cad_enabled: это
+-- разные услуги, у пользователя может быть включена одна без другой).
+CREATE TABLE IF NOT EXISTS topo_cad_sessions (
+  id            SERIAL PRIMARY KEY,
+  admin_id      INT NULL,
+  user_id       INT NULL,
+  cloud_name    VARCHAR(255) NULL,
+  layers_json   TEXT NOT NULL DEFAULT '{}',
+  ucs_json      TEXT NOT NULL DEFAULT '{}',
+  updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_topo_cad_session_admin FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE,
+  CONSTRAINT fk_topo_cad_session_user FOREIGN KEY (user_id) REFERENCES users_sync(id) ON DELETE CASCADE,
+  CONSTRAINT chk_topo_cad_session_owner CHECK ((admin_id IS NOT NULL) <> (user_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_topo_cad_session_admin ON topo_cad_sessions (admin_id) WHERE admin_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_topo_cad_session_user ON topo_cad_sessions (user_id) WHERE user_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS topo_cad_entities (
+  id          SERIAL PRIMARY KEY,
+  session_id  INT NOT NULL,
+  kind        VARCHAR(4) NOT NULL CHECK (kind IN ('pl', 'ci', 'ar', 'el', 'tx', 'pt')),
+  layer       VARCHAR(64) NOT NULL DEFAULT '0',
+  geom        GEOMETRY NOT NULL,
+  extra       JSONB NOT NULL DEFAULT '{}',
+  created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_topo_cad_entity_session FOREIGN KEY (session_id) REFERENCES topo_cad_sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_topo_cad_entities_session ON topo_cad_entities (session_id);
+CREATE INDEX IF NOT EXISTS idx_topo_cad_entities_geom ON topo_cad_entities USING GIST (geom);
+
+-- FACADE·FOTO — ректификация фасада по контрольным точкам (facade-foto/
+-- index.html, самодостаточный HTML-инструмент, чертёж+историческое фото
+-- совмещаются гомографией). В отличие от FACADE·CAD/TOPO·CAD здесь нет
+-- реальной геометрии для PostGIS — контрольные точки существуют в
+-- пиксельных координатах чертежа/фото, а не в системе координат объекта —
+-- поэтому сессия целиком хранится как JSONB (те же поля, что инструмент
+-- уже сохранял в скачиваемый facade_session.json: points/k1/k2/mmPerPx/
+-- target/source), без отдельной таблицы сущностей. Тот же полиморфный
+-- владелец (admin_id/user_id), что у facade_cad_sessions — см. её
+-- докстринг для обоснования.
+CREATE TABLE IF NOT EXISTS facade_foto_sessions (
+  id            SERIAL PRIMARY KEY,
+  admin_id      INT NULL,
+  user_id       INT NULL,
+  session_json  JSONB NOT NULL DEFAULT '{}',
+  updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_facade_foto_session_admin FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE,
+  CONSTRAINT fk_facade_foto_session_user FOREIGN KEY (user_id) REFERENCES users_sync(id) ON DELETE CASCADE,
+  CONSTRAINT chk_facade_foto_session_owner CHECK ((admin_id IS NOT NULL) <> (user_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_facade_foto_session_admin ON facade_foto_sessions (admin_id) WHERE admin_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_facade_foto_session_user ON facade_foto_sessions (user_id) WHERE user_id IS NOT NULL;

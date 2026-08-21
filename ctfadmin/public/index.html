@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CtF · рабочее место</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/landing.css" />
+  </head>
+  <body>
+    <main class="card">
+      <div class="logo">CtF · РАБОЧЕЕ МЕСТО</div>
+      <label class="field">
+        <span>Ваше имя</span>
+        <input id="user" type="text" placeholder="Фамилия Имя" autocomplete="name" />
+      </label>
+      <div class="apps">
+        <a class="app" id="go-facade" href="#" hidden><b>FACADE·CAD</b><span>фасады по облаку точек</span></a>
+        <a class="app" id="go-topo" href="#" hidden><b>TOPO·CAD</b><span>топография: план, рез, 3D</span></a>
+        <div id="no-apps" class="note" hidden>На сервере не установлено ни одного приложения — положите собранную папку в <b>apps</b>.</div>
+      </div>
+      <p class="note">
+        Сеанс работы виден администратору: имя, текущий шаг и картинка окна. При необходимости администратор может временно взять управление —
+        вы увидите об этом плашку и сможете вернуть управление одной кнопкой.
+      </p>
+      <a class="admin-link" href="/admin">пульт администратора →</a>
+    </main>
+    <script>
+      const box = document.getElementById('user');
+      box.value = localStorage.getItem('ctfadmin.user') || '';
+      const go = (app) => (e) => {
+        e.preventDefault();
+        const u = (box.value || '').trim();
+        if (!u) {
+          box.focus();
+          box.classList.add('bad');
+          return;
+        }
+        localStorage.setItem('ctfadmin.user', u);
+        location.href = `/${app}/?u=${encodeURIComponent(u)}`;
+      };
+      document.getElementById('go-facade').addEventListener('click', go('facade'));
+      document.getElementById('go-topo').addEventListener('click', go('topo'));
+      box.addEventListener('input', () => box.classList.remove('bad'));
+      // Показываем только то, что реально установлено на сервере.
+      fetch('/api/apps')
+        .then((r) => r.json())
+        .then((apps) => {
+          let any = false;
+          for (const a of apps) {
+            const el = document.getElementById('go-' + a.key);
+            if (el && a.ready) {
+              el.hidden = false;
+              any = true;
+            }
+          }
+          document.getElementById('no-apps').hidden = any;
+        })
+        .catch(() => {
+          document.getElementById('go-facade').hidden = false;
+        });
+    </script>
+  </body>
+</html>

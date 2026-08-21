@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}Туры (3DGS){% endblock %}
+{% block page_icon %}bi-camera-reels{% endblock %}
+{% block page_title %}Туры (3DGS){% endblock %}
+{% block content %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Туры (3DGS)</h2>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#tourFormModal" id="tourAddBtn"><i class="bi bi-plus-lg"></i> Добавить тур</button>
+  </div>
+
+  {% for key, group in tours_by_group.items %}
+  <div class="card surface-card mb-3">
+    <div class="card-body">
+      <h3 class="h6 mb-3"><i class="bi bi-folder2"></i> {{ group.name }} <span class="text-secondary small">({{ group.tours|length }})</span></h3>
+      <div class="table-responsive overflow-y-visible">
+        <table class="table table-clean align-middle">
+          <thead>
+            <tr><th>Название</th><th>Координаты</th><th>Файл</th><th>На карте</th><th>Публичный</th><th>PostGIS</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% for t, extra_count in group.tours %}
+            <tr>
+              <td>{{ t.name }}</td>
+              <td>{{ t.lat }}, {{ t.lon }}</td>
+              <td>
+                {% if t.file_format == "las" %}<span class="badge text-bg-info">Point Cloud</span>
+                {% else %}<span class="badge text-bg-primary">3DGS Splat</span>{% endif %}
+                {{ t.file_path|default:"—" }}
+                <span class="text-secondary small">({{ t.file_format }})</span>
+                {% if extra_count > 0 %}<span class="badge text-bg-secondary">+{{ extra_count }}</span>{% endif %}
+              </td>
+              <td>{% if t.is_enabled %}<span class="badge text-bg-success">да</span>{% else %}<span class="badge text-bg-secondary">нет</span>{% endif %}</td>
+              <td>{% if t.is_public %}<span class="badge text-bg-info">да</span>{% else %}<span class="badge text-bg-secondary">нет</span>{% endif %}</td>
+              <td>
+                {% if t.pg_synced_at %}
+                  <span class="badge text-bg-success" title="{{ t.pg_connection.name }}">выгружено {{ t.pg_synced_at|date:"Y-m-d H:i" }}</span>
+                {% elif t.pg_sync_error %}
+                  <span class="badge text-bg-danger" title="{{ t.pg_sync_error }}">ошибка</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">не выгружено</span>
+                {% endif %}
+                {% if pg_connections and t.file_path %}
+                <form method="post" action="{% url 'tours' %}" id="syncPgForm{{ t.id }}" class="sync-pg-form d-flex gap-1 mt-1">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="sync_pg">
+                  <input type="hidden" name="id" value="{{ t.id }}">
+                  <select name="connection_id" class="form-select form-select-sm" style="width: auto">
+                    {% for c in pg_connections %}
+                      <option value="{{ c.id }}" {% if t.pg_connection_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                <div class="progress mt-1 d-none sync-pg-progress" style="height: 4px; width: 140px">
+                  <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+                </div>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <div class="dropdown">
+                  <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false" title="Действия"><i class="bi bi-three-dots-vertical"></i></button>
+                  <ul class="dropdown-menu dropdown-menu-end">
+                    {% if pg_connections and t.file_path %}
+                    <li><button type="submit" form="syncPgForm{{ t.id }}" class="dropdown-item"><i class="bi bi-cloud-upload me-2"></i>Выгрузить в PostGIS</button></li>
+                    {% endif %}
+                    <li><a class="dropdown-item" href="{% url 'tour_files' %}?tour_id={{ t.id }}"><i class="bi bi-stack me-2"></i>Доп. файлы (части модели)</a></li>
+                    <li><a class="dropdown-item" href="{% url 'tours' %}?edit={{ t.id }}"><i class="bi bi-pencil me-2"></i>Изменить</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                      <form method="post" action="{% url 'tours' %}" onsubmit="return confirm('Удалить тур и файл модели?');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="id" value="{{ t.id }}">
+                        <button type="submit" class="dropdown-item text-danger"><i class="bi bi-trash me-2"></i>Удалить</button>
+                      </form>
+                    </li>
+                  </ul>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% empty %}
+  <div class="card surface-card"><div class="card-body text-muted">Туров пока нет</div></div>
+  {% endfor %}
+
+  <div class="modal fade" id="tourFormModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="tourFormModalTitle">{% if edit %}Изменить тур{% else %}Добавить тур{% endif %}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form method="post" action="{% url 'tours' %}" enctype="multipart/form-data" class="row g-3" id="tourForm">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="id" value="{{ edit.id|default:0 }}">
+
+            <div class="col-md-6">
+              <label class="form-label small">Название*</label>
+              <input type="text" name="name" class="form-control" required value="{{ edit.name|default:'' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Описание</label>
+              <input type="text" name="description" class="form-control" value="{{ edit.description|default:'' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Широта (lat)*</label>
+              <input type="text" name="lat" class="form-control" required value="{{ edit.lat|default:'' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Долгота (lon)*</label>
+              <input type="text" name="lon" class="form-control" required value="{{ edit.lon|default:'' }}">
+            </div>
+            <div class="col-md-3 form-check mt-4">
+              <input type="checkbox" name="is_enabled" class="form-check-input" id="isEnabled" {% if not edit or edit.is_enabled %}checked{% endif %}>
+              <label class="form-check-label" for="isEnabled">Показывать на карте</label>
+            </div>
+            <div class="col-md-3 form-check mt-4">
+              <input type="checkbox" name="is_public" class="form-check-input" id="isPublic" {% if edit.is_public %}checked{% endif %}>
+              <label class="form-check-label" for="isPublic">Опубликован (ссылка без входа)</label>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Группа</label>
+              <select name="group_id" id="tourGroupSelect" class="form-select">
+                <option value="">Без группы</option>
+                {% for g in tour_groups %}
+                  <option value="{{ g.id }}" {% if edit.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                {% endfor %}
+                <option value="new">+ Новая группа...</option>
+              </select>
+              <div class="form-text">Файлы новых туров складываются в подпапку своей группы — упорядочивает хранилище по мере роста числа туров.</div>
+            </div>
+            <div class="col-md-6 d-none" id="tourNewGroupWrap">
+              <label class="form-label small">Название новой группы</label>
+              <input type="text" name="new_group_name" id="tourNewGroupName" class="form-control" placeholder="Например: Объекты ЕКБ 2026">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Файл(ы) модели (.ply / .splat / .ksplat — 3DGS, или .las — облако точек LiDAR)</label>
+              <input type="file" name="model_files" class="form-control" accept=".ply,.splat,.ksplat,.las" multiple>
+              <div class="form-text">Если модель состоит из нескольких кусков одного скана в общей системе координат — выберите все файлы сразу, они будут показаны в туре одновременно. <strong>.las</strong> — облако точек LiDAR, просмотр на карте работает (отдельный рендер, не через 3DGS).</div>
+              {% if edit and edit.file_path %}
+                <div class="form-text">
+                  Текущие файлы: {{ edit.file_path }}{% if edit_extra_count %} + ещё {{ edit_extra_count }}{% endif %}.
+                  Оставьте поле пустым, чтобы не менять.
+                </div>
+              {% endif %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Или файл(ы) уже на сервере (uploads/tours/...), если залиты по FTP — по одному имени на строку</label>
+              <textarea name="existing_file" class="form-control" rows="3" placeholder="model_part1.ply&#10;model_part2.ply"></textarea>
+            </div>
+
+            <div class="col-12 d-none" id="tourUploadProgressWrap">
+              <div class="progress" style="height: 22px">
+                <div class="progress-bar" id="tourUploadProgressBar" role="progressbar" style="width: 0%">0%</div>
+              </div>
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button type="submit" class="btn btn-primary" id="tourFormSubmit">{% if edit %}Сохранить{% else %}Добавить{% endif %}</button>
+              <a href="{% url 'tours' %}" class="btn btn-outline-secondary">Отмена</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+{% block extra_scripts %}
+<script>window.tourFormShouldOpen = {% if edit %}true{% else %}false{% endif %};</script>
+<script>
+if (window.tourFormShouldOpen) {
+  document.addEventListener('DOMContentLoaded', () => {
+    new bootstrap.Modal(document.getElementById('tourFormModal')).show();
+  });
+}
+
+(function () {
+  document.querySelectorAll('.dropdown-menu').forEach((menu) => {
+    const toggle = menu.previousElementSibling;
+    if (!toggle || !toggle.matches('[data-bs-toggle="dropdown"]')) return;
+    let placeholder = null;
+    toggle.parentElement.addEventListener('shown.bs.dropdown', () => {
+      placeholder = document.createComment('dropdown-portal-placeholder');
+      menu.parentNode.insertBefore(placeholder, menu);
+      menu.style.width = '';
+      menu.style.maxWidth = '';
+      menu.style.inset = '';
+      document.body.appendChild(menu);
+      const rect = toggle.getBoundingClientRect();
+      const width = menu.offsetWidth;
+      menu.style.position = 'fixed';
+      menu.style.top = rect.bottom + 'px';
+      menu.style.left = (rect.right - width) + 'px';
+      menu.style.width = width + 'px';
+      menu.style.margin = '0';
+    });
+    toggle.parentElement.addEventListener('hidden.bs.dropdown', () => {
+      if (placeholder && placeholder.parentNode) {
+        placeholder.parentNode.insertBefore(menu, placeholder);
+        placeholder.remove();
+      }
+      menu.style.position = '';
+      menu.style.top = '';
+      menu.style.left = '';
+      menu.style.width = '';
+      menu.style.margin = '';
+    });
+  });
+})();
+
+(function () {
+  const groupSelect = document.getElementById('tourGroupSelect');
+  const newGroupWrap = document.getElementById('tourNewGroupWrap');
+  if (groupSelect && newGroupWrap) {
+    const syncNewGroupVisibility = () => newGroupWrap.classList.toggle('d-none', groupSelect.value !== 'new');
+    groupSelect.addEventListener('change', syncNewGroupVisibility);
+    syncNewGroupVisibility();
+  }
+})();
+
+(function () {
+  const form = document.getElementById('tourForm');
+  if (!form) return;
+  const wrap = document.getElementById('tourUploadProgressWrap');
+  const bar = document.getElementById('tourUploadProgressBar');
+  const submitBtn = document.getElementById('tourFormSubmit');
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    submitBtn.disabled = true;
+    wrap.classList.remove('d-none');
+    bar.style.width = '0%';
+    bar.textContent = '0%';
+
+    const xhr = new XMLHttpRequest();
+    xhr.open(form.getAttribute('method') || 'post', form.getAttribute('action'));
+    xhr.upload.onprogress = function (evt) {
+      if (evt.lengthComputable) {
+        const pct = Math.round((evt.loaded / evt.total) * 100);
+        bar.style.width = pct + '%';
+        bar.textContent = pct + '%';
+      }
+    };
+    xhr.onload = function () {
+      var errorMarker = 'class="alert ' + 'alert-danger"';
+      if (xhr.responseText.indexOf(errorMarker) !== -1) {
+        document.open();
+        document.write(xhr.responseText);
+        document.close();
+      } else {
+        window.location.href = '{% url "tours" %}';
+      }
+    };
+    xhr.onerror = function () {
+      submitBtn.disabled = false;
+      bar.classList.add('bg-danger');
+      bar.textContent = 'Ошибка сети при загрузке';
+    };
+
+    const rawData = new FormData(form);
+    const data = new FormData();
+    for (const [key, value] of rawData.entries()) {
+      if (value instanceof File && value.name === '' && value.size === 0) {
+        continue;
+      }
+      data.append(key, value);
+    }
+    xhr.send(data);
+  });
+})();
+
+document.querySelectorAll('.sync-pg-form').forEach(function (form) {
+  form.addEventListener('submit', function () {
+    const progress = form.closest('td').querySelector('.sync-pg-progress');
+    const btn = document.querySelector('button[form="' + form.id + '"]');
+    if (progress) progress.classList.remove('d-none');
+    if (btn) btn.disabled = true;
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FACADE·CAD — черчение по облаку точек</title>
+    <!-- Empty icon: keeps the console clean of the favicon 404. -->
+    <link rel="icon" href="data:," />
+  </head>
+  <body class="overflow-hidden select-none antialiased">
+    <!-- Single WebGL canvas: three scissored viewports are rendered into it. -->
+    <canvas id="gl" class="fixed inset-0 block h-full w-full"></canvas>
+
+    <!-- Виньетка кадра. Чисто оформление: лежит над холстом, ничего не ловит. -->
+    <div class="vignette"></div>
+
+    <!-- OrbitControls capture pad over the isometric viewport (bottom-right).
+         All pane anchors come from --split-x / --split-y / --pane-h, which
+         ViewportManager.resize() publishes on every layout change. -->
+    <div id="orbit-pad" class="fixed z-10" style="left: var(--split-x, 62vw); top: var(--split-y); width: calc(100vw - var(--split-x, 62vw)); height: var(--pane-h)"></div>
+
+    <!-- Viewport separators -->
+    <div id="sep-v" class="vp-sep pointer-events-none fixed z-10 w-px" style="left: var(--split-x, 62vw); top: var(--ribbon-h, 4.2rem); bottom: 0"></div>
+    <div id="sep-h" class="vp-sep pointer-events-none fixed right-0 z-10 h-px" style="left: var(--split-x, 62vw); top: var(--split-y)"></div>
+
+    <!-- Грипы границ окон: тянуть, как в любом CAD; двойной клик — вернуть
+         раскладку по умолчанию. -->
+    <div id="split-v" class="split-grip split-grip-v" title="Граница окон: тяните влево-вправо · двойной клик — раскладка по умолчанию"></div>
+    <div id="split-h" class="split-grip split-grip-h" title="Граница окон 2 и 3: тяните вверх-вниз · двойной клик — раскладка по умолчанию"></div>
+
+    <!-- Скрытие окон 2/3 и их возврат: ✕ в углу окна, чипы — когда скрыто. -->
+    <button id="close-profile" class="pane-close" style="right: 0.4rem; top: calc(var(--ribbon-h, 4.2rem) + 0.5rem)" title="Убрать окно сечения — окно 3 займёт всю колонку">✕</button>
+    <button id="close-iso" class="pane-close" style="right: 0.4rem; top: calc(var(--split-y) + 0.5rem)" title="Убрать 3D-окно — окно сечения займёт всю колонку">✕</button>
+    <div id="pane-restore" class="pane-restore">
+      <button id="restore-profile" type="button" class="mini-btn hidden" title="Вернуть окно сечения">+ СЕЧЕНИЕ</button>
+      <button id="restore-iso" type="button" class="mini-btn hidden" title="Вернуть 3D-окно">+ 3D</button>
+    </div>
+
+    <!-- Ring marking the pane that owns the commands (keys 1 / 2 / 3) -->
+    <div id="pane-focus" class="pane-focus"></div>
+
+    <!-- Elevation aids for the side view: a metre scale down the left edge
+         and a guide line at the cursor height, so «на какой отметке я» is
+         answered without guessing. Both live only in the level step. -->
+    <div id="elev-scale" class="elev-scale hidden"></div>
+    <div id="elev-cursor" class="elev-cursor hidden"><span id="elev-cursor-val"></span></div>
+
+    <!-- Viewport labels -->
+    <div id="lbl-main" class="vp-label" style="left: 1rem; top: calc(var(--ribbon-h, 4.2rem) + 0.8rem)">ПЛАН · ВИД СВЕРХУ</div>
+    <div id="lbl-profile" class="vp-label" style="left: calc(var(--split-x, 62vw) + 1rem); top: calc(var(--ribbon-h, 4.2rem) + 0.8rem)">СЕЧЕНИЕ · ВЕРТИКАЛЬНОЕ</div>
+    <div id="lbl-iso" class="vp-label" style="left: calc(var(--split-x, 62vw) + 1rem); top: calc(var(--split-y) + 0.75rem)">3D · ОБЗОР</div>
+
+    <!-- ═══════ RIBBON — panels render from src/Ribbon.ts, user-customizable ═══════ -->
+    <div id="ribbon" class="ribbon-bar fixed inset-x-0 top-0 z-20 flex items-stretch gap-1 px-2 py-1">
+      <!-- Wraps onto a second row instead of scrolling: every command stays
+           reachable without hunting along a scrollbar. -->
+      <div id="ribbon-groups" class="flex min-w-0 flex-1 flex-wrap items-stretch gap-x-1 gap-y-0.5"></div>
+
+      <!-- ПРОЁМЫ — настройки модуля «Автообмер». Живут В ЛЕНТЕ, а не поверх
+           чертежа: во время поиска смотрят на стену целиком, и полоса
+           регуляторов поперёк неё закрывает как раз то, что разглядывают.
+           Появляется вместе с инструментом, как контекстная вкладка в CAD. -->
+      <div id="openings-panel" class="op-bar hidden flex-none" title="Автопоиск проёмов: рамки предлагаются, принимаете вы">
+        <div class="op-row">
+          <button id="op-mode" type="button" class="op-btn" title="Что ищем. ПРОЁМЫ — прямоугольные дырки в срезе (окна, двери). РЕЛЬЕФ — прямоугольные пятна точек (лепнина, русты, филёнки): задайте срез по слою выступа, потянув голубые оси прямо в окне сечения">ПРОЁМЫ</button>
+          <button id="op-region" type="button" class="op-btn" title="Ограничить поиск куском фасада: нажмите, затем обведите прямоугольник мышью — искать будем только в нём">ОБЛАСТЬ</button>
+          <button id="op-region-clear" type="button" class="op-btn hidden" title="Снять ограничение области и вернуть весь фасад на экран">ВЕСЬ ФАСАД</button>
+        </div>
+        <div class="op-row" title="Ячейка сетки поиска. «Авто» — подобрать от плотности скана; это почти всегда правильный выбор">
+          <span class="hud-cap">СЕТКА</span>
+          <input id="op-cell" type="range" min="0" max="0.2" step="0.01" value="0" />
+          <span id="op-cell-val" class="hud-val">авто</span>
+        </div>
+        <div class="op-row" title="Наименьшая площадь проёма — мельче считается дефектом скана">
+          <span class="hud-cap">МИН</span>
+          <input id="op-min" type="range" min="0.05" max="4" step="0.05" value="0.25" />
+          <span id="op-min-val" class="hud-val">0.25 м²</span>
+        </div>
+        <div class="op-row" title="Прямоугольность: 100% — идеальный прямоугольник. Ниже — попадут тени от деревьев и машин">
+          <span class="hud-cap">ФОРМА</span>
+          <input id="op-fill" type="range" min="0.5" max="0.98" step="0.01" value="0.8" />
+          <span id="op-fill-val" class="hud-val">80 %</span>
+        </div>
+        <div class="op-row" title="Фильтр по цвету/интенсивности: пипеткой возьмите образец с точки (например, кирпич), галочка включает фильтр — поиск видит только похожие точки. Работает вместе со срезом по глубине">
+          <span class="hud-cap">ЦВЕТ</span>
+          <input id="op-color-on" type="checkbox" title="Учитывать цвет в фильтре слоя" />
+          <button id="op-pick" type="button" class="op-btn" data-on="false" title="Пипетка: кликайте по точкам-образцам в окне 1 (можно несколько — кирпич на солнце и в тени); Esc или повторное нажатие — выключить. Двойной клик по образцу-квадратику сбрасывает набор">ПИПЕТКА</button>
+          <span id="op-color-chip" class="op-chip hidden" title="Образец (клик — сбросить все образцы)"></span>
+          <input id="op-color-tol" type="range" min="0.05" max="0.6" step="0.01" value="0.2" />
+          <span id="op-color-tol-val" class="hud-val">20 %</span>
+        </div>
+        <!-- Легенда качества. Она же счётчик: сколько рамок какого сорта. -->
+        <div class="op-cap">
+          <span class="op-q" data-q="good" title="Края ровные, размер снят с точностью съёмки">●&nbsp;<span id="op-good">0</span></span>
+          <span class="op-q" data-q="fair" title="Края шумят: для прикидки годится, для чертежа проверьте">●&nbsp;<span id="op-fair">0</span></span>
+          <span class="op-q" data-q="poor" title="Скорее всего не проём, а тень или пятно пропусков — проверьте обязательно">●&nbsp;<span id="op-poor">0</span></span>
+        </div>
+      </div>
+
+      <!-- Статус: компактно ПО ВЕРХУ ленты, в линию с рядом кнопок, а не
+           по центру её высоты. -->
+      <div class="flex flex-none items-center gap-1.5 self-start pr-1" style="margin-top: 3px">
+        <span id="fps" class="stat-num">—</span>
+        <span class="stat-cap">FPS</span>
+        <span id="pts" class="stat-num" title="Точек облака, отправленных на отрисовку за кадр по всем окнам (тайловый отбор)">—</span>
+        <span class="stat-cap">PTS</span>
+        <span class="status-sep"></span>
+        <span id="pill-snap" class="pill" title="Привязка к точкам облака (S)">ПРИВЯЗКА</span>
+        <span id="pill-ortho" class="pill" title="Орто-режим (F8 / удерживать Shift)">ОРТО</span>
+        <span id="pill-weight" class="pill" title="Отображать толщины линий">ТОЛЩ</span>
+        <span id="layer-swatch" class="layer-swatch" title="Цвет активного слоя"></span>
+        <select id="layer-select" title="Слой: без выделения — текущий слой для новых объектов; с выделением — перенос выбранных объектов на слой (цвет берётся от слоя)"></select>
+        <select id="ucs-select" title="Активная система координат"></select>
+        <span id="btn-ucs-rename" class="pill" title="Переименовать текущую ПСК">✎</span>
+        <span id="btn-ribbon-edit" class="pill" title="Настройка ленты: перетаскивайте кнопки между панелями">⚙</span>
+      </div>
+    </div>
+    <!-- multiple: съёмка приходит кусками — по файлу на стоянку сканера;
+         выбранные куски склеиваются в одно облако (cloud.worker). -->
+    <input id="import-file" type="file" accept=".xyz,.txt,.pts,.asc,.csv,.las,.laz,.e57" multiple class="hidden" />
+
+    <!-- Profile pane controls: docked to the BOTTOM edge of viewport 2 and
+         dimmed until hovered, so the cut itself is never covered. -->
+    <div id="section-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: calc(var(--split-x, 62vw) + 1rem); bottom: calc(var(--pane-h) + 0.7rem)">
+      <span id="profile-mode" class="pill w-12 text-center" data-on="true" title="Ориентация реза: ВЕРТ — поперёк стены (подоконник, откос, карниз), ГОРИЗ — план проёма на уровне курсора">ВЕРТ</span>
+      <span class="hud-cap" title="Толщина реза">Т</span>
+      <input id="section-depth" type="range" min="0.02" max="3" step="0.02" value="0.4" title="Толщина реза" />
+      <span id="section-val" class="hud-val">0.40 м</span>
+      <span class="hud-sep"></span>
+      <span class="hud-cap" title="Охват — сколько стены вокруг курсора попадает в окно">О</span>
+      <input id="profile-window" type="range" min="0.2" max="20" step="0.1" value="2" title="Охват реза вокруг курсора" />
+      <span id="profile-window-val" class="hud-val">2.0 м</span>
+    </div>
+
+    <!-- PLAN SLICE — the step between the lasso and the ПСК: a horizontal
+         slab whose level is set on the side view and whose slice is what
+         the top view shows while the wall line is picked. -->
+    <div id="plan-slice-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: 1rem; top: calc(var(--ribbon-h, 4.2rem) + 2.8rem)" title="Срез плана по высоте: на виде сбоку задайте уровень и толщину, затем «К ПЛАНУ» — ПСК ставится по чистой линии стены">
+      <span id="plan-slice-pill" class="pill" data-on="false">СРЕЗ</span>
+      <span class="hud-cap" title="Отметка среза — высота его середины над нулём облака">ОТМ</span>
+      <input id="plan-level" type="range" min="0" max="10" step="0.05" value="1.5" />
+      <input id="plan-level-val" class="hud-num" type="number" step="0.05" value="1.50" title="Отметка среза, м — можно ввести числом" />
+      <span class="hud-sep"></span>
+      <span class="hud-cap" title="Глубина (толщина) среза — сколько метров по высоте попадает в план">ГЛУБ</span>
+      <input id="plan-thick" type="range" min="0.05" max="2" step="0.05" value="0.3" />
+      <input id="plan-thick-val" class="hud-num" type="number" step="0.05" min="0.01" value="0.30" title="Глубина среза, м — можно ввести числом" />
+      <span id="plan-range" class="hud-val" title="Границы среза: низ … верх">1.35…1.65</span>
+      <span class="hud-sep"></span>
+      <button id="btn-plan-done" type="button" class="mini-btn" title="Вернуться на вид сверху и задать ПСК по срезу (Enter)">К ПЛАНУ →</button>
+    </div>
+
+    <!-- Facade depth slice (main viewport). The slab is EDITED graphically
+         in the profile pane: drag its blue edge axes (they snap to the depth
+         ruler), drag the middle to move the whole slab, drag empty space for
+         a new range. This strip only shows/accepts the exact mm numbers. -->
+    <div id="slice-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: 1rem; top: calc(var(--ribbon-h, 4.2rem) + 2.8rem)" title="Срез фасада по глубине ПСК: границы тяните мышью прямо в окне сечения — за голубые оси; здесь — точные числа в мм">
+      <span id="slice-pill" class="pill" data-on="false">СРЕЗ</span>
+      <span class="hud-cap" title="Ближняя граница среза, мм от плоскости ПСК">ОТ</span>
+      <input id="slice-lo-val" class="hud-num" type="number" step="5" value="-120" title="Ближняя граница, мм" />
+      <span class="hud-cap" title="Дальняя граница среза, мм от плоскости ПСК">ДО</span>
+      <input id="slice-hi-val" class="hud-num" type="number" step="5" value="120" title="Дальняя граница, мм" />
+      <span id="slice-val" class="hud-val" title="Итоговая толщина среза">Т 240 мм</span>
+    </div>
+
+    <!-- Depth ruler of the profile pane: painted by UI.renderDepthRuler,
+         positioned by the engine along the pane's depth axis. -->
+    <div id="depth-ruler" class="depth-ruler hidden"></div>
+
+    <!-- Cursor-follow cloud window size (iso viewport) -->
+    <div id="cursor-panel" class="hud-strip fixed z-20 hidden items-center gap-2" style="left: calc(var(--split-x, 62vw) + 1rem); bottom: 0.75rem">
+      <span class="hud-cap" title="Размер видимого квадрата облака вокруг курсора в 3D-окне">ОБЛАСТЬ</span>
+      <!-- 50 м по умолчанию: 2 м это окно размером с одно окно дома — с него
+           не видно, где ты находишься. Обзорному виду положено обозревать,
+           а сузить всегда успеется. -->
+      <input id="cursor-area" type="range" min="0.5" max="120" step="0.5" value="50" title="Размер видимого квадрата облака вокруг курсора в 3D-окне" />
+      <span id="cursor-area-val" class="hud-val">50.0 м</span>
+    </div>
+
+    <!-- CAD layers manager -->
+    <div id="layers-panel" class="glass fixed z-30 hidden w-[23rem] flex-col gap-2 px-3 py-2.5" style="right: 0.75rem; top: 8.6rem">
+      <div id="layers-header" class="flex cursor-grab items-center justify-between active:cursor-grabbing" title="Потяните за заголовок, чтобы переместить панель">
+        <span class="panel-cap">Слои · ⠿</span>
+        <span id="layers-close" class="panel-close">✕</span>
+      </div>
+      <div id="layers-list" class="flex max-h-72 flex-col gap-1 overflow-y-auto pr-0.5"></div>
+      <div class="flex items-center gap-2 pt-1">
+        <button id="btn-layer-add" class="mini-btn" title="Создать новый слой и сделать его текущим">+ Слой</button>
+        <button id="btn-layer-assign" class="mini-btn" title="Перенести выбранные объекты на текущий слой">Выбранное → слой</button>
+      </div>
+      <div class="panel-note">Кружок — текущий слой · квадрат — цвет · имя: двойной клик переименует · далее тип линии, толщина, число объектов, показ, удаление</div>
+    </div>
+
+    <!-- Command hint -->
+    <div class="glass fixed bottom-3 z-20 px-4 py-2" style="left: 25.5rem; right: calc(100vw - var(--split-x, 62vw) + 1rem)">
+      <span id="hint" class="hint-text"></span>
+    </div>
+
+    <!-- Local coordinates readout -->
+    <div class="glass fixed z-20 px-3 py-1.5" style="left: calc(var(--split-x, 62vw) - 0.75rem); bottom: 3.6rem; transform: translateX(-100%)">
+      <span id="coords" class="coords-text">X 0.000  Y 0.000</span>
+    </div>
+
+    <!-- Hotkey cheat-sheet -->
+    <div class="glass cheat fixed bottom-3 left-3 z-20 px-3 py-2">
+      <div><b>ЛКМ</b> рисовать · <b>Ctrl+клик</b> добавить к выбору · <b>СКМ</b> панорама · <b>колесо</b> зум</div>
+      <div><b>Enter/ПКМ</b> завершить · <b>C</b> замкнуть · <b>Esc</b> отмена · <b>Del</b> удалить</div>
+      <div><b>S</b> привязка · <b>F8/Shift</b> орто · <b>Ctrl+Z/Y</b> отмена/возврат</div>
+      <div><b>1 · 2 · 3</b> активное окно · <b>F1</b> справка</div>
+      <div><b>Цифры</b> точный ввод: <b>2.5</b> длина · <b>3,1.2</b> смещение X,Y</div>
+    </div>
+
+    <!-- Per-viewport visibility of drawn linework -->
+    <button id="eye-main" class="eye-btn" style="left: calc(var(--split-x, 62vw) - 3.2rem); top: calc(var(--ribbon-h, 4.2rem) + 0.6rem)" data-on="true" title="Показ элементов чертежа в этом окне">
+      <svg viewBox="0 0 24 24"><path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+    </button>
+    <button id="eye-profile" class="eye-btn" style="right: 0.75rem; top: calc(var(--split-y) - 3rem)" data-on="true" title="Показ элементов чертежа в этом окне">
+      <svg viewBox="0 0 24 24"><path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+    </button>
+    <button id="eye-iso" class="eye-btn" style="right: 0.75rem; bottom: 3.6rem" data-on="true" title="Показ элементов чертежа в этом окне">
+      <svg viewBox="0 0 24 24"><path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+    </button>
+
+    <!-- Cloud display settings per viewport -->
+    <button id="gear-main" class="eye-btn" style="left: calc(var(--split-x, 62vw) - 5.5rem); top: calc(var(--ribbon-h, 4.2rem) + 0.6rem)" title="Отображение облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" /><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.3 2.3M16.4 16.4l2.3 2.3M18.7 5.3l-2.3 2.3M7.6 16.4l-2.3 2.3" /></svg>
+    </button>
+    <button id="gear-profile" class="eye-btn" style="right: 3.2rem; top: calc(var(--split-y) - 3rem)" title="Отображение облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" /><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.3 2.3M16.4 16.4l2.3 2.3M18.7 5.3l-2.3 2.3M7.6 16.4l-2.3 2.3" /></svg>
+    </button>
+    <button id="gear-iso" class="eye-btn" style="right: 3.2rem; bottom: 3.6rem" title="Отображение облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4" /><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.3 5.3l2.3 2.3M16.4 16.4l2.3 2.3M18.7 5.3l-2.3 2.3M7.6 16.4l-2.3 2.3" /></svg>
+    </button>
+
+    <!-- Cloud visibility per viewport -->
+    <button id="cloudeye-main" class="eye-btn" style="left: calc(var(--split-x, 62vw) - 7.8rem); top: calc(var(--ribbon-h, 4.2rem) + 0.6rem)" data-on="true" title="Показ облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="7" cy="11" r="1.2" /><circle cx="12" cy="7.5" r="1.2" /><circle cx="17" cy="11" r="1.2" /><circle cx="9.5" cy="16" r="1.2" /><circle cx="14.5" cy="15" r="1.2" /></svg>
+    </button>
+    <button id="cloudeye-profile" class="eye-btn" style="right: 5.65rem; top: calc(var(--split-y) - 3rem)" data-on="true" title="Показ облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="7" cy="11" r="1.2" /><circle cx="12" cy="7.5" r="1.2" /><circle cx="17" cy="11" r="1.2" /><circle cx="9.5" cy="16" r="1.2" /><circle cx="14.5" cy="15" r="1.2" /></svg>
+    </button>
+    <button id="cloudeye-iso" class="eye-btn" style="right: 5.65rem; bottom: 3.6rem" data-on="true" title="Показ облака в этом окне">
+      <svg viewBox="0 0 24 24"><circle cx="7" cy="11" r="1.2" /><circle cx="12" cy="7.5" r="1.2" /><circle cx="17" cy="11" r="1.2" /><circle cx="9.5" cy="16" r="1.2" /><circle cx="14.5" cy="15" r="1.2" /></svg>
+    </button>
+
+    <div id="cloud-panel" class="glass fixed z-30 hidden w-60 flex-col gap-2 px-4 py-3">
+      <div class="flex items-center justify-between">
+        <span id="cloud-panel-title" class="panel-cap">ОБЛАКО</span>
+        <span id="cloud-panel-close" class="panel-close">✕</span>
+      </div>
+      <label class="cp-row">Размер точек<input id="cp-size" type="range" min="0.5" max="6" step="0.5" /></label>
+      <label class="cp-row">Прозрачность<input id="cp-opacity" type="range" min="0.05" max="1" step="0.05" /></label>
+      <label class="cp-row">Плотность<input id="cp-density" type="range" min="0.05" max="1" step="0.05" /></label>
+      <label class="cp-row">Цвет
+        <select id="cp-mode">
+          <option value="0">RGB</option>
+          <option value="1">Интенсивность</option>
+          <option value="2">По высоте</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- User guide, rendered from РУКОВОДСТВО.md at build time -->
+    <!-- z-50: must sit above the start overlay, which is also full-screen -->
+    <div id="help-panel" class="fixed inset-0 z-50 hidden items-center justify-center backdrop-blur-sm" style="background: rgba(8, 10, 11, 0.72)">
+      <div class="glass flex max-h-[86vh] w-[min(58rem,92vw)] flex-col">
+        <div class="flex items-center justify-between border-b border-white/8 px-5 py-3">
+          <span class="panel-cap">Руководство пользователя</span>
+          <span id="help-close" class="panel-close" title="Закрыть (Esc)">✕</span>
+        </div>
+        <div id="help-body" class="help-body overflow-y-auto px-6 py-4"></div>
+      </div>
+    </div>
+
+    <!-- Marquee selection rectangle (DOM overlay, no GPU cost) -->
+    <div id="marquee" class="pointer-events-none fixed z-30 hidden"></div>
+
+    <!-- Startup: import-first -->
+    <div id="start-overlay" class="fixed inset-0 z-40 flex flex-col items-center justify-center gap-5 backdrop-blur-sm">
+      <div class="start-logo">FACADE·CAD</div>
+      <button id="btn-start-import" class="start-btn">ИМПОРТИРОВАТЬ ОБЛАКО</button>
+      <div class="start-formats">LAS · LAZ · E57 · XYZ / TXT / PTS</div>
+      <div id="start-progress" class="start-progress hidden"></div>
+      <div class="flex items-center gap-5">
+        <button id="btn-start-demo" class="start-link">открыть демо-облако</button>
+        <button id="btn-start-help" class="start-link accent">как пользоваться</button>
+      </div>
+    </div>
+
+    <!-- Dynamic input readout (typed digits next to the cursor) -->
+    <div id="dyn-input" class="pointer-events-none fixed z-30 hidden"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

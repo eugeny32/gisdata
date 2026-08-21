@@ -42,7 +42,7 @@ $pageIcon = $pageIcon ?? 'bi-house';
   <?php include __DIR__ . '/_sidebar.php'; ?>
   <div class="app-content">
     <header class="topbar">
-      <button class="btn btn-sm btn-outline-secondary d-lg-none" type="button" id="sidebarToggle">
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="sidebarToggle" title="Свернуть/развернуть меню">
         <i class="bi bi-list"></i>
       </button>
       <span class="spacer"></span>

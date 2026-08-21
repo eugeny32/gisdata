@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Готовые данные RINEX{% endblock %}
+{% block page_icon %}bi-clock-history{% endblock %}
+{% block page_title %}Готовые данные RINEX{% endblock %}
+{% block content %}
+  <div class="card surface-card">
+    <div class="card-body">
+      <h2 class="h6 mb-3">Мои запросы RINEX</h2>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle">
+          <thead>
+            <tr><th>Создан</th><th>Станции</th><th>Период (UTC)</th><th>Типы</th><th>Статус</th><th>Файлов</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% for r in requests %}
+            <tr>
+              <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
+              <td>{{ r.stations }}</td>
+              <td class="small">
+                {{ r.date_from_utc|date:"Y-m-d H:i" }}
+                &mdash;
+                {{ r.date_to_utc|date:"Y-m-d H:i" }}
+                {% if r.merge_by_day %}<span class="text-secondary">(объединение по суткам)</span>{% endif %}
+              </td>
+              <td class="small">{% if r.want_obs %}MO {% endif %}{% if r.want_nav %}MN{% endif %}</td>
+              <td>
+                {% if r.status == "pending" %}<span class="badge text-bg-secondary">в очереди</span>
+                {% elif r.status == "processing" %}<span class="badge text-bg-warning">собирается...</span>
+                {% elif r.status == "done" %}<span class="badge text-bg-success">готово</span>
+                {% elif r.status == "error" %}<span class="badge text-bg-danger">ошибка</span>
+                {% else %}<span class="badge text-bg-secondary">{{ r.status }}</span>{% endif %}
+                {% if r.status == "error" and r.error_message %}
+                  <div class="text-danger small mt-1">{{ r.error_message }}</div>
+                {% endif %}
+              </td>
+              <td>{% if r.file_count != None %}{{ r.file_count }}{% else %}—{% endif %}</td>
+              <td class="text-end">
+                <div class="d-flex gap-1 justify-content-end align-items-center flex-nowrap">
+                  {% if r.status == "done" and r.result_path %}
+                    <a href="{% url 'rinex_request_download' %}?id={{ r.id }}" class="btn btn-sm btn-outline-primary" title="Скачать .zip"><i class="bi bi-download"></i></a>
+                  {% endif %}
+                  <form method="post" action="{% url 'rinex_requests' %}" onsubmit="return confirm('Удалить этот запрос?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="id" value="{{ r.id }}">
+                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить"><i class="bi bi-trash"></i></button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="text-muted">Запросов пока нет — создайте на странице <a href="{% url 'rinex' %}">RINEX</a></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="text-secondary small mt-2">Страница не обновляется автоматически — обновите её (F5), чтобы увидеть готовый результат.</div>
+    </div>
+  </div>
+{% endblock %}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CtF · пульт администратора</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/ctfadmin/admin.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <span class="logo">CtF · ПУЛЬТ</span>
+      <span id="conn" class="chip" data-on="false">нет связи</span>
+      <span class="grow"></span>
+      <label class="pass">
+        <span>пароль</span>
+        <input id="pass" type="password" placeholder="admin" />
+      </label>
+      <label class="pass">
+        <span>админ</span>
+        <input id="admin-name" type="text" placeholder="Имя" />
+      </label>
+      <button id="reconnect" class="btn">Подключиться</button>
+    </header>
+
+    <main class="grid">
+      <section class="col-list">
+        <div class="cap">Сеансы</div>
+        <div id="sessions" class="sessions"></div>
+        <div class="cap">Журнал</div>
+        <div id="events" class="events"></div>
+      </section>
+
+      <section class="col-view">
+        <div class="view-head">
+          <span id="view-title" class="view-title">Выберите сеанс</span>
+          <span class="grow"></span>
+          <button id="btn-watch" class="btn" disabled>Смотреть</button>
+          <button id="btn-take" class="btn danger" disabled>Перехватить управление</button>
+        </div>
+        <div id="stage" class="stage" tabindex="0">
+          <img id="frame" alt="" />
+          <div id="stage-hint" class="stage-hint">
+            Нажмите «Смотреть» — здесь пойдёт живая картинка окна пользователя.<br />
+            При перехвате управления мышь и клавиатура в этой рамке работают как у него.
+          </div>
+        </div>
+        <div id="state" class="state"></div>
+      </section>
+    </main>
+    <script src="/ctfadmin/admin.js"></script>
+  </body>
+</html>

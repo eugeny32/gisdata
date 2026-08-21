@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}CtF·ADMIN{% endblock %}
+{% block page_icon %}bi-eye{% endblock %}
+{% block page_title %}CtF·ADMIN{% endblock %}
+{% block content %}
+  <style>
+    .page-main {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      flex: 1 1 auto;
+      display: flex;
+    }
+    .page-title { display: none; }
+    #ctfAdminFrame {
+      flex: 1 1 auto;
+      width: 100%;
+      border: 0;
+      display: block;
+      min-height: 480px;
+    }
+  </style>
+  <iframe id="ctfAdminFrame"
+          src="/ctfadmin/admin?pass={{ ctf_pass|urlencode }}"
+          title="CtF·ADMIN"></iframe>
+{% endblock %}

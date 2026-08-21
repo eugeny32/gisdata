@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Базовые станции{% endblock %}
+{% block page_icon %}bi-hdd-network{% endblock %}
+{% block page_title %}Базовые станции{% endblock %}
+{% block content %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+  {% if poll_result %}<div class="alert alert-success">{{ poll_result }}</div>{% endif %}
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 mb-0">Список станций</h2>
+        <div class="d-flex gap-2">
+          <form method="post" action="{% url 'stations' %}" class="d-inline">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="poll_now">
+            <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Опросить сейчас</button>
+          </form>
+          <input type="text" id="stationsSearch" class="form-control form-control-sm" style="max-width: 260px" placeholder="Поиск по названию/хосту...">
+          <button type="button" class="btn btn-sm btn-primary" id="addStationBtn"><i class="bi bi-plus-lg"></i> Добавить станцию</button>
+        </div>
+      </div>
+      <div class="text-secondary small mb-2">Кликните по строке, чтобы изменить станцию</div>
+      <div class="table-responsive">
+        <table class="table table-clean align-middle" id="stationsTable">
+          <thead>
+            <tr><th>Название</th><th>Хост:порт</th><th>Mount</th><th>Статус</th><th>Последняя проверка</th></tr>
+          </thead>
+          <tbody>
+          {% for s in stations %}
+            <tr class="stations-row" role="button" data-station-id="{{ s.id }}" style="cursor: pointer">
+              <td>{{ s.name }}</td>
+              <td>{{ s.host }}:{{ s.port }}</td>
+              <td>{{ s.mountpoint }}</td>
+              <td>
+                <span class="status-pill status-{{ s.status.status|default:'unknown' }}">{{ s.status.status|default:'unknown' }}</span>
+                {% if s.status.ftp_last_data_at %}
+                  <span class="badge text-bg-secondary" title="Резервная проверка по ftp://gnss.host (раз в час) — последние данные станции там от этого момента">
+                    <i class="bi bi-hdd-network"></i> FTP: {{ s.status.ftp_last_data_at|date:"m-d H:i" }}
+                  </span>
+                {% endif %}
+              </td>
+              <td>{{ s.status.last_check_at|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="text-muted">Нет станций</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="stationModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <form method="post" action="{% url 'stations' %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="save">
+          <input type="hidden" name="id" id="modalStationId" value="0">
+          <div class="modal-header">
+            <h5 class="modal-title" id="modalStationTitle">Новая станция</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body row g-3">
+            <div class="col-md-6">
+              <label class="form-label small">Название*</label>
+              <input type="text" name="name" id="modalName" class="form-control" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Хост (IP/домен)*</label>
+              <input type="text" name="host" id="modalHost" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Порт*</label>
+              <input type="number" name="port" id="modalPort" class="form-control" required value="2101">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Mountpoint*</label>
+              <input type="text" name="mountpoint" id="modalMountpoint" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">NTRIP логин</label>
+              <input type="text" name="ntrip_user" id="modalNtripUser" class="form-control">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">NTRIP пароль</label>
+              <input type="password" name="ntrip_password" id="modalNtripPassword" class="form-control">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Широта (lat)*</label>
+              <input type="text" name="lat" id="modalLat" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">Долгота (lon)*</label>
+              <input type="text" name="lon" id="modalLon" class="form-control" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Подпапка RINEX (внутри E:\Ftp\RINEX\RINEX\2026)</label>
+              <input type="text" name="rinex_path" id="modalRinexPath" class="form-control">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">Комментарий</label>
+              <input type="text" name="comment" id="modalComment" class="form-control">
+            </div>
+            <div class="col-12 form-check">
+              <input type="checkbox" name="is_enabled" class="form-check-input" id="modalIsEnabled" checked>
+              <label class="form-check-label" for="modalIsEnabled">Включена (опрашивать статус)</label>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="modalDeleteStation" class="btn btn-outline-danger me-auto d-none">Удалить</button>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Закрыть</button>
+            <button type="submit" class="btn btn-primary" id="modalSaveBtn">Добавить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <form method="post" action="{% url 'stations' %}" id="deleteStationForm" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" name="id" id="deleteStationId">
+  </form>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+const stationsData = {{ modal_data_json|safe }};
+const stationModalEl = document.getElementById('stationModal');
+const stationModal = new bootstrap.Modal(stationModalEl);
+
+function fillStationModal(id, data) {
+  document.getElementById('modalStationId').value = id;
+  document.getElementById('modalName').value = data.name || '';
+  document.getElementById('modalHost').value = data.host || '';
+  document.getElementById('modalPort').value = data.port || 2101;
+  document.getElementById('modalMountpoint').value = data.mountpoint || '';
+  document.getElementById('modalNtripUser').value = data.ntripUser || '';
+  document.getElementById('modalNtripPassword').value = data.ntripPassword || '';
+  document.getElementById('modalLat').value = data.lat || '';
+  document.getElementById('modalLon').value = data.lon || '';
+  document.getElementById('modalRinexPath').value = data.rinexPath || '';
+  document.getElementById('modalComment').value = data.comment || '';
+  document.getElementById('modalIsEnabled').checked = data.isEnabled !== false;
+}
+
+document.querySelectorAll('.stations-row').forEach(row => {
+  row.addEventListener('click', () => {
+    const id = row.dataset.stationId;
+    const data = stationsData[id];
+    if (!data) return;
+
+    document.getElementById('modalStationTitle').textContent = 'Станция: ' + data.name;
+    document.getElementById('modalSaveBtn').textContent = 'Сохранить';
+    fillStationModal(id, data);
+
+    const deleteBtn = document.getElementById('modalDeleteStation');
+    deleteBtn.classList.remove('d-none');
+    deleteBtn.onclick = () => {
+      if (!confirm('Удалить станцию?')) return;
+      document.getElementById('deleteStationId').value = id;
+      document.getElementById('deleteStationForm').submit();
+    };
+
+    stationModal.show();
+  });
+});
+
+document.getElementById('addStationBtn').addEventListener('click', () => {
+  document.getElementById('modalStationTitle').textContent = 'Новая станция';
+  document.getElementById('modalSaveBtn').textContent = 'Добавить';
+  fillStationModal(0, { port: 2101, isEnabled: true });
+  document.getElementById('modalDeleteStation').classList.add('d-none');
+  stationModal.show();
+});
+
+document.getElementById('stationsSearch').addEventListener('input', function () {
+  const q = this.value.trim().toLowerCase();
+  for (const row of document.querySelectorAll('#stationsTable tbody tr')) {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  }
+});
+</script>
+{% endblock %}
