@@ -5,6 +5,22 @@
 {% block content %}
   {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
+  {% if storage_quota != None %}
+    {% widthratio storage_used storage_quota 100 as storage_pct %}
+    <div class="card surface-card mb-3">
+      <div class="card-body py-2">
+        <div class="d-flex justify-content-between small text-secondary mb-1">
+          <span>Файловое хранилище</span>
+          <span>{{ storage_used|filesizeformat }} из {{ storage_quota|filesizeformat }}</span>
+        </div>
+        <div class="progress" style="height: 6px">
+          <div class="progress-bar {% if storage_pct >= 90 %}bg-danger{% elif storage_pct >= 70 %}bg-warning{% endif %}"
+               role="progressbar" style="width: {{ storage_pct }}%"></div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
   <div class="card surface-card">
     <div class="card-body">
       <p class="text-secondary small mb-3">

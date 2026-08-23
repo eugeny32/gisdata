@@ -1,8 +1,8 @@
-"""
+﻿"""
 Django settings for the gisdata (ntrip.host) Python rewrite.
 
 Adopts the EXISTING PostgreSQL schema (../sql/schema.sql, applied as-is on
-the new server) rather than letting Django derive it from scratch — models
+the new server) rather than letting Django derive it from scratch РІР‚вЂќ models
 across the app packages carry explicit db_table/db_column Meta to match it
 byte for byte. See ../.claude/plans (migration plan) for the phased rollout
 this settings file is part of.
@@ -10,7 +10,7 @@ this settings file is part of.
 Auth is intentionally NOT django.contrib.auth: the legacy PHP app has two
 disjoint identities in one session (regular `users_sync` customers vs
 `admins` staff, never both) that don't map onto django.contrib.auth.User
-without distortion — see core/auth.py for the session-based replacement.
+without distortion РІР‚вЂќ see core/auth.py for the session-based replacement.
 django.contrib.sessions is still used (for request.session itself) and
 django.contrib.gis for the PostGIS-backed CAD entity tables.
 """
@@ -46,23 +46,30 @@ ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
 
 INSTALLED_APPS = [
+        "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",
     "django.contrib.sessions",
     "django.contrib.gis",
-    "core",
-    "users",
-    "stations",
-    "billing",
-    "tours",
-    "rinex",
-    "slam_pipeline",
-    "cad_sessions",
+    "django.contrib.postgres",
+    "django.contrib.messages",
+    "apps.core",
+    "apps.users",
+    "apps.stations",
+    "apps.billing",
+    "apps.tours",
+    "apps.rinex",
+    "apps.slam",
+    "apps.cad",
+    "apps.documents",
+    "apps.api",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -78,7 +85,9 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
-                "core.context.nav_context",
+            "django.contrib.auth.context_processors.auth",
+            "django.contrib.messages.context_processors.messages",
+                "apps.core.context.nav_context",
             ],
         },
     },
@@ -98,7 +107,7 @@ DATABASES = {
 }
 
 # Own auto-incrementing PK convention matches the existing SERIAL/BIGSERIAL
-# columns already in schema.sql — nothing to configure here.
+# columns already in schema.sql РІР‚вЂќ nothing to configure here.
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # --- Sessions: mirrors app/lib/auth.php's session cookie exactly (name,
@@ -118,12 +127,12 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Legacy on-disk trees shared with the PHP app during the parallel-run phase
-# (Фаза migration plan) — not Django MEDIA in the FileField sense, most of
+# (Р В¤Р В°Р В·Р В° migration plan) РІР‚вЂќ not Django MEDIA in the FileField sense, most of
 # this is written directly by pipeline workers, not through the ORM.
 UPLOADS_ROOT = Path(_env("UPLOADS_ROOT", str(BASE_DIR.parent / "uploads")))
 ASSETS_ROOT = Path(_env("ASSETS_ROOT", str(BASE_DIR.parent / "assets")))
 
-# Linux side of the mdb sync bridge — see users/services.py::sync_from_mdb_dump().
+# Linux side of the mdb sync bridge РІР‚вЂќ see users/services.py::sync_from_mdb_dump().
 MDB_SYNC_DUMP_PATH = _env("MDB_SYNC_DUMP_PATH", str(BASE_DIR.parent / "mdb_sync" / "users_sync.json"))
 
 # RINEX FTP source (gnss.host) -- see rinex/gnss_ftp.py.
@@ -143,7 +152,7 @@ CDDIS_EARTHDATA_PASSWORD = _env("CDDIS_EARTHDATA_PASSWORD", "")
 
 # @playcanvas/splat-transform CLI (PLY denoise / SOG+collision conversion) --
 # small Node.js runtime kept only for this external-tool call, see the
-# migration plan Sec.3/Фаза 5.
+# migration plan Sec.3/Р В¤Р В°Р В·Р В° 5.
 SPLAT_TRANSFORM_NODE_EXE = _env("SPLAT_TRANSFORM_NODE_EXE", "node")
 SPLAT_TRANSFORM_CLI = _env("SPLAT_TRANSFORM_CLI", "")
 
@@ -177,3 +186,20 @@ LANGUAGE_CODE = "ru-ru"
 TIME_ZONE = "Europe/Moscow"
 USE_I18N = True
 USE_TZ = False
+
+
+
+
+
+
+
+
+
+
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "apps.core.auth.Backend",
+]
+
+
+

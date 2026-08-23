@@ -8,3 +8,34 @@ Pillow==12.3.0
 PyYAML==6.0.3
 pyproj==3.7.2
 rosbags==0.11.5
+
+# REST API and docs
+djangorestframework==3.15.2
+drf-spectacular==0.27.2
+django-filter==24.3
+
+# Admin and tree views
+django-mptt==0.16.0
+
+# Storage backends
+django-storages==1.14.4
+
+# Celery async workers
+celery[redis]==5.4.0
+django-celery-results==2.5.0
+
+# Monitoring and debugging
+sentry-sdk==2.13.0
+django-debug-toolbar==4.4.6
+
+# Testing
+pytest==8.3.3
+pytest-django==4.9.0
+pytest-cov==5.0.0
+factory-boy==3.3.0
+
+# Code quality
+ruff==0.6.9
+black==24.8.0
+mypy==1.11.2
+pre-commit==3.8.0
