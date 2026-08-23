@@ -1,0 +1,18 @@
+﻿[Unit]
+Description=GISData Celery Beat
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=admin32
+Group=admin32
+WorkingDirectory=/srv/gisdata/app
+Environment="PATH=/srv/gisdata/venv/bin"
+ExecStart=/srv/gisdata/venv/bin/celery -A gisdata.celery beat --loglevel=info
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
