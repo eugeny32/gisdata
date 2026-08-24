@@ -1,0 +1,406 @@
+{% csrf_token %}
+<div class="modal fade" id="chatModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-scrollable modal-lg">
+    <div class="modal-content" style="height: 82vh;">
+      <div class="modal-header">
+        <button type="button" class="btn btn-sm btn-outline-secondary me-2 d-none" id="chatBackBtn"><i class="bi bi-arrow-left"></i></button>
+        <h5 class="modal-title text-truncate" id="chatModalTitle">Чат</h5>
+        <button type="button" class="btn btn-sm btn-outline-success ms-auto me-2 d-none" id="chatCallBtn" title="Позвонить"><i class="bi bi-telephone"></i></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0 d-flex flex-column" style="min-height:0;">
+
+        <div id="chatListView" class="d-flex flex-column flex-grow-1" style="min-height:0;">
+          <div class="p-2 border-bottom border-secondary border-opacity-25">
+            <input type="text" class="form-control form-control-sm" id="chatNewSearch" placeholder="Новый диалог: логин или имя...">
+            <div id="chatNewResults" class="list-group mt-1"></div>
+          </div>
+          <div id="chatConvList" class="list-group list-group-flush overflow-auto flex-grow-1"></div>
+        </div>
+
+        <div id="chatThreadView" class="d-none flex-column flex-grow-1" style="min-height:0;">
+          <div id="chatIncomingCallBanner" class="d-none alert alert-warning m-2 py-2 d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-telephone-inbound me-1"></i> <span id="chatIncomingCallLabel">Входящий звонок</span></span>
+            <div class="d-flex gap-1">
+              <button type="button" class="btn btn-sm btn-success" id="chatAcceptCallBtn"><i class="bi bi-telephone"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-danger" id="chatDeclineCallBtn"><i class="bi bi-telephone-x"></i></button>
+            </div>
+          </div>
+
+          <div id="chatCallPanel" class="d-none p-2 border-bottom border-secondary border-opacity-25">
+            <div class="d-flex gap-2 flex-wrap" id="chatCallTiles">
+              <video id="chatLocalVideo" autoplay muted playsinline class="rounded" style="width:120px;height:90px;background:#000;object-fit:cover;"></video>
+              <div id="chatRemoteVideos" class="d-flex gap-2 flex-wrap"></div>
+            </div>
+            <div class="d-flex gap-2 mt-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="chatMuteBtn" title="Микрофон"><i class="bi bi-mic"></i></button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="chatCamBtn" title="Камера"><i class="bi bi-camera-video"></i></button>
+              <button type="button" class="btn btn-sm btn-danger ms-auto" id="chatHangupBtn" title="Завершить"><i class="bi bi-telephone-x"></i></button>
+            </div>
+          </div>
+
+          <div id="chatMessages" class="flex-grow-1 overflow-auto p-3 d-flex flex-column gap-2"></div>
+
+          <div id="chatUploadProgress" class="d-none px-3 pb-1 small text-secondary">Загрузка...</div>
+          <form id="chatSendForm" class="d-flex gap-2 p-2 border-top border-secondary border-opacity-25">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="chatAttachBtn" title="Прикрепить файл"><i class="bi bi-paperclip"></i></button>
+            <input type="file" id="chatFileInput" class="d-none" multiple>
+            <input type="text" class="form-control form-control-sm" id="chatMessageInput" placeholder="Сообщение..." autocomplete="off">
+            <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-send"></i></button>
+          </form>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.9.5/dist/livekit-client.umd.min.js"></script>
+<script>
+(function () {
+  function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? decodeURIComponent(match.pop()) : '';
+  }
+  function csrfFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') headers.set('X-CSRFToken', getCookie('csrftoken'));
+    return fetch(url, { ...options, headers });
+  }
+  function fmtSize(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + ' ГБ';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + ' МБ';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + ' КБ';
+    return n + ' Б';
+  }
+
+  const myAdminId = {{ request.session.admin_id|default:"null" }};
+  const myUserId = {{ request.session.user_id|default:"null" }};
+  function isMine(msg) {
+    return (myAdminId !== null && msg.sender_admin_id === myAdminId)
+        || (myUserId !== null && msg.sender_user_id === myUserId);
+  }
+
+  const modalEl = document.getElementById('chatModal');
+  if (!modalEl) return;
+  const modal = new bootstrap.Modal(modalEl);
+  const listView = document.getElementById('chatListView');
+  const threadView = document.getElementById('chatThreadView');
+  const backBtn = document.getElementById('chatBackBtn');
+  const callBtn = document.getElementById('chatCallBtn');
+  const title = document.getElementById('chatModalTitle');
+  const convList = document.getElementById('chatConvList');
+  const messagesBox = document.getElementById('chatMessages');
+  const sendForm = document.getElementById('chatSendForm');
+  const messageInput = document.getElementById('chatMessageInput');
+  const attachBtn = document.getElementById('chatAttachBtn');
+  const fileInput = document.getElementById('chatFileInput');
+  const uploadProgress = document.getElementById('chatUploadProgress');
+
+  const state = { conversationId: null, ws: null };
+
+  function openChatModal() {
+    modal.show();
+    showList();
+  }
+  window.openChatModal = openChatModal;
+
+  const trigger = document.getElementById('openChatModalBtn');
+  if (trigger) trigger.addEventListener('click', function (e) { e.preventDefault(); openChatModal(); });
+
+  function showList() {
+    closeThread();
+    listView.classList.remove('d-none');
+    listView.classList.add('d-flex');
+    threadView.classList.add('d-none');
+    threadView.classList.remove('d-flex');
+    backBtn.classList.add('d-none');
+    callBtn.classList.add('d-none');
+    title.textContent = 'Чат';
+    loadConversations();
+  }
+
+  async function loadConversations() {
+    const res = await csrfFetch('{% url "api_chat_conversations" %}');
+    const data = await res.json();
+    convList.innerHTML = '';
+    (data.conversations || []).forEach(function (c) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'list-group-item list-group-item-action bg-transparent text-white border-secondary border-opacity-25';
+      item.innerHTML = '<div class="fw-semibold">' + c.name + '</div>' +
+        (c.last_message ? '<div class="text-secondary small text-truncate">' + c.last_message + '</div>' : '');
+      item.addEventListener('click', function () { openConversation(c.id, c.name); });
+      convList.appendChild(item);
+    });
+    if (!data.conversations || !data.conversations.length) {
+      convList.innerHTML = '<div class="list-group-item bg-transparent text-secondary">Пока нет диалогов — найдите собеседника выше</div>';
+    }
+  }
+
+  const newSearch = document.getElementById('chatNewSearch');
+  const newResults = document.getElementById('chatNewResults');
+  let searchTimer = null;
+  newSearch.addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    const q = newSearch.value.trim();
+    if (!q) { newResults.innerHTML = ''; return; }
+    searchTimer = setTimeout(async function () {
+      const res = await csrfFetch('{% url "api_chat_search_accounts" %}?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      newResults.innerHTML = '';
+      (data.results || []).forEach(function (acc) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'list-group-item list-group-item-action';
+        item.textContent = acc.label + (acc.kind === 'admin' ? ' (сотрудник)' : '');
+        item.addEventListener('click', async function () {
+          const startRes = await csrfFetch('{% url "api_chat_start" %}', {
+            method: 'POST',
+            body: new URLSearchParams({ kind: acc.kind, id: acc.id }),
+          });
+          const startData = await startRes.json();
+          newSearch.value = '';
+          newResults.innerHTML = '';
+          if (startData.conversation_id) openConversation(startData.conversation_id, startData.name);
+        });
+        newResults.appendChild(item);
+      });
+    }, 250);
+  });
+
+  function attachmentMarkup(att) {
+    if (att.kind === 'image') {
+      return '<a href="' + att.url + '" target="_blank"><img src="' + att.url + '" style="max-width:220px;max-height:220px;border-radius:8px;display:block;margin-top:4px;"></a>';
+    }
+    if (att.kind === 'video') {
+      return '<video src="' + att.url + '" controls style="max-width:260px;border-radius:8px;display:block;margin-top:4px;"></video>';
+    }
+    return '<a href="' + att.url + '" class="d-flex align-items-center gap-2 mt-1 p-2 rounded text-white text-decoration-none" style="background:rgba(255,255,255,.08)">' +
+      '<i class="bi bi-file-earmark-arrow-down fs-5"></i><span class="text-truncate">' + att.file_name + '</span>' +
+      '<span class="text-secondary small ms-auto">' + fmtSize(att.size) + '</span></a>';
+  }
+
+  function appendMessage(msg) {
+    const mine = 'is_mine' in msg ? msg.is_mine : isMine(msg);
+    const wrap = document.createElement('div');
+    wrap.className = 'd-flex' + (mine ? ' justify-content-end' : '');
+    const bubble = document.createElement('div');
+    bubble.className = 'p-2 rounded-3 ' + (mine ? 'bg-primary' : 'bg-secondary bg-opacity-25');
+    bubble.style.maxWidth = '78%';
+    let html = '';
+    if (!mine) html += '<div class="small text-secondary">' + msg.sender_label + '</div>';
+    if (msg.body) html += '<div style="white-space:pre-wrap;word-break:break-word;">' + msg.body.replace(/</g, '&lt;') + '</div>';
+    (msg.attachments || []).forEach(function (att) { html += attachmentMarkup(att); });
+    bubble.innerHTML = html;
+    wrap.appendChild(bubble);
+    messagesBox.appendChild(wrap);
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+  }
+
+  async function openConversation(id, name) {
+    state.conversationId = id;
+    listView.classList.add('d-none');
+    listView.classList.remove('d-flex');
+    threadView.classList.remove('d-none');
+    threadView.classList.add('d-flex');
+    backBtn.classList.remove('d-none');
+    callBtn.classList.remove('d-none');
+    title.textContent = name || 'Чат';
+    messagesBox.innerHTML = '<div class="text-secondary text-center small">Загрузка...</div>';
+
+    const res = await csrfFetch('/api/chat/' + id + '/messages/');
+    const data = await res.json();
+    messagesBox.innerHTML = '';
+    (data.messages || []).forEach(appendMessage);
+    title.textContent = data.conversation_name || name || 'Чат';
+
+    connectWs(id);
+  }
+
+  function connectWs(id) {
+    closeWs();
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(proto + '://' + window.location.host + '/ws/chat/' + id + '/');
+    ws.addEventListener('message', function (event) {
+      const data = JSON.parse(event.data);
+      if (data.signal_type) { handleSignal(data); return; }
+      appendMessage(data);
+    });
+    state.ws = ws;
+  }
+  function closeWs() {
+    if (state.ws) { try { state.ws.close(); } catch (e) {} state.ws = null; }
+  }
+  function closeThread() {
+    closeWs();
+    endCall();
+    state.conversationId = null;
+  }
+
+  backBtn.addEventListener('click', showList);
+
+  sendForm.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const body = messageInput.value.trim();
+    const files = fileInput.files;
+    if (!body && (!files || !files.length)) return;
+    messageInput.value = '';
+
+    if (files && files.length) {
+      uploadProgress.classList.remove('d-none');
+      const form = new FormData();
+      form.append('body', body);
+      for (const f of files) form.append('files', f);
+      const res = await csrfFetch('/api/chat/' + state.conversationId + '/send/', { method: 'POST', body: form });
+      const data = await res.json();
+      uploadProgress.classList.add('d-none');
+      fileInput.value = '';
+      if (!res.ok) { alert(data.error || 'Ошибка отправки'); return; }
+      appendMessage(data);
+      return;
+    }
+
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ body }));
+    } else {
+      const res = await csrfFetch('/api/chat/' + state.conversationId + '/send/', {
+        method: 'POST', body: JSON.stringify({ body }),
+      });
+      const data = await res.json();
+      if (res.ok) appendMessage(data);
+    }
+  });
+  attachBtn.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function () {
+    if (fileInput.files.length) sendForm.requestSubmit();
+  });
+
+  // --- Calls (LiveKit) ---------------------------------------------------
+  const LK = window.LivekitClient;
+  const Room = LK && LK.Room, RoomEvent = LK && LK.RoomEvent, Track = LK && LK.Track;
+  let room = null;
+  let ringingTimer = null;
+
+  const callPanel = document.getElementById('chatCallPanel');
+  const localVideo = document.getElementById('chatLocalVideo');
+  const remoteVideos = document.getElementById('chatRemoteVideos');
+  const muteBtn = document.getElementById('chatMuteBtn');
+  const camBtn = document.getElementById('chatCamBtn');
+  const hangupBtn = document.getElementById('chatHangupBtn');
+  const incomingBanner = document.getElementById('chatIncomingCallBanner');
+  const incomingLabel = document.getElementById('chatIncomingCallLabel');
+  const acceptBtn = document.getElementById('chatAcceptCallBtn');
+  const declineBtn = document.getElementById('chatDeclineCallBtn');
+
+  function sendSignal(type) {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ type: type }));
+    }
+  }
+
+  async function startCall() {
+    if (!state.conversationId) return;
+    const res = await csrfFetch('/api/chat/' + state.conversationId + '/call_token/', { method: 'POST' });
+    const cfg = await res.json();
+    if (!res.ok) { alert(cfg.error || 'Звонки недоступны'); return; }
+    sendSignal('call_invite');
+    await joinCall(cfg);
+  }
+
+  async function joinCall(cfg) {
+    if (!LK) { alert('Не удалось загрузить модуль звонков'); return; }
+    room = new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      rtcConfig: { iceServers: cfg.ice_servers, iceTransportPolicy: 'relay' },
+    });
+    room
+      .on(RoomEvent.TrackSubscribed, function (track, pub, participant) { attachTrack(track, participant); })
+      .on(RoomEvent.LocalTrackPublished, function (pub) { attachTrack(pub.track, room.localParticipant); })
+      .on(RoomEvent.TrackUnsubscribed, function (track) { track.detach().forEach(function (el) { el.remove(); }); })
+      .on(RoomEvent.Disconnected, endCall);
+
+    await room.connect(cfg.ws_url, cfg.token);
+    callPanel.classList.remove('d-none');
+    incomingBanner.classList.add('d-none');
+    try {
+      await room.localParticipant.enableCameraAndMicrophone();
+    } catch (e) {
+      console.warn('камера/микрофон недоступны:', e);
+    }
+  }
+
+  function attachTrack(track, participant) {
+    if (!track) return;
+    if (track.kind === Track.Kind.Audio) {
+      if (participant.isLocal) return; // don't play back your own mic
+      const el = track.attach();
+      el.autoplay = true;
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      return;
+    }
+    if (track.kind !== Track.Kind.Video) return;
+    if (participant.isLocal) {
+      track.attach(localVideo);
+      return;
+    }
+    const el = track.attach();
+    el.dataset.identity = participant.identity;
+    el.style.borderRadius = '8px';
+    el.style.width = '120px'; el.style.height = '90px'; el.style.objectFit = 'cover'; el.style.background = '#000';
+    remoteVideos.appendChild(el);
+  }
+
+  function endCall() {
+    if (room) { try { room.disconnect(); } catch (e) {} room = null; }
+    callPanel.classList.add('d-none');
+    remoteVideos.innerHTML = '';
+    if (localVideo) localVideo.srcObject = null;
+    incomingBanner.classList.add('d-none');
+    clearTimeout(ringingTimer);
+  }
+
+  function handleSignal(sig) {
+    if (sig.signal_type === 'call_invite') {
+      incomingLabel.textContent = 'Звонок от ' + sig.from_label;
+      incomingBanner.classList.remove('d-none');
+      clearTimeout(ringingTimer);
+      ringingTimer = setTimeout(function () { incomingBanner.classList.add('d-none'); }, 30000);
+    } else if (['call_cancel', 'call_decline', 'call_end'].includes(sig.signal_type)) {
+      endCall();
+    }
+  }
+
+  callBtn.addEventListener('click', startCall);
+  hangupBtn.addEventListener('click', function () { sendSignal('call_end'); endCall(); });
+  acceptBtn.addEventListener('click', async function () {
+    incomingBanner.classList.add('d-none');
+    const res = await csrfFetch('/api/chat/' + state.conversationId + '/call_token/', { method: 'POST' });
+    const cfg = await res.json();
+    if (res.ok) { sendSignal('call_answer'); await joinCall(cfg); }
+  });
+  declineBtn.addEventListener('click', function () {
+    incomingBanner.classList.add('d-none');
+    sendSignal('call_decline');
+  });
+  muteBtn.addEventListener('click', function () {
+    if (!room) return;
+    const enabled = room.localParticipant.isMicrophoneEnabled;
+    room.localParticipant.setMicrophoneEnabled(!enabled);
+    muteBtn.classList.toggle('btn-outline-secondary', !enabled);
+    muteBtn.classList.toggle('btn-secondary', enabled);
+  });
+  camBtn.addEventListener('click', function () {
+    if (!room) return;
+    const enabled = room.localParticipant.isCameraEnabled;
+    room.localParticipant.setCameraEnabled(!enabled);
+    camBtn.classList.toggle('btn-outline-secondary', !enabled);
+    camBtn.classList.toggle('btn-secondary', enabled);
+  });
+
+  modalEl.addEventListener('hidden.bs.modal', closeThread);
+})();
+</script>

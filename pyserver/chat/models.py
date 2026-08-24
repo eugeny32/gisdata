@@ -53,7 +53,12 @@ class Message(models.Model):
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="messages")
     sender_admin = models.ForeignKey(Admin, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
     sender_user = models.ForeignKey(UserSync, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
-    body = models.TextField()
+    # Blank when the message is attachment-only (see MessageAttachment) --
+    # a message must have a body or at least one attachment, enforced in
+    # chat/views.py, not here (an empty-body-and-no-attachment row is
+    # harmless, just pointless, not a data-integrity concern worth a
+    # DB constraint).
+    body = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -70,3 +75,25 @@ class Message(models.Model):
         indexes = [
             models.Index(fields=["conversation", "created_at"], name="idx_chat_messages_conv_time"),
         ]
+
+
+class MessageAttachment(models.Model):
+    KIND_CHOICES = [("image", "Image"), ("video", "Video"), ("document", "Document")]
+
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="attachments")
+    # Relative to storage.services.owner_root(sender) -- lives inside the
+    # SENDER's existing per-account storage tree (under "chat/"), so it
+    # counts against the same unified 6GB quota as tours/the file manager
+    # instead of a second, separately-tracked allowance. Authorization for
+    # the OTHER participant to read it is conversation-membership (see
+    # chat/views.py::download_attachment_view), NOT storage.models.
+    # SharedAccess -- that model is for the file-manager's explicit
+    # per-file sharing, a different (and unrelated) grant.
+    file_path = models.CharField(max_length=255)
+    file_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=128)
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES, default="document")
+    size_bytes = models.BigIntegerField()
+
+    class Meta:
+        db_table = "chat_message_attachments"

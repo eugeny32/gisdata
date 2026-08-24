@@ -185,6 +185,21 @@ PDAL_PROJ_DATA_DIR = _env("PDAL_PROJ_DATA_DIR", "")
 # the ctfadmin.php gate page iframe URL for an already-authenticated admin.
 CTFADMIN_ADMIN_PASS = _env("CTFADMIN_ADMIN_PASS", "")
 
+# Voice/video calls (chat/livekit.py) -- mints tokens for the ALREADY-
+# RUNNING ~/ntrip_coturn infrastructure (LiveKit SFU + coturn, see the
+# chat feature's plan doc) instead of standing up a second WebRTC stack.
+# That project is deliberately separate from this git repo -- these are
+# read-only-shared secrets (same values as its own token-service.mjs),
+# not something this codebase owns or should regenerate.
+LIVEKIT_API_KEY = _env("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = _env("LIVEKIT_API_SECRET", "")
+# No /rtc suffix -- the livekit-client SDK appends that path itself;
+# ".../rtc/rtc" wouldn't connect (matches ntrip_coturn's own token-service.mjs).
+LIVEKIT_WS_URL = _env("LIVEKIT_WS_URL", "wss://meet.ntrip.host")
+TURN_STATIC_AUTH_SECRET = _env("TURN_STATIC_AUTH_SECRET", "")
+TURN_DOMAIN = _env("TURN_DOMAIN", "turn.ntrip.host")
+TURN_UDP_PORT = int(_env("TURN_UDP_PORT", "3478"))
+
 # Native Voxel-SLAM binary (slam/native/, built from hku-mars/Voxel-SLAM
 # without ROS1/Docker -- see slam_pipeline/pipeline/steps/compute_slam.py)
 # and RTKLIB rnx2rtkp (slam_pipeline/pipeline/steps/ppk_correction.py) --
