@@ -46,6 +46,7 @@ ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",
     "django.contrib.sessions",
@@ -58,6 +59,8 @@ INSTALLED_APPS = [
     "rinex",
     "slam_pipeline",
     "cad_sessions",
+    "storage",
+    "chat",
 ]
 
 MIDDLEWARE = [
@@ -85,6 +88,17 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "gisdata.wsgi.application"
+ASGI_APPLICATION = "gisdata.asgi.application"
+
+# chat/consumers.py delivery -- channels-redis (not the in-memory layer)
+# so message broadcast works correctly across gunicorn/daphne's multiple
+# worker processes, not just within one.
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [_env("REDIS_URL", "redis://127.0.0.1:6379/1")]},
+    }
+}
 
 DATABASES = {
     "default": {
@@ -111,6 +125,11 @@ SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_AGE = 8 * 3600
 SESSION_SAVE_EVERY_REQUEST = True
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
+# Shared across ntrip.host and chat.ntrip.host -- logging in on one logs
+# you in on the other too (see the chat feature's architecture note: same
+# Django process/urlconf, different server_name). Empty by default so
+# local/single-host dev setups (no subdomain) aren't forced into this.
+SESSION_COOKIE_DOMAIN = _env("SESSION_COOKIE_DOMAIN", None)
 
 CSRF_COOKIE_SAMESITE = "Lax"
 
@@ -121,6 +140,14 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 # (Фаза migration plan) — not Django MEDIA in the FileField sense, most of
 # this is written directly by pipeline workers, not through the ORM.
 UPLOADS_ROOT = Path(_env("UPLOADS_ROOT", str(BASE_DIR.parent / "uploads")))
+
+# nginx internal-only location alias for X-Accel-Redirect'd storage/*
+# downloads (see storage/views.py::api_download_view) -- keeps big-file
+# transfers off the gunicorn worker pool (only 3 workers configured) while
+# still gating access through Django auth/sharing checks first. Empty by
+# default (falls back to a plain Django FileResponse) until the matching
+# nginx location is set up.
+STORAGE_INTERNAL_ALIAS = _env("STORAGE_INTERNAL_ALIAS", "")
 ASSETS_ROOT = Path(_env("ASSETS_ROOT", str(BASE_DIR.parent / "assets")))
 
 # Linux side of the mdb sync bridge — see users/services.py::sync_from_mdb_dump().

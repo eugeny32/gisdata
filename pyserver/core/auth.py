@@ -56,22 +56,34 @@ def set_admin_password(admin: Admin, raw_password: str) -> None:
 
 # --- Session identity -------------------------------------------------
 
-def current_user(request):
-    user_id = request.session.get("user_id")
+def user_from_session(session):
+    """Same lookup as current_user(), but takes a session store directly --
+    used by the chat WebSocket consumer, which has no Django `request`
+    object (Channels' scope carries `session` on its own, wired in by
+    SessionMiddlewareStack in gisdata/asgi.py)."""
+    user_id = session.get("user_id")
     if not user_id:
         return None
-    return {"id": user_id, "user_name": request.session.get("user_name")}
+    return {"id": user_id, "user_name": session.get("user_name")}
 
 
-def current_admin(request):
-    admin_id = request.session.get("admin_id")
+def admin_from_session(session):
+    admin_id = session.get("admin_id")
     if not admin_id:
         return None
     return {
         "id": admin_id,
-        "login": request.session.get("admin_login"),
-        "role": request.session.get("admin_role"),
+        "login": session.get("admin_login"),
+        "role": session.get("admin_role"),
     }
+
+
+def current_user(request):
+    return user_from_session(request.session)
+
+
+def current_admin(request):
+    return admin_from_session(request.session)
 
 
 def login_user_session(request, user: UserSync) -> None:

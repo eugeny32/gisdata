@@ -1,0 +1,72 @@
+{% extends "chat/base_chat.html" %}
+{% block title %}Диалоги{% endblock %}
+{% block content %}
+  {% csrf_token %}
+  <div class="card surface-card mb-3">
+    <div class="card-body">
+      <label class="form-label small">Новый диалог</label>
+      <input type="text" class="form-control" id="newChatSearch" placeholder="Логин или имя пользователя платформы...">
+      <div id="newChatResults" class="list-group mt-1"></div>
+    </div>
+  </div>
+
+  <div class="card surface-card">
+    <div class="list-group list-group-flush" id="conversationList">
+      {% for c in conversations %}
+        <a href="{% url 'chat_conversation' c.id %}" class="list-group-item list-group-item-action bg-transparent text-white border-secondary border-opacity-25">
+          <div class="fw-semibold">{{ c.name }}</div>
+          {% if c.last_message %}<div class="text-secondary small text-truncate">{{ c.last_message }}</div>{% endif %}
+        </a>
+      {% empty %}
+        <div class="list-group-item bg-transparent text-secondary">Пока нет диалогов — найдите собеседника выше</div>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? decodeURIComponent(match.pop()) : '';
+  }
+  function csrfFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') headers.set('X-CSRFToken', getCookie('csrftoken'));
+    return fetch(url, { ...options, headers });
+  }
+
+  const input = document.getElementById('newChatSearch');
+  const results = document.getElementById('newChatResults');
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = ''; return; }
+    timer = setTimeout(async () => {
+      const res = await csrfFetch('{% url "api_chat_search_accounts" %}?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      results.innerHTML = '';
+      (data.results || []).forEach((acc) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'list-group-item list-group-item-action';
+        item.textContent = acc.label + (acc.kind === 'admin' ? ' (сотрудник)' : '');
+        item.addEventListener('click', async () => {
+          const startRes = await csrfFetch('{% url "api_chat_start" %}', {
+            method: 'POST',
+            body: new URLSearchParams({ kind: acc.kind, id: acc.id }),
+          });
+          const startData = await startRes.json();
+          if (startData.conversation_id) {
+            window.location.href = '/chat/' + startData.conversation_id + '/';
+          }
+        });
+        results.appendChild(item);
+      });
+    }, 250);
+  });
+})();
+</script>
+{% endblock %}

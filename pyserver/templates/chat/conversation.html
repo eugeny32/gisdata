@@ -1,0 +1,118 @@
+{% extends "chat/base_chat.html" %}
+{% block title %}{{ conversation_name }}{% endblock %}
+{% block content %}
+  {% csrf_token %}
+  <div class="d-flex align-items-center gap-2 mb-2">
+    <a href="{% url 'chat_home' %}" class="text-decoration-none text-secondary"><i class="bi bi-arrow-left"></i></a>
+    <h5 class="mb-0">{{ conversation_name }}</h5>
+    <span class="badge text-bg-secondary ms-2" id="wsStatus">подключение...</span>
+  </div>
+
+  <div class="card surface-card mb-2">
+    <div class="card-body" id="messageList" style="height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem;">
+      {% for m in messages %}
+        <div class="d-flex {% if m.is_mine %}justify-content-end{% endif %}">
+          <div class="p-2 rounded-3 {% if m.is_mine %}bg-primary{% else %}bg-secondary bg-opacity-25{% endif %}" style="max-width: 75%;">
+            {% if not m.is_mine %}<div class="small text-secondary">{{ m.sender_label }}</div>{% endif %}
+            <div style="white-space: pre-wrap; word-break: break-word;">{{ m.body }}</div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <form id="sendForm" class="d-flex gap-2">
+    <input type="text" class="form-control" id="messageInput" placeholder="Сообщение..." autocomplete="off">
+    <button type="submit" class="btn btn-primary"><i class="bi bi-send"></i></button>
+  </form>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? decodeURIComponent(match.pop()) : '';
+  }
+  function csrfFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') headers.set('X-CSRFToken', getCookie('csrftoken'));
+    return fetch(url, { ...options, headers });
+  }
+
+  const conversationId = {{ conversation.id }};
+  const list = document.getElementById('messageList');
+  const status = document.getElementById('wsStatus');
+  const form = document.getElementById('sendForm');
+  const input = document.getElementById('messageInput');
+
+  function scrollToBottom() { list.scrollTop = list.scrollHeight; }
+  scrollToBottom();
+
+  function appendMessage(msg, isMine) {
+    const wrap = document.createElement('div');
+    wrap.className = 'd-flex' + (isMine ? ' justify-content-end' : '');
+    const bubble = document.createElement('div');
+    bubble.className = 'p-2 rounded-3 ' + (isMine ? 'bg-primary' : 'bg-secondary bg-opacity-25');
+    bubble.style.maxWidth = '75%';
+    if (!isMine) {
+      const label = document.createElement('div');
+      label.className = 'small text-secondary';
+      label.textContent = msg.sender_label;
+      bubble.appendChild(label);
+    }
+    const body = document.createElement('div');
+    body.style.whiteSpace = 'pre-wrap';
+    body.style.wordBreak = 'break-word';
+    body.textContent = msg.body;
+    bubble.appendChild(body);
+    wrap.appendChild(bubble);
+    list.appendChild(wrap);
+    scrollToBottom();
+  }
+
+  const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(wsProto + '://' + window.location.host + '/ws/chat/' + conversationId + '/');
+  let wsReady = false;
+
+  ws.addEventListener('open', () => { wsReady = true; status.textContent = 'онлайн'; status.className = 'badge text-bg-success ms-2'; });
+  ws.addEventListener('close', () => { wsReady = false; status.textContent = 'офлайн'; status.className = 'badge text-bg-secondary ms-2'; });
+  ws.addEventListener('error', () => { wsReady = false; status.textContent = 'ошибка соединения'; status.className = 'badge text-bg-danger ms-2'; });
+  ws.addEventListener('message', (event) => {
+    const msg = JSON.parse(event.data);
+    // Our own sent-via-WS message will also come back through this same
+    // broadcast -- appendMessage handles both "mine" (from my own send)
+    // and incoming messages from the other participant the same way.
+    appendMessage(msg, isMineMessage(msg));
+  });
+
+  const myAdminId = {{ request.session.admin_id|default:"null" }};
+  const myUserId = {{ request.session.user_id|default:"null" }};
+  function isMineMessage(msg) {
+    return (myAdminId !== null && msg.sender_admin_id === myAdminId)
+        || (myUserId !== null && msg.sender_user_id === myUserId);
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = input.value.trim();
+    if (!body) return;
+    input.value = '';
+    if (wsReady) {
+      ws.send(JSON.stringify({ body }));
+    } else {
+      // REST fallback (see chat/views.py::send_message_view) -- covers a
+      // dropped/never-connected WebSocket; the message still lands, just
+      // without the instant broadcast to the other side.
+      const res = await csrfFetch('{% url "api_chat_send" conversation.id %}', {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      });
+      if (res.ok) {
+        appendMessage({ body, sender_label: 'Вы' }, true);
+      }
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -36,6 +36,10 @@ class UserSync(models.Model):
     facade_cad_enabled = models.SmallIntegerField(default=0)
     topo_cad_enabled = models.SmallIntegerField(default=0)
     facade_foto_enabled = models.SmallIntegerField(default=0)
+    # NULL = unlimited (mdb-synced accounts, or manual accounts created
+    # before quotas existed). Only enforced for self-service tour uploads
+    # (tour_user_upload_view) -- see tours/services.py::user_storage_usage_bytes().
+    storage_quota_bytes = models.BigIntegerField(null=True, blank=True)
     synced_at = models.DateTimeField(auto_now=True)
 
     class Meta:

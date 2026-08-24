@@ -20,6 +20,8 @@ from users.models import UserSync
 
 from .file_processing import denoise_splat_ply_if_possible, strip_unsupported_ply_header_lines
 from .models import PgConnection, Tour, TourAnnotation, TourFile, TourGroup, TourLayer
+from storage.services import total_storage_usage_bytes
+
 from .services import (
     external_pg_connect, group_folder_for, pg_upload_large_object,
     tour_collision_url, tour_copc_url, tour_file_url, tour_is_public, tour_sog_url,
@@ -432,6 +434,20 @@ def tour_user_upload_view(request):
     if total_size > max_bytes:
         return fail(f"Суммарный размер файлов ({total_size / (1024**3):.2f} ГБ) превышает лимит 2 ГБ для пользовательской загрузки")
 
+    plain_user_for_quota = auth.current_user(request)
+    if plain_user_for_quota and not auth.current_admin(request):
+        quota = UserSync.objects.filter(id=plain_user_for_quota["id"]).values_list(
+            "storage_quota_bytes", flat=True
+        ).first()
+        if quota is not None:
+            used = total_storage_usage_bytes(None, plain_user_for_quota)
+            if used + total_size > quota:
+                free = max(quota - used, 0)
+                return fail(
+                    f"Недостаточно места в хранилище: доступно {free / (1024**3):.2f} ГБ из "
+                    f"{quota / (1024**3):.2f} ГБ (использовано {used / (1024**3):.2f} ГБ)"
+                )
+
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     new_files = []
@@ -505,7 +521,20 @@ def my_tours_view(request):
             return redirect("my_tours")
 
     tours = Tour.objects.filter(**owner_filter).order_by("-created_at")
-    return render(request, "tours/my_tours.html", {"error": error, "tours": tours})
+
+    storage_quota = None
+    storage_used = None
+    if not admin and plain_user:
+        storage_quota = UserSync.objects.filter(id=plain_user["id"]).values_list(
+            "storage_quota_bytes", flat=True
+        ).first()
+        if storage_quota is not None:
+            storage_used = total_storage_usage_bytes(None, plain_user)
+
+    return render(request, "tours/my_tours.html", {
+        "error": error, "tours": tours,
+        "storage_quota": storage_quota, "storage_used": storage_used,
+    })
 
 
 def tour_export_view(request):

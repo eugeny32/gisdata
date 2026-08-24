@@ -1,6 +1,7 @@
 {% url 'home' as home_url %}
 {% url 'map' as map_url %}
 {% url 'my_tours' as my_tours_url %}
+{% url 'storage_explorer' as storage_url %}
 {% url 'facade_cad' as facade_cad_url %}
 {% url 'topo_cad' as topo_cad_url %}
 {% url 'facade_foto' as facade_foto_url %}
@@ -32,6 +33,9 @@
     </a>
     <a class="sidebar-link{% if request.path == my_tours_url %} active{% endif %}" href="{{ my_tours_url }}">
       <i class="bi bi-camera-reels"></i><span>Мои туры</span>
+    </a>
+    <a class="sidebar-link{% if request.path == storage_url %} active{% endif %}" href="{{ storage_url }}">
+      <i class="bi bi-hdd-stack"></i><span>Хранилище</span>
     </a>
     {% if nav_flags.facade_cad %}
     <a class="sidebar-link{% if request.path == facade_cad_url %} active{% endif %}" href="{{ facade_cad_url }}">

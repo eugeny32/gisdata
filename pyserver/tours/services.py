@@ -94,6 +94,29 @@ def tour_collision_url(file_path: str) -> str | None:
     return _sidecar_url(file_path, ".collision.glb")
 
 
+def user_storage_usage_bytes(user_id: int) -> int:
+    """Sums the on-disk size of every file belonging to tours owned by this
+    users_sync account (self-service uploads only -- see storage_quota_bytes
+    on UserSync). Sizes aren't cached in the DB, so this stats each file;
+    fine at self-service scale (a handful of tours per user)."""
+    from .models import Tour, TourFile  # local import -- avoids a services/models import cycle
+
+    upload_dir = Path(settings.UPLOADS_ROOT) / "tours"
+    tours = list(Tour.objects.filter(created_by_user_id=user_id).values_list("id", "file_path"))
+    file_paths = [file_path for _, file_path in tours]
+    file_paths += TourFile.objects.filter(
+        tour_id__in=[tour_id for tour_id, _ in tours]
+    ).values_list("file_path", flat=True)
+
+    total = 0
+    for file_path in file_paths:
+        try:
+            total += (upload_dir / file_path).stat().st_size
+        except OSError:
+            pass
+    return total
+
+
 def group_folder_for(group_id: int | None, group_name: str | None) -> str:
     """Storage subfolder by group -- uploads/tours/g{id}-{slug}/... Applies
     only to NEW files uploaded through the form."""

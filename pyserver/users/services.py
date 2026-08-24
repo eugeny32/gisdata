@@ -27,7 +27,7 @@ def next_manual_id() -> int:
 
 
 def add_manual_user(*, user_name, password, gl_name=None, email=None, telephone=None,
-                     contact_person=None, is_active=True) -> UserSync:
+                     contact_person=None, is_active=True, storage_quota_bytes=None) -> UserSync:
     """No ODBC on Linux — unlike users.php (which tries the live mdb write
     first), every account created through this server is manual. This
     matches the PHP original's own fallback path when mdb is unreachable."""
@@ -36,6 +36,7 @@ def add_manual_user(*, user_name, password, gl_name=None, email=None, telephone=
         user_password=password, user_time=1 if is_active else 0, puser_time=0,
         is_active=1 if is_active else 0, is_manual=1,
         email=email, telephone=telephone, contact_person=contact_person,
+        storage_quota_bytes=storage_quota_bytes,
     )
 
 

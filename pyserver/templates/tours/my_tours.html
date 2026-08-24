@@ -5,6 +5,8 @@
 {% block content %}
   {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
+  {% include "partials/storage_bar.html" %}
+
   <div class="card surface-card">
     <div class="card-body">
       <p class="text-secondary small mb-3">

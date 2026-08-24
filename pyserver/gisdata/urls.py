@@ -13,4 +13,6 @@ urlpatterns = [
     path("", include("tours.urls")),
     path("", include("cad_sessions.urls")),
     path("", include("slam_pipeline.urls")),
+    path("", include("storage.urls")),
+    path("", include("chat.urls")),
 ]

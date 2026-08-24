@@ -36,6 +36,12 @@
       <button class="btn btn-sm btn-outline-secondary" type="button" id="themeToggle" title="Светлая/тёмная тема">
         <i class="bi bi-moon-stars"></i>
       </button>
+      {% if nav_admin or nav_user %}
+      <a class="btn btn-sm btn-outline-secondary position-relative" href="{% url 'chat_home' %}" title="Чат">
+        <i class="bi bi-chat-dots"></i>
+        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none" id="chatUnreadBadge" style="font-size:.6rem"></span>
+      </a>
+      {% endif %}
       {% if nav_admin %}
         <span class="text-secondary small ms-2 d-none d-sm-inline text-truncate" style="max-width:160px"><i class="bi bi-shield-lock me-1"></i>{{ nav_admin.login }}</span>
         <a class="btn btn-sm btn-outline-light ms-2" href="{% url 'logout' %}">Выход</a>
@@ -103,6 +109,26 @@
           if (window.innerWidth < 992) closeSidebar();
         });
       });
+    }
+
+    var chatBadge = document.getElementById('chatUnreadBadge');
+    if (chatBadge) {
+      function refreshChatUnread() {
+        fetch('{% url "api_chat_unread_count" %}', { credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (data) {
+            if (!data) return;
+            if (data.count > 0) {
+              chatBadge.textContent = data.count > 99 ? '99+' : data.count;
+              chatBadge.classList.remove('d-none');
+            } else {
+              chatBadge.classList.add('d-none');
+            }
+          })
+          .catch(function () {});
+      }
+      refreshChatUnread();
+      setInterval(refreshChatUnread, 30000);
     }
   })();
 </script>

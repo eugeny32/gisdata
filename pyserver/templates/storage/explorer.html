@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+{% block title %}Хранилище{% endblock %}
+{% block page_icon %}bi-hdd-stack{% endblock %}
+{% block page_title %}Хранилище{% endblock %}
+{% block content %}
+  {% csrf_token %}
+  {% include "partials/storage_bar.html" %}
+
+  <div class="card surface-card">
+    <div class="card-body">
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <div class="btn-group btn-group-sm" role="group">
+          <button type="button" class="btn btn-outline-secondary active" id="tabMine">Мои файлы</button>
+          <button type="button" class="btn btn-outline-secondary" id="tabShared">Расшаренные со мной</button>
+        </div>
+        <nav aria-label="breadcrumb" class="ms-2 flex-grow-1">
+          <ol class="breadcrumb mb-0" id="explorerBreadcrumb"></ol>
+        </nav>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="newFolderBtn"><i class="bi bi-folder-plus"></i> Папка</button>
+          <button type="button" class="btn btn-sm btn-primary" id="uploadBtn"><i class="bi bi-upload"></i> Загрузить</button>
+          <input type="file" id="uploadInput" class="d-none" multiple>
+        </div>
+      </div>
+
+      <div id="explorerError" class="alert alert-danger d-none"></div>
+
+      <div class="table-responsive">
+        <table class="table table-clean align-middle mb-0" id="explorerTable">
+          <thead>
+            <tr><th>Имя</th><th>Размер</th><th>Изменён</th></tr>
+          </thead>
+          <tbody id="explorerBody">
+            <tr><td colspan="3" class="text-muted">Загрузка...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="explorerContextMenu" class="d-none" style="position:fixed; z-index:1200; background:#1f232b; border:1px solid rgba(255,255,255,.1); border-radius:8px; min-width:180px; padding:4px; box-shadow: 0 8px 24px rgba(0,0,0,.4);"></div>
+
+  <div class="modal fade" id="shareModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Поделиться</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-secondary small mb-2" id="shareTargetLabel"></p>
+          <label class="form-label small">Кому</label>
+          <input type="text" class="form-control mb-1" id="shareSearchInput" placeholder="Логин или имя...">
+          <div id="shareSearchResults" class="list-group mb-3"></div>
+          <div id="shareSelectedAccount" class="d-none alert alert-secondary py-2 px-3 d-flex justify-content-between align-items-center">
+            <span id="shareSelectedLabel"></span>
+            <button type="button" class="btn-close btn-close-white" id="shareSelectedClear"></button>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" class="form-check-input" id="shareCanWrite">
+            <label class="form-check-label small" for="shareCanWrite">Разрешить изменять</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+          <button type="button" class="btn btn-primary" id="shareSubmitBtn" disabled>Поделиться</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{ shared_with_me|json_script:"sharedWithMeData" }}
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? decodeURIComponent(match.pop()) : '';
+  }
+  function csrfFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') headers.set('X-CSRFToken', getCookie('csrftoken'));
+    return fetch(url, { ...options, headers });
+  }
+
+  const state = { path: '', mode: 'mine', shareOwner: null };
+  let sharedGrants = [];
+  try {
+    const raw = document.getElementById('sharedWithMeData');
+    if (raw) sharedGrants = JSON.parse(raw.textContent);
+  } catch (e) { sharedGrants = []; }
+
+  const body = document.getElementById('explorerBody');
+  const errBox = document.getElementById('explorerError');
+  const breadcrumb = document.getElementById('explorerBreadcrumb');
+  const ctxMenu = document.getElementById('explorerContextMenu');
+
+  function showError(msg) {
+    errBox.textContent = msg;
+    errBox.classList.remove('d-none');
+  }
+  function clearError() { errBox.classList.add('d-none'); }
+
+  function fmtSize(n) {
+    if (n == null) return '';
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + ' ГБ';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + ' МБ';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + ' КБ';
+    return n + ' Б';
+  }
+  function fmtDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function listUrl(path) {
+    const params = new URLSearchParams({ path: path || '' });
+    if (state.mode === 'shared' && state.shareOwner) {
+      params.set(state.shareOwner.kind === 'admin' ? 'shared_by_admin' : 'shared_by_user', state.shareOwner.id);
+    }
+    return '{% url "api_storage_list" %}?' + params.toString();
+  }
+
+  function renderBreadcrumb() {
+    breadcrumb.innerHTML = '';
+    const rootLabel = state.mode === 'shared' && state.shareOwner ? state.shareOwner.label : 'Мои файлы';
+    const parts = state.path ? state.path.split('/') : [];
+    const rootLi = document.createElement('li');
+    rootLi.className = 'breadcrumb-item' + (parts.length === 0 ? ' active' : '');
+    if (parts.length === 0) {
+      rootLi.textContent = rootLabel;
+    } else {
+      const a = document.createElement('a');
+      a.href = '#'; a.textContent = rootLabel;
+      a.addEventListener('click', (e) => { e.preventDefault(); navigateTo(''); });
+      rootLi.appendChild(a);
+    }
+    breadcrumb.appendChild(rootLi);
+    let acc = '';
+    parts.forEach((part, i) => {
+      acc = acc ? acc + '/' + part : part;
+      const li = document.createElement('li');
+      li.className = 'breadcrumb-item' + (i === parts.length - 1 ? ' active' : '');
+      if (i === parts.length - 1) {
+        li.textContent = part;
+      } else {
+        const a = document.createElement('a');
+        a.href = '#'; a.textContent = part;
+        const target = acc;
+        a.addEventListener('click', (e) => { e.preventDefault(); navigateTo(target); });
+        li.appendChild(a);
+      }
+      breadcrumb.appendChild(li);
+    });
+  }
+
+  function navigateTo(path) {
+    state.path = path;
+    load();
+  }
+
+  function renderSharedRoot() {
+    body.innerHTML = '';
+    if (!sharedGrants.length) {
+      body.innerHTML = '<tr><td colspan="3" class="text-muted">Никто пока не поделился с вами файлами</td></tr>';
+      return;
+    }
+    sharedGrants.forEach((g) => {
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      const ownerLabel = g.shared_by_admin ? g.shared_by_admin_label : g.shared_by_user_label;
+      tr.innerHTML = '<td><i class="bi bi-folder-fill text-warning me-2"></i>' + ownerLabel + ' — ' + g.path + '</td><td></td><td></td>';
+      tr.addEventListener('click', () => {
+        state.shareOwner = {
+          kind: g.shared_by_admin ? 'admin' : 'user',
+          id: g.shared_by_admin || g.shared_by_user,
+          label: ownerLabel,
+        };
+        navigateTo(g.path);
+      });
+      body.appendChild(tr);
+    });
+  }
+
+  async function load() {
+    clearError();
+    if (state.mode === 'shared' && !state.shareOwner) { renderSharedRoot(); breadcrumb.innerHTML = ''; return; }
+    renderBreadcrumb();
+    body.innerHTML = '<tr><td colspan="3" class="text-muted">Загрузка...</td></tr>';
+    const res = await csrfFetch(listUrl(state.path));
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Ошибка загрузки'); body.innerHTML = ''; return; }
+    body.innerHTML = '';
+    if (!data.entries.length) {
+      body.innerHTML = '<tr><td colspan="3" class="text-muted">Папка пуста</td></tr>';
+      return;
+    }
+    data.entries.forEach((entry) => {
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      tr.dataset.name = entry.name;
+      tr.dataset.isDir = entry.is_dir ? '1' : '0';
+      const icon = entry.is_dir ? 'bi-folder-fill text-warning' : 'bi-file-earmark';
+      tr.innerHTML =
+        '<td><i class="bi ' + icon + ' me-2"></i>' + entry.name + '</td>' +
+        '<td class="text-secondary small">' + (entry.is_dir ? '' : fmtSize(entry.size)) + '</td>' +
+        '<td class="text-secondary small">' + fmtDate(entry.mtime) + '</td>';
+      tr.addEventListener('dblclick', () => openEntry(entry));
+      tr.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, entry); });
+      body.appendChild(tr);
+    });
+  }
+
+  function entryPath(name) {
+    return state.path ? state.path + '/' + name : name;
+  }
+
+  function openEntry(entry) {
+    if (entry.is_dir) { navigateTo(entryPath(entry.name)); return; }
+    downloadEntry(entry);
+  }
+
+  function downloadEntry(entry) {
+    const params = new URLSearchParams({ path: entryPath(entry.name) });
+    if (state.mode === 'shared' && state.shareOwner) {
+      params.set(state.shareOwner.kind === 'admin' ? 'shared_by_admin' : 'shared_by_user', state.shareOwner.id);
+    }
+    window.location.href = '{% url "api_storage_download" %}?' + params.toString();
+  }
+
+  function hideContextMenu() { ctxMenu.classList.add('d-none'); }
+
+  function menuItem(label, icon, onClick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm w-100 text-start text-white';
+    btn.style.background = 'transparent';
+    btn.innerHTML = '<i class="bi ' + icon + ' me-2"></i>' + label;
+    btn.addEventListener('click', () => { hideContextMenu(); onClick(); });
+    return btn;
+  }
+
+  function showContextMenu(evt, entry) {
+    ctxMenu.innerHTML = '';
+    const isMine = state.mode === 'mine';
+    ctxMenu.appendChild(menuItem('Открыть', 'bi-box-arrow-up-right', () => openEntry(entry)));
+    if (!entry.is_dir) ctxMenu.appendChild(menuItem('Скачать', 'bi-download', () => downloadEntry(entry)));
+    if (isMine) {
+      ctxMenu.appendChild(menuItem('Переименовать', 'bi-pencil', () => renameEntry(entry)));
+      ctxMenu.appendChild(menuItem('Поделиться', 'bi-share', () => openShareModal(entry)));
+      ctxMenu.appendChild(menuItem('Удалить', 'bi-trash', () => deleteEntry(entry)));
+    }
+    ctxMenu.classList.remove('d-none');
+    const menuRect = ctxMenu.getBoundingClientRect();
+    let left = evt.clientX, top = evt.clientY;
+    if (left + menuRect.width > window.innerWidth) left = window.innerWidth - menuRect.width - 8;
+    if (top + menuRect.height > window.innerHeight) top = window.innerHeight - menuRect.height - 8;
+    ctxMenu.style.left = left + 'px';
+    ctxMenu.style.top = top + 'px';
+  }
+  document.addEventListener('click', (e) => { if (!ctxMenu.contains(e.target)) hideContextMenu(); });
+  document.addEventListener('scroll', hideContextMenu, true);
+
+  async function renameEntry(entry) {
+    const newName = prompt('Новое имя', entry.name);
+    if (!newName || newName === entry.name) return;
+    const newPath = state.path ? state.path + '/' + newName : newName;
+    const res = await csrfFetch('{% url "api_storage_rename" %}', {
+      method: 'POST',
+      body: new URLSearchParams({ path: entryPath(entry.name), new_path: newPath }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Ошибка переименования'); return; }
+    load();
+  }
+
+  async function deleteEntry(entry) {
+    if (!confirm('Удалить «' + entry.name + '»?')) return;
+    const res = await csrfFetch('{% url "api_storage_delete" %}', {
+      method: 'POST',
+      body: new URLSearchParams({ path: entryPath(entry.name) }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Ошибка удаления'); return; }
+    load();
+  }
+
+  document.getElementById('newFolderBtn').addEventListener('click', async () => {
+    const name = prompt('Название папки');
+    if (!name) return;
+    const res = await csrfFetch('{% url "api_storage_mkdir" %}', {
+      method: 'POST',
+      body: new URLSearchParams({ path: state.path, name }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Ошибка создания папки'); return; }
+    load();
+  });
+
+  const uploadInput = document.getElementById('uploadInput');
+  document.getElementById('uploadBtn').addEventListener('click', () => uploadInput.click());
+  uploadInput.addEventListener('change', async () => {
+    if (!uploadInput.files.length) return;
+    const form = new FormData();
+    form.append('path', state.path);
+    for (const f of uploadInput.files) form.append('files', f);
+    const res = await csrfFetch('{% url "api_storage_upload" %}', { method: 'POST', body: form });
+    const data = await res.json();
+    uploadInput.value = '';
+    if (!res.ok) { showError(data.error || 'Ошибка загрузки'); return; }
+    load();
+  });
+
+  // --- Share modal ---
+  const shareModalEl = document.getElementById('shareModal');
+  const shareModal = new bootstrap.Modal(shareModalEl);
+  const shareSearchInput = document.getElementById('shareSearchInput');
+  const shareSearchResults = document.getElementById('shareSearchResults');
+  const shareSelectedBox = document.getElementById('shareSelectedAccount');
+  const shareSelectedLabel = document.getElementById('shareSelectedLabel');
+  const shareSubmitBtn = document.getElementById('shareSubmitBtn');
+  let shareTargetEntry = null, shareSelected = null;
+
+  function openShareModal(entry) {
+    shareTargetEntry = entry;
+    shareSelected = null;
+    shareSearchInput.value = '';
+    shareSearchResults.innerHTML = '';
+    shareSelectedBox.classList.add('d-none');
+    shareSubmitBtn.disabled = true;
+    document.getElementById('shareTargetLabel').textContent = 'Объект: ' + entry.name;
+    shareModal.show();
+  }
+
+  let shareSearchTimer = null;
+  shareSearchInput.addEventListener('input', () => {
+    clearTimeout(shareSearchTimer);
+    const q = shareSearchInput.value.trim();
+    if (!q) { shareSearchResults.innerHTML = ''; return; }
+    shareSearchTimer = setTimeout(async () => {
+      const res = await csrfFetch('{% url "api_storage_search_accounts" %}?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      shareSearchResults.innerHTML = '';
+      (data.results || []).forEach((acc) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'list-group-item list-group-item-action';
+        item.textContent = acc.label + (acc.kind === 'admin' ? ' (сотрудник)' : '');
+        item.addEventListener('click', () => {
+          shareSelected = acc;
+          shareSelectedLabel.textContent = acc.label;
+          shareSelectedBox.classList.remove('d-none');
+          shareSearchResults.innerHTML = '';
+          shareSearchInput.value = '';
+          shareSubmitBtn.disabled = false;
+        });
+        shareSearchResults.appendChild(item);
+      });
+    }, 250);
+  });
+  document.getElementById('shareSelectedClear').addEventListener('click', () => {
+    shareSelected = null;
+    shareSelectedBox.classList.add('d-none');
+    shareSubmitBtn.disabled = true;
+  });
+  shareSubmitBtn.addEventListener('click', async () => {
+    if (!shareSelected || !shareTargetEntry) return;
+    const res = await csrfFetch('{% url "api_storage_share" %}', {
+      method: 'POST',
+      body: new URLSearchParams({
+        path: entryPath(shareTargetEntry.name),
+        kind: shareSelected.kind,
+        id: shareSelected.id,
+        can_write: document.getElementById('shareCanWrite').checked ? '1' : '0',
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Ошибка'); return; }
+    shareModal.hide();
+  });
+
+  // --- Tabs ---
+  document.getElementById('tabMine').addEventListener('click', function () {
+    this.classList.add('active');
+    document.getElementById('tabShared').classList.remove('active');
+    state.mode = 'mine'; state.shareOwner = null; state.path = '';
+    load();
+  });
+  document.getElementById('tabShared').addEventListener('click', function () {
+    this.classList.add('active');
+    document.getElementById('tabMine').classList.remove('active');
+    state.mode = 'shared'; state.shareOwner = null; state.path = '';
+    load();
+  });
+
+  load();
+})();
+</script>
+{% endblock %}
