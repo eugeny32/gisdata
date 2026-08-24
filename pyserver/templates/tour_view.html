@@ -1,9 +1,9 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>РўСѓСЂ вЂ” GISData</title>
+<title>Тур — GISData</title>
 <link rel="icon" href="/favicon.ico">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
@@ -26,29 +26,29 @@
 <div id="tourViewerContainer"></div>
 
 <div id="tourTopBar">
-  <a href="{% url 'map' %}" class="btn btn-sm btn-outline-light" title="Рљ РєР°СЂС‚Рµ"><i class="bi bi-arrow-left"></i></a>
-  <span id="tourTitle">РўСѓСЂ</span>
-  <button type="button" class="btn btn-sm btn-outline-light" id="tourShareBtn" title="РЎРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ"><i class="bi bi-share"></i></button>
-  <button type="button" class="btn btn-sm btn-outline-light" id="tourLayersBtn" title="РЎР»РѕРё"><i class="bi bi-layers"></i></button>
-  <button type="button" class="btn btn-sm btn-outline-light" id="tourSettingsBtn" title="РќР°СЃС‚СЂРѕР№РєРё"><i class="bi bi-gear"></i></button>
-  <button type="button" class="btn btn-sm btn-outline-light" id="tourCenterBtn" title="Р¦РµРЅС‚СЂРёСЂРѕРІР°С‚СЊ"><i class="bi bi-crosshair"></i></button>
-  <button type="button" class="btn btn-sm btn-outline-light" id="tourHelpBtn" title="РЈРїСЂР°РІР»РµРЅРёРµ РјС‹С€СЊСЋ"><i class="bi bi-question-circle"></i></button>
+  <a href="{% url 'map' %}" class="btn btn-sm btn-outline-light" title="К карте"><i class="bi bi-arrow-left"></i></a>
+  <span id="tourTitle">Тур</span>
+  <button type="button" class="btn btn-sm btn-outline-light" id="tourShareBtn" title="Скопировать ссылку"><i class="bi bi-share"></i></button>
+  <button type="button" class="btn btn-sm btn-outline-light" id="tourLayersBtn" title="Слои"><i class="bi bi-layers"></i></button>
+  <button type="button" class="btn btn-sm btn-outline-light" id="tourSettingsBtn" title="Настройки"><i class="bi bi-gear"></i></button>
+  <button type="button" class="btn btn-sm btn-outline-light" id="tourCenterBtn" title="Центрировать"><i class="bi bi-crosshair"></i></button>
+  <button type="button" class="btn btn-sm btn-outline-light" id="tourHelpBtn" title="Управление мышью"><i class="bi bi-question-circle"></i></button>
 </div>
 
 <div id="tourMouseHelp" class="position-fixed bottom-0 start-0 m-3 p-3 rounded d-none" style="z-index: 1100; background: rgba(0,0,0,.75); color: #fff; max-width: 280px; font-size: 14px;">
-  <div class="d-flex align-items-center gap-2 mb-2"><i class="bi bi-mouse2"></i><b>Р›РµРІР°СЏ РєРЅРѕРїРєР°</b> + РїРµСЂРµС‚Р°СЃРєРёРІР°РЅРёРµ вЂ” РІСЂР°С‰РµРЅРёРµ РєР°РјРµСЂС‹</div>
-  <div class="d-flex align-items-center gap-2 mb-2"><i class="bi bi-mouse2"></i><b>РџСЂР°РІР°СЏ РєРЅРѕРїРєР°</b> + РїРµСЂРµС‚Р°СЃРєРёРІР°РЅРёРµ вЂ” РїР°РЅРѕСЂР°РјРёСЂРѕРІР°РЅРёРµ</div>
-  <div class="d-flex align-items-center gap-2"><i class="bi bi-mouse"></i><b>РљРѕР»РµСЃРѕ РјС‹С€Рё</b> вЂ” РјР°СЃС€С‚Р°Р± (РїСЂРёР±Р»РёР¶РµРЅРёРµ/РѕС‚РґР°Р»РµРЅРёРµ)</div>
+  <div class="d-flex align-items-center gap-2 mb-2"><i class="bi bi-mouse2"></i><b>Левая кнопка</b> + перетаскивание — вращение камеры</div>
+  <div class="d-flex align-items-center gap-2 mb-2"><i class="bi bi-mouse2"></i><b>Правая кнопка</b> + перетаскивание — панорамирование</div>
+  <div class="d-flex align-items-center gap-2"><i class="bi bi-mouse"></i><b>Колесо мыши</b> — масштаб (приближение/отдаление)</div>
 </div>
 
 <div id="tourLayersPanel" class="position-fixed top-0 end-0 m-3 p-3 rounded d-none" style="z-index: 1100; margin-top: 4rem !important; background: rgba(20,20,20,.92); color: #fff; width: 300px; max-height: 70vh; overflow-y: auto; font-size: 14px;">
   <div class="d-flex justify-content-between align-items-center mb-2">
-    <b>РЎР»РѕРё</b>
-    <a href="#" id="tourExportLink" class="text-white small" target="_blank"><i class="bi bi-download"></i> Р­РєСЃРїРѕСЂС‚ DXF</a>
+    <b>Слои</b>
+    <a href="#" id="tourExportLink" class="text-white small" target="_blank"><i class="bi bi-download"></i> Экспорт DXF</a>
   </div>
   <div id="tourLayersList"></div>
   <form id="tourNewLayerForm" class="d-flex gap-1 mt-2 d-none">
-    <input type="text" id="tourNewLayerName" class="form-control form-control-sm" placeholder="РќРѕРІС‹Р№ СЃР»РѕР№">
+    <input type="text" id="tourNewLayerName" class="form-control form-control-sm" placeholder="Новый слой">
     <input type="color" id="tourNewLayerColor" class="form-control form-control-sm" value="#ff3b30" style="max-width: 44px">
     <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus"></i></button>
   </form>
@@ -56,28 +56,28 @@
 
 <div id="tourSettingsPanel" class="position-fixed top-0 end-0 m-3 p-3 rounded d-none" style="z-index: 1100; margin-top: 4rem !important; background: rgba(20,20,20,.92); color: #fff; width: min(320px, 92vw); max-height: 80vh; overflow-y: auto; font-size: 14px;">
   <div class="d-flex justify-content-between align-items-center mb-2">
-    <b>РќР°СЃС‚СЂРѕР№РєРё</b>
-    <div class="form-check form-switch mb-0" title="РРЅРґРёРєР°С‚РѕСЂ FPS/РїР°РјСЏС‚Рё/СЃС‚СЂРёРјРёРЅРіР°">
+    <b>Настройки</b>
+    <div class="form-check form-switch mb-0" title="Индикатор FPS/памяти/стриминга">
       <input class="form-check-input" type="checkbox" id="tourSettingShowStats">
-      <label class="form-check-label small" for="tourSettingShowStats">СЃС‚Р°С‚РёСЃС‚РёРєР°</label>
+      <label class="form-check-label small" for="tourSettingShowStats">статистика</label>
     </div>
   </div>
   <div class="accordion accordion-flush" id="tourSettingsAccordion">
 
     <div class="accordion-item">
       <h2 class="accordion-header">
-        <button class="accordion-button btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsCamera">РљР°РјРµСЂР°</button>
+        <button class="accordion-button btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsCamera">Камера</button>
       </h2>
       <div id="tourSettingsCamera" class="accordion-collapse collapse show">
         <div class="accordion-body px-1 py-2">
           <div class="mb-2">
-            <label class="form-label small mb-0">РЈРіРѕР» РѕР±Р·РѕСЂР° (FOV): <span id="tourSettingFovValue"></span>В°</label>
+            <label class="form-label small mb-0">Угол обзора (FOV): <span id="tourSettingFovValue"></span>°</label>
             <input type="range" class="form-range" id="tourSettingFov" min="20" max="100" step="1">
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">Р­РєСЃРїРѕР·РёС†РёСЏ (СЏСЂРєРѕСЃС‚СЊ/СЃРІРµС‡РµРЅРёРµ): <span id="tourSettingExposureValue"></span></label>
+            <label class="form-label small mb-0">Экспозиция (яркость/свечение): <span id="tourSettingExposureValue"></span></label>
             <input type="range" class="form-range" id="tourSettingExposure" min="0.1" max="3" step="0.05">
-            <div class="small text-secondary">РќРёР¶Рµ 1 вЂ” РїСЂРёРіР»СѓС€Р°РµС‚ РїРµСЂРµСЃРІРµС‡РµРЅРЅС‹Рµ/СЃРІРµС‚СЏС‰РёРµСЃСЏ СЃРїР»Р°С‚С‹. Р”РµР№СЃС‚РІСѓРµС‚ РЅР° РІСЃСЋ СЃС†РµРЅСѓ.</div>
+            <div class="small text-secondary">Ниже 1 — приглушает пересвеченные/светящиеся сплаты. Действует на всю сцену.</div>
           </div>
           <div class="row g-2 mb-2">
             <div class="col-6">
@@ -90,10 +90,10 @@
             </div>
           </div>
           <div class="mb-0">
-            <label class="form-label small mb-0">РџСЂРѕРµРєС†РёСЏ</label>
+            <label class="form-label small mb-0">Проекция</label>
             <select class="form-select form-select-sm" id="tourSettingProjection">
-              <option value="perspective">РџРµСЂСЃРїРµРєС‚РёРІРЅР°СЏ</option>
-              <option value="orthographic">РћСЂС‚РѕРіСЂР°С„РёС‡РµСЃРєР°СЏ</option>
+              <option value="perspective">Перспективная</option>
+              <option value="orthographic">Ортографическая</option>
             </select>
           </div>
         </div>
@@ -102,29 +102,29 @@
 
     <div class="accordion-item">
       <h2 class="accordion-header">
-        <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsNav">РќР°РІРёРіР°С†РёСЏ</button>
+        <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsNav">Навигация</button>
       </h2>
       <div id="tourSettingsNav" class="accordion-collapse collapse">
         <div class="accordion-body px-1 py-2">
           <div class="mb-2">
-            <label class="form-label small mb-0">Р РµР¶РёРј РЅР°РІРёРіР°С†РёРё</label>
+            <label class="form-label small mb-0">Режим навигации</label>
             <select class="form-select form-select-sm" id="tourSettingNavMode">
-              <option value="orbit">РћСЂР±РёС‚Р° (РІРѕРєСЂСѓРі РјРѕРґРµР»Рё)</option>
-              <option value="fly">РџРѕР»С‘С‚ (СЃРІРѕР±РѕРґРЅР°СЏ РєР°РјРµСЂР°, WASD)</option>
-              <option value="walk">РџСЂРѕРіСѓР»РєР° (СЃРѕ СЃС‚РѕР»РєРЅРѕРІРµРЅРёСЏРјРё)</option>
+              <option value="orbit">Орбита (вокруг модели)</option>
+              <option value="fly">Полёт (свободная камера, WASD)</option>
+              <option value="walk">Прогулка (со столкновениями)</option>
             </select>
-            <div class="small text-secondary">РџРѕР»С‘С‚/РїСЂРѕРіСѓР»РєР°: Р»РµРІР°СЏ РєРЅРѕРїРєР° вЂ” РїРѕРІРѕСЂРѕС‚, РїСЂР°РІР°СЏ РєРЅРѕРїРєР° вЂ” СЃРґРІРёРі РІ СЃС‚РѕСЂРѕРЅС‹ (РєР°Рє РјС‹С€СЊСЋ, С‚Р°Рє Рё WASD), Space/Shift вЂ” РІРІРµСЂС…/РІРЅРёР·. РќР° СЃРµРЅСЃРѕСЂРЅРѕРј СЌРєСЂР°РЅРµ вЂ” РѕРґРЅРёРј РїР°Р»СЊС†РµРј РІСЂР°С‰РµРЅРёРµ, РґРІСѓРјСЏ РїР°Р»СЊС†Р°РјРё вЂ” РјР°СЃС€С‚Р°Р±. РџСЂРѕРіСѓР»РєР° РѕСЃС‚Р°РЅР°РІР»РёРІР°РµС‚СЃСЏ РїРµСЂРµРґ РїСЂРµРїСЏС‚СЃС‚РІРёРµРј вЂ” РґРѕСЃС‚СѓРїРЅР° С‚РѕР»СЊРєРѕ РґР»СЏ СЃРїР»Р°С‚-С‚СѓСЂРѕРІ СЃ РіРѕС‚РѕРІС‹Рј РєРѕР»Р»Р°Р№РґРµСЂРѕРј, РёРЅР°С‡Рµ СЂР°Р±РѕС‚Р°РµС‚ РєР°Рє РѕР±С‹С‡РЅС‹Р№ РїРѕР»С‘С‚.</div>
+            <div class="small text-secondary">Полёт/прогулка: левая кнопка — поворот, правая кнопка — сдвиг в стороны (как мышью, так и WASD), Space/Shift — вверх/вниз. На сенсорном экране — одним пальцем вращение, двумя пальцами — масштаб. Прогулка останавливается перед препятствием — доступна только для сплат-туров с готовым коллайдером, иначе работает как обычный полёт.</div>
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">Р§СѓРІСЃС‚РІРёС‚РµР»СЊРЅРѕСЃС‚СЊ РјС‹С€Рё: <span id="tourSettingSensitivityValue"></span></label>
+            <label class="form-label small mb-0">Чувствительность мыши: <span id="tourSettingSensitivityValue"></span></label>
             <input type="range" class="form-range" id="tourSettingSensitivity" min="0.2" max="3" step="0.1">
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">РЎРєРѕСЂРѕСЃС‚СЊ Р·СѓРјР°: <span id="tourSettingZoomSpeedValue"></span></label>
+            <label class="form-label small mb-0">Скорость зума: <span id="tourSettingZoomSpeedValue"></span></label>
             <input type="range" class="form-range" id="tourSettingZoomSpeed" min="0.2" max="3" step="0.1">
           </div>
           <div class="mb-0">
-            <label class="form-label small mb-0">РЎРєРѕСЂРѕСЃС‚СЊ РїРѕР»С‘С‚Р°: <span id="tourSettingMoveSpeedValue"></span></label>
+            <label class="form-label small mb-0">Скорость полёта: <span id="tourSettingMoveSpeedValue"></span></label>
             <input type="range" class="form-range" id="tourSettingMoveSpeed" min="0.5" max="20" step="0.5">
           </div>
         </div>
@@ -133,51 +133,51 @@
 
     <div class="accordion-item">
       <h2 class="accordion-header">
-        <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsPoints">РўРѕС‡РєРё (LAS/COPC)</button>
+        <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsPoints">Точки (LAS/COPC)</button>
       </h2>
       <div id="tourSettingsPoints" class="accordion-collapse collapse">
         <div class="accordion-body px-1 py-2">
           <div class="mb-2">
-            <label class="form-label small mb-0">Р Р°Р·РјРµСЂ С‚РѕС‡РєРё: <span id="tourSettingPointSizeValue"></span>px</label>
+            <label class="form-label small mb-0">Размер точки: <span id="tourSettingPointSizeValue"></span>px</label>
             <input type="range" class="form-range" id="tourSettingPointSize" min="1" max="10" step="1">
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">Р Р°СЃРєСЂР°СЃРєР°</label>
+            <label class="form-label small mb-0">Раскраска</label>
             <select class="form-select form-select-sm" id="tourSettingColorMode">
-              <option value="rgb">Р РµР°Р»СЊРЅС‹Р№ С†РІРµС‚ (RGB)</option>
-              <option value="height">РџРѕ РІС‹СЃРѕС‚Рµ</option>
-              <option value="intensity">РРЅС‚РµРЅСЃРёРІРЅРѕСЃС‚СЊ</option>
-              <option value="classification">РљР»Р°СЃСЃРёС„РёРєР°С†РёСЏ</option>
+              <option value="rgb">Реальный цвет (RGB)</option>
+              <option value="height">По высоте</option>
+              <option value="intensity">Интенсивность</option>
+              <option value="classification">Классификация</option>
             </select>
-            <div class="small text-secondary">РџРµСЂРµРєР»СЋС‡Р°РµС‚СЃСЏ Р±РµР· РїРµСЂРµР·Р°РіСЂСѓР·РєРё С„Р°Р№Р»Р°. Р”Р»СЏ 3DGS-СЃРїР»Р°С‚РѕРІ РЅРµ РґРµР№СЃС‚РІСѓРµС‚.</div>
+            <div class="small text-secondary">Переключается без перезагрузки файла. Для 3DGS-сплатов не действует.</div>
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">Р‘СЋРґР¶РµС‚ С‚РѕС‡РµРє (РєР°Рє РІ Potree): <span id="tourSettingPointBudgetValue"></span></label>
+            <label class="form-label small mb-0">Бюджет точек (как в Potree): <span id="tourSettingPointBudgetValue"></span></label>
             <input type="range" class="form-range" id="tourSettingPointBudget" min="1000000" max="100000000" step="1000000">
-            <div class="small text-secondary">РЎРєРѕР»СЊРєРѕ С‚РѕС‡РµРє COPC РґРµСЂР¶Р°С‚СЊ РІ СЃС†РµРЅРµ РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ. Р‘РѕР»СЊС€Рµ вЂ” РїРѕРґСЂРѕР±РЅРµРµ РєР°СЂС‚РёРЅРєР°, РІС‹С€Рµ РЅР°РіСЂСѓР·РєР° РЅР° GPU/РїР°РјСЏС‚СЊ.</div>
+            <div class="small text-secondary">Сколько точек COPC держать в сцене одновременно. Больше — подробнее картинка, выше нагрузка на GPU/память.</div>
           </div>
           <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
           <div class="form-check form-switch mb-1">
             <input class="form-check-input" type="checkbox" id="tourSettingClipEnabled">
-            <label class="form-check-label small" for="tourSettingClipEnabled">РЎРµС‡РµРЅРёРµ (РѕР±СЂРµР·РєР° РїРѕ РѕСЃСЏРј)</label>
+            <label class="form-check-label small" for="tourSettingClipEnabled">Сечение (обрезка по осям)</label>
           </div>
-          <div class="small text-secondary mb-2">Р”РѕР»Рё РѕС‚ СЂР°Р·РјРµСЂР° РљРђР–Р”РћР“Рћ РѕР±Р»Р°РєР° С‚РѕС‡РµРє (0 вЂ” РЅР°С‡Р°Р»Рѕ, 1 вЂ” РєРѕРЅРµС†).</div>
+          <div class="small text-secondary mb-2">Доли от размера КАЖДОГО облака точек (0 — начало, 1 — конец).</div>
           <div class="mb-2">
-            <label class="form-label small mb-0">X: <span id="tourSettingClipXMinValue"></span> вЂ“ <span id="tourSettingClipXMaxValue"></span></label>
+            <label class="form-label small mb-0">X: <span id="tourSettingClipXMinValue"></span> – <span id="tourSettingClipXMaxValue"></span></label>
             <div class="d-flex gap-2">
               <input type="range" class="form-range" id="tourSettingClipXMin" min="0" max="1" step="0.01">
               <input type="range" class="form-range" id="tourSettingClipXMax" min="0" max="1" step="0.01">
             </div>
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">Y: <span id="tourSettingClipYMinValue"></span> вЂ“ <span id="tourSettingClipYMaxValue"></span></label>
+            <label class="form-label small mb-0">Y: <span id="tourSettingClipYMinValue"></span> – <span id="tourSettingClipYMaxValue"></span></label>
             <div class="d-flex gap-2">
               <input type="range" class="form-range" id="tourSettingClipYMin" min="0" max="1" step="0.01">
               <input type="range" class="form-range" id="tourSettingClipYMax" min="0" max="1" step="0.01">
             </div>
           </div>
           <div class="mb-2">
-            <label class="form-label small mb-0">Z: <span id="tourSettingClipZMinValue"></span> вЂ“ <span id="tourSettingClipZMaxValue"></span></label>
+            <label class="form-label small mb-0">Z: <span id="tourSettingClipZMinValue"></span> – <span id="tourSettingClipZMaxValue"></span></label>
             <div class="d-flex gap-2">
               <input type="range" class="form-range" id="tourSettingClipZMin" min="0" max="1" step="0.01">
               <input type="range" class="form-range" id="tourSettingClipZMax" min="0" max="1" step="0.01">
@@ -186,12 +186,12 @@
           <hr class="my-2" style="border-color: rgba(255,255,255,.15)">
           <div class="form-check form-switch mb-1">
             <input class="form-check-input" type="checkbox" id="tourSettingSectionEnabled">
-            <label class="form-check-label small" for="tourSettingSectionEnabled">РЎРµС‡РµРЅРёРµ РїРѕ Р»РёРЅРёРё (2 РєР»РёРєР° РЅР° РјРѕРґРµР»Рё)</label>
+            <label class="form-check-label small" for="tourSettingSectionEnabled">Сечение по линии (2 клика на модели)</label>
           </div>
-          <div class="small text-secondary mb-2">Р РµР¶РµС‚ РїРѕРґ Р»СЋР±С‹Рј СѓРіР»РѕРј С‡РµСЂРµР· 2 С‚РѕС‡РєРё, РІ РѕС‚Р»РёС‡РёРµ РѕС‚ РѕСЃРµРІРѕР№ РѕР±СЂРµР·РєРё РІС‹С€Рµ.</div>
+          <div class="small text-secondary mb-2">Режет под любым углом через 2 точки, в отличие от осевой обрезки выше.</div>
           <div class="d-flex gap-2">
-            <button type="button" class="btn btn-sm btn-outline-light flex-grow-1" id="tourSectionPickBtn">РЈРєР°Р·Р°С‚СЊ Р»РёРЅРёСЋ</button>
-            <button type="button" class="btn btn-sm btn-outline-light" id="tourSectionFlipBtn" title="РЎРјРµРЅРёС‚СЊ СЃС‚РѕСЂРѕРЅСѓ"><i class="bi bi-arrow-left-right"></i></button>
+            <button type="button" class="btn btn-sm btn-outline-light flex-grow-1" id="tourSectionPickBtn">Указать линию</button>
+            <button type="button" class="btn btn-sm btn-outline-light" id="tourSectionFlipBtn" title="Сменить сторону"><i class="bi bi-arrow-left-right"></i></button>
           </div>
         </div>
       </div>
@@ -199,7 +199,7 @@
 
     <div class="accordion-item">
       <h2 class="accordion-header">
-        <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsMisc">РџСЂРѕС‡РµРµ</button>
+        <button class="accordion-button collapsed btn-sm p-2 text-white" style="background: rgba(255,255,255,.08); box-shadow: none;" type="button" data-bs-toggle="collapse" data-bs-target="#tourSettingsMisc">Прочее</button>
       </h2>
       <div id="tourSettingsMisc" class="accordion-collapse collapse">
         <div class="accordion-body px-1 py-2">
@@ -207,7 +207,7 @@
             <input class="form-check-input" type="checkbox" id="tourSettingEdl">
             <label class="form-check-label small" for="tourSettingEdl">Eye-Dome Lighting (EDL)</label>
           </div>
-          <div class="small text-secondary">EDL РїРѕРєР° Р±РµР· РІРёР·СѓР°Р»СЊРЅРѕРіРѕ СЌС„С„РµРєС‚Р° вЂ” С„Р»Р°Рі СЃРѕС…СЂР°РЅСЏРµС‚СЃСЏ, СЃР°Рј С€РµР№РґРµСЂ РїРѕСЏРІРёС‚СЃСЏ РїРѕР·Р¶Рµ.</div>
+          <div class="small text-secondary">EDL пока без визуального эффекта — флаг сохраняется, сам шейдер появится позже.</div>
         </div>
       </div>
     </div>
@@ -218,21 +218,21 @@
 {% if is_admin %}
 <div id="tourDrawToolbar" class="position-fixed top-0 start-0 m-3 d-none" style="z-index: 1100; margin-top: 4rem !important;">
   <div class="btn-group mb-2">
-    <button type="button" class="btn btn-sm btn-outline-light" data-tool="point" title="РўРѕС‡РєР°"><i class="bi bi-geo-alt"></i></button>
-    <button type="button" class="btn btn-sm btn-outline-light" data-tool="polyline" title="Р›РёРЅРёСЏ"><i class="bi bi-bezier2"></i></button>
-    <button type="button" class="btn btn-sm btn-outline-light" data-tool="polygon" title="РџРѕР»РёРіРѕРЅ"><i class="bi bi-pentagon"></i></button>
-    <button type="button" class="btn btn-sm btn-outline-light" data-tool="edit" title="Р’С‹Р±РѕСЂ/СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ вЂ” РєР»РёРє РїРѕ РѕР±СЉРµРєС‚Сѓ, РїРµСЂРµС‚Р°СЃРєРёРІР°РЅРёРµ С‚РѕС‡РєРё"><i class="bi bi-cursor"></i></button>
-    <button type="button" class="btn btn-sm btn-success" id="tourDrawFinishBtn" title="Р“РѕС‚РѕРІРѕ"><i class="bi bi-check-lg"></i></button>
-    <button type="button" class="btn btn-sm btn-outline-danger" id="tourDrawCancelBtn" title="РћС‚РјРµРЅР°/РІС‹РєР»СЋС‡РёС‚СЊ РёРЅСЃС‚СЂСѓРјРµРЅС‚"><i class="bi bi-x-lg"></i></button>
+    <button type="button" class="btn btn-sm btn-outline-light" data-tool="point" title="Точка"><i class="bi bi-geo-alt"></i></button>
+    <button type="button" class="btn btn-sm btn-outline-light" data-tool="polyline" title="Линия"><i class="bi bi-bezier2"></i></button>
+    <button type="button" class="btn btn-sm btn-outline-light" data-tool="polygon" title="Полигон"><i class="bi bi-pentagon"></i></button>
+    <button type="button" class="btn btn-sm btn-outline-light" data-tool="edit" title="Выбор/редактирование — клик по объекту, перетаскивание точки"><i class="bi bi-cursor"></i></button>
+    <button type="button" class="btn btn-sm btn-success" id="tourDrawFinishBtn" title="Готово"><i class="bi bi-check-lg"></i></button>
+    <button type="button" class="btn btn-sm btn-outline-danger" id="tourDrawCancelBtn" title="Отмена/выключить инструмент"><i class="bi bi-x-lg"></i></button>
   </div>
   <div class="d-flex align-items-center gap-2 p-1 rounded" style="background: rgba(20,20,20,.85);">
-    <label class="text-white small mb-0 ms-1">РђРєС‚РёРІРЅС‹Р№ СЃР»РѕР№:</label>
+    <label class="text-white small mb-0 ms-1">Активный слой:</label>
     <select id="tourActiveLayerSelect" class="form-select form-select-sm" style="width: auto;"></select>
   </div>
   <div id="tourSelectedAnnoPanel" class="d-flex align-items-center gap-2 p-2 mt-2 rounded d-none" style="background: rgba(20,20,20,.92);">
-    <label class="text-white small mb-0">РЎР»РѕР№ РѕР±СЉРµРєС‚Р°:</label>
+    <label class="text-white small mb-0">Слой объекта:</label>
     <select id="tourSelectedAnnoLayerSelect" class="form-select form-select-sm" style="width: auto;"></select>
-    <button type="button" class="btn btn-sm btn-outline-danger" id="tourSelectedAnnoDeleteBtn" title="РЈРґР°Р»РёС‚СЊ РѕР±СЉРµРєС‚"><i class="bi bi-trash"></i></button>
+    <button type="button" class="btn btn-sm btn-outline-danger" id="tourSelectedAnnoDeleteBtn" title="Удалить объект"><i class="bi bi-trash"></i></button>
   </div>
 </div>
 {% endif %}
@@ -341,7 +341,7 @@ function renderLayersList() {
     list.appendChild(row);
   }
   if (!tourLayersData.length) {
-    list.innerHTML = '<div class="text-secondary small">РЎР»РѕС‘РІ РїРѕРєР° РЅРµС‚</div>';
+    list.innerHTML = '<div class="text-secondary small">Слоёв пока нет</div>';
   }
   list.querySelectorAll('.layer-visibility').forEach((cb) => {
     cb.addEventListener('change', async () => {
@@ -354,7 +354,7 @@ function renderLayersList() {
   });
   list.querySelectorAll('.layer-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('РЈРґР°Р»РёС‚СЊ СЃР»РѕР№ СЃРѕ РІСЃРµРјРё РѕР±СЉРµРєС‚Р°РјРё?')) return;
+      if (!confirm('Удалить слой со всеми объектами?')) return;
       await csrfFetch('{% url "api_tour_annotations" %}', { method: 'POST', body: JSON.stringify({ action: 'delete_layer', id: Number(btn.dataset.layerId) }) });
       if (selectedAnno && selectedAnno.layerId === Number(btn.dataset.layerId)) selectedAnno = null;
       await fetchLayers();
@@ -390,7 +390,7 @@ function setDrawingTool(tool) {
 
 async function saveAnnotation(geomType, coordinates) {
   if (!activeLayerId) {
-    alert('РЎРЅР°С‡Р°Р»Р° СЃРѕР·РґР°Р№С‚Рµ СЃР»РѕР№ Рё РІС‹Р±РµСЂРёС‚Рµ РµРіРѕ РєР°Рє Р°РєС‚РёРІРЅС‹Р№ (РїР°РЅРµР»СЊ В«РЎР»РѕРёВ»)');
+    alert('Сначала создайте слой и выберите его как активный (панель «Слои»)');
     return;
   }
   await csrfFetch('{% url "api_tour_annotations" %}', {
@@ -461,7 +461,7 @@ function applySectionFromPoints(a, b) {
 document.getElementById('tourSectionPickBtn').addEventListener('click', (e) => {
   sectionPickArmed = !sectionPickArmed;
   sectionPickPoints = [];
-  e.target.textContent = sectionPickArmed ? 'РљР»РёРєРЅРёС‚Рµ 2 С‚РѕС‡РєРё РЅР° РјРѕРґРµР»РёвЂ¦' : 'РЈРєР°Р·Р°С‚СЊ Р»РёРЅРёСЋ';
+  e.target.textContent = sectionPickArmed ? 'Кликните 2 точки на модели…' : 'Указать линию';
 });
 
 document.getElementById('tourSectionFlipBtn').addEventListener('click', () => {
@@ -481,7 +481,7 @@ async function onViewerContainerClick(e) {
       applySectionFromPoints(sectionPickPoints[0], sectionPickPoints[1]);
       sectionPickArmed = false;
       sectionPickPoints = [];
-      document.getElementById('tourSectionPickBtn').textContent = 'РЈРєР°Р·Р°С‚СЊ Р»РёРЅРёСЋ';
+      document.getElementById('tourSectionPickBtn').textContent = 'Указать линию';
     }
     return;
   }
@@ -515,7 +515,7 @@ document.getElementById('tourSelectedAnnoLayerSelect')?.addEventListener('change
 });
 
 document.getElementById('tourSelectedAnnoDeleteBtn')?.addEventListener('click', async () => {
-  if (!selectedAnno || !confirm('РЈРґР°Р»РёС‚СЊ РѕР±СЉРµРєС‚?')) return;
+  if (!selectedAnno || !confirm('Удалить объект?')) return;
   await csrfFetch('{% url "api_tour_annotations" %}', {
     method: 'POST',
     body: JSON.stringify({ action: 'delete_annotation', id: selectedAnno.annotationId }),
@@ -549,7 +549,7 @@ function syncSettingsPanelFromViewer() {
   document.getElementById('tourSettingPointSizeValue').textContent = s.pointSizePx;
   document.getElementById('tourSettingColorMode').value = s.colorMode;
   document.getElementById('tourSettingPointBudget').value = s.pointBudget;
-  document.getElementById('tourSettingPointBudgetValue').textContent = (s.pointBudget / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' РјР»РЅ';
+  document.getElementById('tourSettingPointBudgetValue').textContent = (s.pointBudget / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн';
   document.getElementById('tourSettingEdl').checked = s.edlEnabled;
   document.getElementById('tourSettingShowStats').checked = s.showStats;
   document.getElementById('tourSettingClipEnabled').checked = s.clipEnabled;
@@ -612,7 +612,7 @@ document.getElementById('tourSettingColorMode').addEventListener('change', (e) =
 });
 document.getElementById('tourSettingPointBudget').addEventListener('input', (e) => {
   const v = Number(e.target.value);
-  document.getElementById('tourSettingPointBudgetValue').textContent = (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' РјР»РЅ';
+  document.getElementById('tourSettingPointBudgetValue').textContent = (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн';
   window.TourViewer.setSettings({ pointBudget: v });
 });
 document.getElementById('tourSettingEdl').addEventListener('change', (e) => {
@@ -692,10 +692,10 @@ document.getElementById('tourShareBtn').addEventListener('click', async (e) => {
   }
   const ok = await copy(url);
   icon.className = ok ? 'bi bi-check-lg' : 'bi bi-exclamation-triangle';
-  btn.title = ok ? 'РЎСЃС‹Р»РєР° СЃРєРѕРїРёСЂРѕРІР°РЅР°' : 'РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ вЂ” РІРѕС‚ СЃСЃС‹Р»РєР°: ' + url;
+  btn.title = ok ? 'Ссылка скопирована' : 'Не удалось скопировать — вот ссылка: ' + url;
   setTimeout(() => {
     icon.className = 'bi bi-share';
-    btn.title = 'РЎРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ';
+    btn.title = 'Скопировать ссылку';
   }, 2000);
 });
 
@@ -708,7 +708,7 @@ document.getElementById('tourExportLink').href = '{% url "tour_export" %}?tour_i
 async function bootTour() {
   const errBox = document.getElementById('tourLoadError');
   if (!currentTourId) {
-    errBox.textContent = 'РўСѓСЂ РЅРµ РЅР°Р№РґРµРЅ';
+    errBox.textContent = 'Тур не найден';
     errBox.classList.remove('d-none');
     return;
   }
@@ -717,18 +717,18 @@ async function bootTour() {
     const res = await fetch('{% url "api_tours" %}?id=' + currentTourId);
     data = await res.json();
   } catch (e) {
-    errBox.textContent = 'РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё С‚СѓСЂР°: ' + e;
+    errBox.textContent = 'Ошибка загрузки тура: ' + e;
     errBox.classList.remove('d-none');
     return;
   }
   const t = (data.tours || [])[0];
   if (!t) {
-    errBox.textContent = 'РўСѓСЂ РЅРµ РЅР°Р№РґРµРЅ РёР»Рё РЅРµРґРѕСЃС‚СѓРїРµРЅ';
+    errBox.textContent = 'Тур не найден или недоступен';
     errBox.classList.remove('d-none');
     return;
   }
   document.getElementById('tourTitle').textContent = t.name;
-  document.title = t.name + ' вЂ” GISData';
+  document.title = t.name + ' — GISData';
 
   const toolbar = document.getElementById('tourDrawToolbar');
   if (toolbar) toolbar.classList.remove('d-none');
@@ -746,7 +746,6 @@ async function bootTour() {
 
 document.addEventListener('DOMContentLoaded', bootTour);
 </script>
-<script type="module" src="/assets/share3d-engine/share3d-viewer.js?v={{ viewer_ver }}"></script>`n<script type="module" src="/assets/viewer/tour-viewer-compat.js?v={{ viewer_ver }}"></script>
+<script type="module" src="/assets/viewer/tour-viewer.js?v={{ viewer_ver }}"></script>
 </body>
 </html>
-

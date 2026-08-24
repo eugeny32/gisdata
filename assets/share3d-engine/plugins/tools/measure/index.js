@@ -1,7 +1,0 @@
-import * as __WEBPACK_EXTERNAL_MODULE__MeasureData_js_9578c8f4__ from "./MeasureData.js";
-import * as __WEBPACK_EXTERNAL_MODULE__MeasureOverlayPlugin_js_28e9f5c1__ from "./MeasureOverlayPlugin.js";
-import * as __WEBPACK_EXTERNAL_MODULE__MeasurePlugin_js_a4fab9a5__ from "./MeasurePlugin.js";
-var __webpack_exports__MeasureOverlayPlugin = __WEBPACK_EXTERNAL_MODULE__MeasureOverlayPlugin_js_28e9f5c1__.MeasureOverlayPlugin;
-var __webpack_exports__MeasurePlugin = __WEBPACK_EXTERNAL_MODULE__MeasurePlugin_js_a4fab9a5__.MeasurePlugin;
-var __webpack_exports__buildMeasureResult = __WEBPACK_EXTERNAL_MODULE__MeasureData_js_9578c8f4__.buildMeasureResult;
-export { __webpack_exports__MeasureOverlayPlugin as MeasureOverlayPlugin, __webpack_exports__MeasurePlugin as MeasurePlugin, __webpack_exports__buildMeasureResult as buildMeasureResult };
