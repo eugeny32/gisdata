@@ -1,13 +1,17 @@
 """
 Chat business logic -- conversation lookup/creation, unread counts, message
-persistence (text + optional file/image/video/document attachments), and
-the WS broadcast that fires on every send regardless of which path it came
-in through (REST or the WebSocket consumer -- see send_message() below).
-Kept framework-agnostic (no request/response here) so chat/views.py and
-chat/consumers.py can share it without either depending on the other.
+persistence (text + optional file/image/video/document attachments, either
+freshly uploaded or attached from the sender's existing "Хранилище"
+storage), and the WS broadcast that fires on every send regardless of
+which path it came in through (REST or the WebSocket consumer -- see
+send_message() below). Kept framework-agnostic (no request/response here)
+so chat/views.py and chat/consumers.py can share it without either
+depending on the other.
 """
 
+import mimetypes
 import re
+import shutil
 import uuid
 from pathlib import Path
 
@@ -129,15 +133,36 @@ def _detect_kind(content_type: str, name: str) -> str:
     return "document"
 
 
+def _check_quota(admin, user, incoming_bytes: int) -> None:
+    """Shared by every path that adds bytes to a sender's storage tree
+    (fresh upload, attach-from-storage copy, save-a-received-attachment)
+    -- raises ValueError with a user-facing message on rejection. Admins
+    have no quota today (see storage/models.py), so this only ever
+    rejects plain UserSync senders."""
+    if not user or admin:
+        return
+    from storage.services import total_storage_usage_bytes
+    from users.models import UserSync
+
+    quota = UserSync.objects.filter(id=user["id"]).values_list("storage_quota_bytes", flat=True).first()
+    if quota is None:
+        return
+    used = total_storage_usage_bytes(admin, user)
+    if used + incoming_bytes > quota:
+        free = max(quota - used, 0)
+        raise ValueError(
+            f"Недостаточно места в хранилище: доступно {free / (1024**3):.2f} ГБ из "
+            f"{quota / (1024**3):.2f} ГБ (использовано {used / (1024**3):.2f} ГБ)"
+        )
+
+
 def save_attachments(message: Message, admin, user, files) -> list[MessageAttachment]:
     """Writes each upload into the SENDER's own storage tree (under
     "chat/conv_<id>/"), gated by the SAME unified 6GB quota as tours/the
-    file manager (storage.services.total_storage_usage_bytes) -- chat
-    attachments aren't a separate allowance. Raises ValueError with a
-    user-facing message on any rejection; caller (chat/views.py) turns
-    that into the HTTP error response."""
-    from storage.services import owner_root, total_storage_usage_bytes
-    from users.models import UserSync
+    file manager. Raises ValueError with a user-facing message on any
+    rejection; caller (chat/views.py) turns that into the HTTP error
+    response."""
+    from storage.services import owner_root
 
     for f in files:
         if f.size > MAX_ATTACHMENT_BYTES:
@@ -145,18 +170,7 @@ def save_attachments(message: Message, admin, user, files) -> list[MessageAttach
                 f'Файл "{f.name}" больше 200 МБ — для крупных файлов используйте '
                 '"Хранилище" и поделитесь ссылкой вместо вложения в чат'
             )
-
-    if user and not admin:
-        quota = UserSync.objects.filter(id=user["id"]).values_list("storage_quota_bytes", flat=True).first()
-        if quota is not None:
-            used = total_storage_usage_bytes(admin, user)
-            incoming = sum(f.size for f in files)
-            if used + incoming > quota:
-                free = max(quota - used, 0)
-                raise ValueError(
-                    f"Недостаточно места в хранилище: доступно {free / (1024**3):.2f} ГБ из "
-                    f"{quota / (1024**3):.2f} ГБ (использовано {used / (1024**3):.2f} ГБ)"
-                )
+    _check_quota(admin, user, sum(f.size for f in files))
 
     target_dir = owner_root(admin, user) / "chat" / f"conv_{message.conversation_id}"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -178,6 +192,71 @@ def save_attachments(message: Message, admin, user, files) -> list[MessageAttach
             size_bytes=f.size,
         ))
     return saved
+
+
+def attach_storage_file(message: Message, admin, user, relpath: str) -> MessageAttachment:
+    """Attaches a file the sender ALREADY has in their "Хранилище"
+    (storage app) -- no re-upload from the browser needed. Copies it into
+    the same "chat/conv_<id>/" tree a fresh upload would use (a durable
+    snapshot at send-time, not a live reference -- renaming/deleting the
+    original in the file manager afterward must not silently break or
+    reshare a past chat message)."""
+    from storage.services import owner_root, safe_join
+
+    root = owner_root(admin, user)
+    try:
+        src = safe_join(root, relpath)
+    except ValueError:
+        raise ValueError("Недопустимый путь")
+    if not src.is_file():
+        raise ValueError("Файл не найден в хранилище")
+    size = src.stat().st_size
+    if size > MAX_ATTACHMENT_BYTES:
+        raise ValueError(f'Файл "{src.name}" больше 200 МБ — вложите его в чат нельзя, поделитесь ссылкой из "Хранилища"')
+    _check_quota(admin, user, size)
+
+    target_dir = owner_root(admin, user) / "chat" / f"conv_{message.conversation_id}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{uuid.uuid4().hex}_{re.sub(r'[^a-zA-Z0-9_.-]', '_', src.name)}"
+    dest = target_dir / stored_name
+    shutil.copyfile(src, dest)
+
+    content_type = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
+    return MessageAttachment.objects.create(
+        message=message,
+        file_path=str((Path("chat") / f"conv_{message.conversation_id}" / stored_name).as_posix()),
+        file_name=src.name,
+        content_type=content_type,
+        kind=_detect_kind(content_type, src.name),
+        size_bytes=size,
+    )
+
+
+def save_attachment_to_storage(attachment: MessageAttachment, viewer_admin, viewer_user) -> str:
+    """The inverse direction: copies a RECEIVED attachment into the
+    viewer's own "Хранилище", under "from_chat/" -- so a document someone
+    sent you doesn't only live inside the chat history. Returns the
+    saved-to relative path. Caller must have already checked the viewer
+    is a participant of the attachment's conversation (chat/views.py)."""
+    from storage.services import owner_root, safe_join
+
+    _check_quota(viewer_admin, viewer_user, attachment.size_bytes)
+
+    sender_admin = {"id": attachment.message.sender_admin_id} if attachment.message.sender_admin_id else None
+    sender_user = {"id": attachment.message.sender_user_id} if attachment.message.sender_user_id else None
+    src = safe_join(owner_root(sender_admin, sender_user), attachment.file_path)
+    if not src.is_file():
+        raise ValueError("Файл не найден")
+
+    dest_dir = owner_root(viewer_admin, viewer_user) / "from_chat"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / attachment.file_name
+    if dest.exists():
+        stem = Path(attachment.file_name).stem
+        suffix = Path(attachment.file_name).suffix
+        dest = dest_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+    shutil.copyfile(src, dest)
+    return str((Path("from_chat") / dest.name).as_posix())
 
 
 def serialize_message(message: Message, viewer_admin=None, viewer_user=None, include_is_mine: bool = True) -> dict:
@@ -243,5 +322,21 @@ def send_message(conversation: Conversation, admin, user, body: str, files=None)
             message.delete()
             raise
     mark_read(conversation, admin, user)  # sending counts as having read up to now
+    broadcast_message(message)
+    return message
+
+
+def send_message_from_storage(conversation: Conversation, admin, user, relpath: str, body: str = "") -> Message:
+    if admin:
+        sender_kwargs = {"sender_admin_id": admin["id"], "sender_user_id": None}
+    else:
+        sender_kwargs = {"sender_admin_id": None, "sender_user_id": user["id"]}
+    message = Message.objects.create(conversation=conversation, body=(body or "").strip(), **sender_kwargs)
+    try:
+        attach_storage_file(message, admin, user, relpath)
+    except ValueError:
+        message.delete()
+        raise
+    mark_read(conversation, admin, user)
     broadcast_message(message)
     return message

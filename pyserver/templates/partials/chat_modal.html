@@ -41,9 +41,18 @@
 
           <div id="chatMessages" class="flex-grow-1 overflow-auto p-3 d-flex flex-column gap-2"></div>
 
+          <div id="chatStoragePicker" class="d-none border-top border-secondary border-opacity-25 p-2" style="max-height:220px;overflow-y:auto;">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <nav aria-label="breadcrumb" class="flex-grow-1"><ol class="breadcrumb mb-0 small" id="chatStorageBreadcrumb"></ol></nav>
+              <button type="button" class="btn-close btn-close-white" id="chatStoragePickerClose"></button>
+            </div>
+            <div id="chatStorageList" class="list-group list-group-flush"></div>
+          </div>
+
           <div id="chatUploadProgress" class="d-none px-3 pb-1 small text-secondary">Загрузка...</div>
           <form id="chatSendForm" class="d-flex gap-2 p-2 border-top border-secondary border-opacity-25">
             <button type="button" class="btn btn-sm btn-outline-secondary" id="chatAttachBtn" title="Прикрепить файл"><i class="bi bi-paperclip"></i></button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="chatStorageAttachBtn" title="Прикрепить из Хранилища"><i class="bi bi-folder2-open"></i></button>
             <input type="file" id="chatFileInput" class="d-none" multiple>
             <input type="text" class="form-control form-control-sm" id="chatMessageInput" placeholder="Сообщение..." autocomplete="off">
             <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-send"></i></button>
@@ -170,17 +179,53 @@
     }, 250);
   });
 
+  const DOC_ICON_BY_EXT = {
+    doc: 'bi-file-earmark-word', docx: 'bi-file-earmark-word',
+    xls: 'bi-file-earmark-excel', xlsx: 'bi-file-earmark-excel', csv: 'bi-file-earmark-spreadsheet',
+    ppt: 'bi-file-earmark-ppt', pptx: 'bi-file-earmark-ppt',
+    zip: 'bi-file-earmark-zip', rar: 'bi-file-earmark-zip', '7z': 'bi-file-earmark-zip',
+    txt: 'bi-file-earmark-text', md: 'bi-file-earmark-text',
+  };
+  function iconForAttachment(att) {
+    if (att.content_type === 'application/pdf') return 'bi-file-earmark-pdf';
+    const ext = (att.file_name.split('.').pop() || '').toLowerCase();
+    return DOC_ICON_BY_EXT[ext] || 'bi-file-earmark';
+  }
+  function saveButtonMarkup(att) {
+    return '<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 chat-save-att" ' +
+      'data-att-id="' + att.id + '" title="Сохранить в Хранилище"><i class="bi bi-cloud-arrow-down"></i></button>';
+  }
   function attachmentMarkup(att) {
     if (att.kind === 'image') {
-      return '<a href="' + att.url + '" target="_blank"><img src="' + att.url + '" style="max-width:220px;max-height:220px;border-radius:8px;display:block;margin-top:4px;"></a>';
+      return '<div class="d-flex align-items-start gap-1 mt-1">' +
+        '<a href="' + att.url + '" target="_blank"><img src="' + att.url + '" style="max-width:220px;max-height:220px;border-radius:8px;display:block;"></a>' +
+        saveButtonMarkup(att) + '</div>';
     }
     if (att.kind === 'video') {
-      return '<video src="' + att.url + '" controls style="max-width:260px;border-radius:8px;display:block;margin-top:4px;"></video>';
+      return '<div class="d-flex align-items-start gap-1 mt-1">' +
+        '<video src="' + att.url + '" controls style="max-width:260px;border-radius:8px;display:block;"></video>' +
+        saveButtonMarkup(att) + '</div>';
     }
-    return '<a href="' + att.url + '" class="d-flex align-items-center gap-2 mt-1 p-2 rounded text-white text-decoration-none" style="background:rgba(255,255,255,.08)">' +
-      '<i class="bi bi-file-earmark-arrow-down fs-5"></i><span class="text-truncate">' + att.file_name + '</span>' +
-      '<span class="text-secondary small ms-auto">' + fmtSize(att.size) + '</span></a>';
+    const isPdf = att.content_type === 'application/pdf';
+    return '<div class="d-flex align-items-center gap-1 mt-1 p-2 rounded" style="background:rgba(255,255,255,.08)">' +
+      '<a href="' + att.url + '"' + (isPdf ? ' target="_blank"' : '') + ' class="d-flex align-items-center gap-2 text-white text-decoration-none flex-grow-1" style="min-width:0">' +
+      '<i class="bi ' + iconForAttachment(att) + ' fs-5"></i><span class="text-truncate">' + att.file_name + '</span>' +
+      '<span class="text-secondary small ms-auto">' + fmtSize(att.size) + '</span></a>' +
+      saveButtonMarkup(att) + '</div>';
   }
+  messagesBox.addEventListener('click', async function (e) {
+    const btn = e.target.closest('.chat-save-att');
+    if (!btn) return;
+    btn.disabled = true;
+    const res = await csrfFetch('/api/chat/attachments/' + btn.dataset.attId + '/save_to_storage/', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      btn.innerHTML = '<i class="bi bi-check-lg text-success"></i>';
+    } else {
+      alert(data.error || 'Ошибка сохранения');
+      btn.disabled = false;
+    }
+  });
 
   function appendMessage(msg) {
     const mine = 'is_mine' in msg ? msg.is_mine : isMine(msg);
@@ -276,6 +321,80 @@
   fileInput.addEventListener('change', function () {
     if (fileInput.files.length) sendForm.requestSubmit();
   });
+
+  // --- Attach from Хранилище ----------------------------------------------
+  const storagePicker = document.getElementById('chatStoragePicker');
+  const storageBreadcrumb = document.getElementById('chatStorageBreadcrumb');
+  const storageList = document.getElementById('chatStorageList');
+  let storagePath = '';
+
+  document.getElementById('chatStorageAttachBtn').addEventListener('click', function () {
+    storagePicker.classList.toggle('d-none');
+    if (!storagePicker.classList.contains('d-none')) { storagePath = ''; loadStorageList(); }
+  });
+  document.getElementById('chatStoragePickerClose').addEventListener('click', function () {
+    storagePicker.classList.add('d-none');
+  });
+
+  async function loadStorageList() {
+    const res = await csrfFetch('{% url "api_storage_list" %}?path=' + encodeURIComponent(storagePath));
+    const data = await res.json();
+    renderStorageBreadcrumb();
+    storageList.innerHTML = '';
+    (data.entries || []).forEach(function (entry) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'list-group-item list-group-item-action bg-transparent text-white py-1';
+      item.innerHTML = '<i class="bi ' + (entry.is_dir ? 'bi-folder-fill text-warning' : 'bi-file-earmark') + ' me-1"></i>' + entry.name;
+      item.addEventListener('click', function () {
+        if (entry.is_dir) {
+          storagePath = storagePath ? storagePath + '/' + entry.name : entry.name;
+          loadStorageList();
+        } else {
+          pickStorageFile(storagePath ? storagePath + '/' + entry.name : entry.name);
+        }
+      });
+      storageList.appendChild(item);
+    });
+  }
+
+  function renderStorageBreadcrumb() {
+    storageBreadcrumb.innerHTML = '';
+    const rootLi = document.createElement('li');
+    rootLi.className = 'breadcrumb-item';
+    const rootLink = document.createElement('a');
+    rootLink.href = '#'; rootLink.textContent = 'Хранилище';
+    rootLink.addEventListener('click', function (e) { e.preventDefault(); storagePath = ''; loadStorageList(); });
+    rootLi.appendChild(rootLink);
+    storageBreadcrumb.appendChild(rootLi);
+    const parts = storagePath ? storagePath.split('/') : [];
+    let acc = '';
+    parts.forEach(function (part, i) {
+      acc = acc ? acc + '/' + part : part;
+      const li = document.createElement('li');
+      li.className = 'breadcrumb-item' + (i === parts.length - 1 ? ' active' : '');
+      if (i === parts.length - 1) {
+        li.textContent = part;
+      } else {
+        const a = document.createElement('a'); a.href = '#'; a.textContent = part;
+        const target = acc;
+        a.addEventListener('click', function (e) { e.preventDefault(); storagePath = target; loadStorageList(); });
+        li.appendChild(a);
+      }
+      storageBreadcrumb.appendChild(li);
+    });
+  }
+
+  async function pickStorageFile(path) {
+    storagePicker.classList.add('d-none');
+    const res = await csrfFetch('/api/chat/' + state.conversationId + '/attach_from_storage/', {
+      method: 'POST',
+      body: JSON.stringify({ path: path }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Ошибка'); return; }
+    appendMessage(data);
+  }
 
   // --- Calls (LiveKit) ---------------------------------------------------
   const LK = window.LivekitClient;

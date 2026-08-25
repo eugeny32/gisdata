@@ -153,7 +153,11 @@ def download_attachment_view(request, attachment_id):
         raise Http404("Файл не найден")
 
     internal_prefix = getattr(settings, "STORAGE_INTERNAL_ALIAS", None)
-    disposition = "inline" if attachment.kind in ("image", "video") else "attachment"
+    # PDFs render natively in-browser same as images/video -- everything
+    # else (Word/Excel/zip/...) still forces a download, browsers don't
+    # know what to do with those inline.
+    previewable = attachment.kind in ("image", "video") or attachment.content_type == "application/pdf"
+    disposition = "inline" if previewable else "attachment"
     if internal_prefix:
         rel_to_storage_root = target.relative_to(Path(settings.UPLOADS_ROOT) / "user_storage")
         response = HttpResponse(content_type=attachment.content_type)
@@ -182,6 +186,45 @@ def start_conversation_view(request):
         "conversation_id": conversation.id,
         "name": services.conversation_display_name(conversation, admin, user),
     })
+
+
+@auth.require_login
+@require_POST
+def attach_from_storage_view(request, conversation_id):
+    """Attaches a file the sender already has in "Хранилище" -- see
+    chat/services.py::attach_storage_file(). The browse/pick UI reuses
+    storage app's own {% url "api_storage_list" %} directly (it already
+    defaults to the caller's own root), no separate listing endpoint
+    needed here."""
+    conversation, admin, user = _get_owned_conversation_or_403(request, conversation_id)
+    if not conversation:
+        return JsonResponse({"error": "Нет доступа"}, status=403)
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (ValueError, TypeError):
+        payload = {}
+    relpath = (payload.get("path") or "").strip()
+    if not relpath:
+        return JsonResponse({"error": "Не выбран файл"}, status=400)
+    try:
+        message = services.send_message_from_storage(conversation, admin, user, relpath, body=payload.get("body") or "")
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse(services.serialize_message(message, admin, user))
+
+
+@auth.require_login
+@require_POST
+def save_attachment_to_storage_view(request, attachment_id):
+    admin, user = _actor(request)
+    attachment = get_object_or_404(MessageAttachment.objects.select_related("message"), id=attachment_id)
+    if not services.is_participant(attachment.message.conversation, admin, user):
+        return JsonResponse({"error": "Нет доступа"}, status=403)
+    try:
+        saved_path = services.save_attachment_to_storage(attachment, admin, user)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse({"ok": True, "path": saved_path})
 
 
 @auth.require_login
